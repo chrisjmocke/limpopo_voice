@@ -1,98 +1,94 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { setGlobalOptions } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
+const { SpeechClient } = require("@google-cloud/speech");
 
 admin.initializeApp();
+const db = admin.firestore();
+const speechClient = new SpeechClient();
 
-exports.processSpeech = onCall(
-  {
-    region: "africa-south1",
-    timeoutSeconds: 60,
-  },
-  async (request) => {
-    try {
-      const audioBase64 = request.data?.audio;
-      const targetLanguage = request.data?.targetLang || "en";
+// ✅ Set region globally (v2 way)
+setGlobalOptions({ region: "africa-south1" });
 
-      if (!audioBase64) {
-        throw new HttpsError("invalid-argument", "No audio provided.");
-      }
-
-      const speech = require("@google-cloud/speech");
-      const { Translate } = require("@google-cloud/translate").v2;
-
-      const speechClient = new speech.SpeechClient();
-      const translateClient = new Translate();
-
-      const audioBytes = Buffer.from(audioBase64, "base64");
-
-      console.log("Decoded audio size:", audioBytes.length);
-
-      if (audioBytes.length < 4000) {
-        throw new HttpsError("failed-precondition", "Audio too small.");
-      }
-
-      const speechRequest = {
-        audio: { content: audioBytes },
-        config: {
-          encoding: "LINEAR16", // 🔥 MATCHES WAV
-          sampleRateHertz: 16000,
-          languageCode: "en-US",
-          enableAutomaticPunctuation: true,
-        },
-      };
-
-      const [response] = await speechClient.recognize(speechRequest);
-
-      const transcript =
-        response.results
-          ?.map(r => r.alternatives[0].transcript)
-          .join(" ") || "";
-
-      if (!transcript) {
-        throw new HttpsError("failed-precondition", "No speech detected.");
-      }
-
-      const [translation] = await translateClient.translate(
-        transcript,
-        targetLanguage
-      );
-
-      return {
-        originalText: transcript,
-        translatedText: translation,
-      };
-
-    } catch (error) {
-      console.error("🔥 Speech Error:", error);
-
+exports.processSpeech = onCall(async (request) => {
+  try {
+    // 🔐 AUTH CHECK
+    if (!request.auth) {
       throw new HttpsError(
-        "internal",
-        error.message || "Speech processing failed."
+        "unauthenticated",
+        "User must be authenticated."
       );
     }
-  }
-);
 
-exports.activate24h = onCall(
-  { region: "africa-south1" },
-  async (request) => {
-    const uid = request.auth?.uid;
+    const uid = request.auth.uid;
+    const userRef = db.collection("users").doc(uid);
+    const userSnap = await userRef.get();
 
-    if (!uid) {
-      throw new HttpsError("unauthenticated", "User must be authenticated.");
+    if (!userSnap.exists) {
+      throw new HttpsError("not-found", "User not found.");
     }
 
-    const expiry = new Date();
-    expiry.setHours(expiry.getHours() + 24);
+    const userData = userSnap.data();
+    const credits = userData.credits || 0;
 
-    await admin.firestore().collection("users").doc(uid).set(
-      {
-        subscriptionType: "24h",
-        subscriptionExpiry: expiry,
+    // ❌ BLOCK IF NO CREDITS
+    if (credits <= 0) {
+      throw new HttpsError(
+        "failed-precondition",
+        "No credits remaining."
+      );
+    }
+
+    const audioBase64 = request.data.audio;
+
+    if (!audioBase64) {
+      throw new HttpsError(
+        "invalid-argument",
+        "No audio provided."
+      );
+    }
+
+    // 🎙 Google Speech-to-Text
+    const [response] = await speechClient.recognize({
+      audio: { content: audioBase64 },
+      config: {
+        encoding: "LINEAR16",
+        sampleRateHertz: 16000,
+        languageCode: "en-US",
       },
-      { merge: true }
-    );
+    });
 
-    return { success: true };
+    const transcription =
+      response.results
+        ?.map((r) => r.alternatives[0].transcript)
+        .join(" ") || "";
+
+    if (!transcription) {
+      throw new HttpsError(
+        "invalid-argument",
+        "No speech detected."
+      );
+    }
+
+    // 🔥 ATOMIC CREDIT DEDUCTION
+    await userRef.update({
+      credits: admin.firestore.FieldValue.increment(-1),
+      lastUsed: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return {
+      originalText: transcription,
+      translatedText: transcription,
+      remainingCredits: credits - 1,
+    };
+
+  } catch (error) {
+    console.error("Error:", error);
+
+    if (error instanceof HttpsError) {
+      throw error;
+    }
+
+    throw new HttpsError("internal", "Processing failed.");
   }
-);
+});

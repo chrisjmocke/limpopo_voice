@@ -8,6 +8,8 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:audio_session/audio_session.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'firebase_options.dart';
 
 void main() async {
@@ -47,11 +49,12 @@ class _LimpopoHomeState extends State<LimpopoHome> {
   StreamController<Uint8List>? _recordingController;
   StreamSubscription? _recordingSubscription;
 
-  bool _ready = false;
-  bool _busy = false;
-
   static const int sampleRate = 16000;
   static const int channels = 1;
+
+  bool _ready = false;
+  bool _busy = false;
+  int _credits = 0;
 
   VoiceState state = VoiceState.idle;
 
@@ -65,13 +68,39 @@ class _LimpopoHomeState extends State<LimpopoHome> {
     await FirebaseAuth.instance.signInAnonymously();
     await Permission.microphone.request();
 
+    final session = await AudioSession.instance;
+    await session.configure(const AudioSessionConfiguration(
+      avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+      avAudioSessionMode: AVAudioSessionMode.spokenAudio,
+      androidAudioAttributes: AndroidAudioAttributes(
+        contentType: AndroidAudioContentType.speech,
+        usage: AndroidAudioUsage.voiceCommunication,
+      ),
+      androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+    ));
+
     await _recorder.openRecorder();
 
     await _tts.setLanguage("en-US");
     await _tts.setSpeechRate(0.5);
 
+    await _loadCredits();
+
     _ready = true;
-    print("✅ Enterprise recorder ready");
+  }
+
+  Future<void> _loadCredits() async {
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+    final doc = await FirebaseFirestore.instance
+        .collection("users")
+        .doc(uid)
+        .get();
+
+    if (doc.exists) {
+      setState(() {
+        _credits = doc.data()?['credits'] ?? 0;
+      });
+    }
   }
 
   @override
@@ -83,30 +112,16 @@ class _LimpopoHomeState extends State<LimpopoHome> {
     super.dispose();
   }
 
-  Color get backgroundColor {
-    switch (state) {
-      case VoiceState.idle:
-        return Colors.green;
-      case VoiceState.recording:
-        return Colors.red;
-      case VoiceState.processing:
-        return Colors.blue;
-    }
-  }
-
   Future<void> startRecording() async {
-    if (!_ready || _busy) return;
+    if (!_ready || _busy || _credits <= 0) return;
 
     _pcmBuffer.clear();
 
     _recordingController = StreamController<Uint8List>();
-
     _recordingSubscription =
         _recordingController!.stream.listen((data) {
       _pcmBuffer.addAll(data);
     });
-
-    print("🎙 START RAW PCM RECORDING");
 
     await _recorder.startRecorder(
       codec: Codec.pcm16,
@@ -116,15 +131,18 @@ class _LimpopoHomeState extends State<LimpopoHome> {
     );
 
     setState(() => state = VoiceState.recording);
+
+    Future.delayed(const Duration(seconds: 10), () async {
+      if (state == VoiceState.recording) {
+        await stopRecording();
+      }
+    });
   }
 
   Future<void> stopRecording() async {
     if (!_recorder.isRecording || _busy) return;
 
     _busy = true;
-
-    print("🛑 STOP RECORDING");
-
     await _recorder.stopRecorder();
 
     await _recordingSubscription?.cancel();
@@ -133,14 +151,11 @@ class _LimpopoHomeState extends State<LimpopoHome> {
     setState(() => state = VoiceState.processing);
 
     if (_pcmBuffer.length < 4000) {
-      print("⚠ Audio too small");
       _reset();
       return;
     }
 
     final wavBytes = _buildWav(Uint8List.fromList(_pcmBuffer));
-
-    print("📁 FINAL WAV SIZE: ${wavBytes.length}");
 
     try {
       final callable = FirebaseFunctions.instanceFor(
@@ -152,15 +167,21 @@ class _LimpopoHomeState extends State<LimpopoHome> {
         "targetLang": "en",
       });
 
-      print("🔥 Cloud response: ${response.data}");
-
       final text = response.data['translatedText'];
+      final remaining = response.data['remainingCredits'];
 
-      if (text != null && text is String && text.isNotEmpty) {
+      setState(() {
+        _credits = remaining ?? _credits - 1;
+      });
+
+      if (text != null && text.isNotEmpty) {
         await _tts.speak(text);
       }
+
     } catch (e) {
-      print("🔥 Cloud Error: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("No credits remaining.")),
+      );
     }
 
     _reset();
@@ -177,7 +198,6 @@ class _LimpopoHomeState extends State<LimpopoHome> {
     buffer.add(ascii.encode('RIFF'));
     buffer.add(_intToBytes(fileLength - 8, 4));
     buffer.add(ascii.encode('WAVE'));
-
     buffer.add(ascii.encode('fmt '));
     buffer.add(_intToBytes(16, 4));
     buffer.add(_intToBytes(1, 2));
@@ -186,7 +206,6 @@ class _LimpopoHomeState extends State<LimpopoHome> {
     buffer.add(_intToBytes(byteRate, 4));
     buffer.add(_intToBytes(blockAlign, 2));
     buffer.add(_intToBytes(16, 2));
-
     buffer.add(ascii.encode('data'));
     buffer.add(_intToBytes(dataLength, 4));
     buffer.add(pcmData);
@@ -205,34 +224,49 @@ class _LimpopoHomeState extends State<LimpopoHome> {
   }
 
   void _reset() {
-    setState(() => state = VoiceState.idle);
-    _busy = false;
+    setState(() {
+      state = VoiceState.idle;
+      _busy = false;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    final bool disabled = _credits <= 0;
+
     return Scaffold(
-      backgroundColor: backgroundColor,
+      backgroundColor: disabled ? Colors.grey : Colors.green,
       body: SafeArea(
-        child: Center(
-          child: GestureDetector(
-            onLongPressStart: (_) => startRecording(),
-            onLongPressEnd: (_) => stopRecording(),
-            child: Container(
-              width: 160,
-              height: 160,
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              "Credits: $_credits",
+              style: const TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
               ),
-              child: const Center(
-                child: Text(
-                  "HOLD",
-                  style: TextStyle(fontSize: 24),
+            ),
+            const SizedBox(height: 40),
+            GestureDetector(
+              onLongPressStart: disabled ? null : (_) => startRecording(),
+              onLongPressEnd: disabled ? null : (_) => stopRecording(),
+              child: Container(
+                width: 160,
+                height: 160,
+                decoration: BoxDecoration(
+                  color: disabled ? Colors.black26 : Colors.white,
+                  shape: BoxShape.circle,
+                ),
+                child: const Center(
+                  child: Text(
+                    "HOLD",
+                    style: TextStyle(fontSize: 24),
+                  ),
                 ),
               ),
             ),
-          ),
+          ],
         ),
       ),
     );

@@ -11,29 +11,21 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # 🔥 Firebase Core
+  # 🔥 Firebase (LOCKED COMPATIBLE)
   firebase_core: ^2.32.0
-
-  # 🔥 Authentication (anonymous)
   firebase_auth: ^4.20.0
-
-  # 🔥 Cloud Functions
   cloud_functions: ^4.7.6
-
-  # 🔥 Firestore (trials + subscription tracking)
   cloud_firestore: ^4.17.5
 
-  # 🔥 Audio Recording
-  flutter_sound: ^9.2.13
+  # 🔥 Audio Engine (ENTERPRISE LOCKED)
+  flutter_sound: ^9.28.0
+  audio_session: ^0.1.16
 
-  # 🔥 Text to Speech
+  # 🔥 Text To Speech
   flutter_tts: ^3.8.5
 
   # 🔥 Permissions
   permission_handler: ^11.3.1
-
-  # 🔥 File system access
-  path_provider: ^2.1.5
 
 dev_dependencies:
   flutter_test:
