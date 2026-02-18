@@ -1,0 +1,44 @@
+name: limpopo_voice
+description: Limpopo Voice Translation App
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # 🔥 Firebase Core
+  firebase_core: ^2.32.0
+
+  # 🔥 Authentication (anonymous)
+  firebase_auth: ^4.20.0
+
+  # 🔥 Cloud Functions
+  cloud_functions: ^4.7.6
+
+  # 🔥 Firestore (trials + subscription tracking)
+  cloud_firestore: ^4.17.5
+
+  # 🔥 Audio Recording
+  flutter_sound: ^9.2.13
+
+  # 🔥 Text to Speech
+  flutter_tts: ^3.8.5
+
+  # 🔥 Permissions
+  permission_handler: ^11.3.1
+
+  # 🔥 File system access
+  path_provider: ^2.1.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.2
+
+flutter:
+  uses-material-design: true
