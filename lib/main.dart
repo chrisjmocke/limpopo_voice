@@ -9,7 +9,6 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:audio_session/audio_session.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'firebase_options.dart';
 
 void main() async {
@@ -80,27 +79,25 @@ class _LimpopoHomeState extends State<LimpopoHome> {
     ));
 
     await _recorder.openRecorder();
-
     await _tts.setLanguage("en-US");
     await _tts.setSpeechRate(0.5);
 
-    await _loadCredits();
+    await _initializeUserCredits();
 
     _ready = true;
   }
 
-  Future<void> _loadCredits() async {
-    final uid = FirebaseAuth.instance.currentUser!.uid;
-    final doc = await FirebaseFirestore.instance
-        .collection("users")
-        .doc(uid)
-        .get();
+  Future<void> _initializeUserCredits() async {
+    final callable =
+        FirebaseFunctions.instanceFor(region: 'africa-south1')
+            .httpsCallable('initializeUser');
 
-    if (doc.exists) {
-      setState(() {
-        _credits = doc.data()?['credits'] ?? 0;
-      });
-    }
+    final response = await callable.call();
+    final data = Map<String, dynamic>.from(response.data);
+
+    setState(() {
+      _credits = data['credits'] ?? 0;
+    });
   }
 
   @override
@@ -113,7 +110,7 @@ class _LimpopoHomeState extends State<LimpopoHome> {
   }
 
   Future<void> startRecording() async {
-    if (!_ready || _busy || _credits <= 0) return;
+    if (!_ready || _busy) return;
 
     _pcmBuffer.clear();
 
@@ -158,21 +155,22 @@ class _LimpopoHomeState extends State<LimpopoHome> {
     final wavBytes = _buildWav(Uint8List.fromList(_pcmBuffer));
 
     try {
-      final callable = FirebaseFunctions.instanceFor(
-        region: 'africa-south1',
-      ).httpsCallable('processSpeech');
+      final callable =
+          FirebaseFunctions.instanceFor(region: 'africa-south1')
+              .httpsCallable('processSpeech');
 
       final response = await callable.call({
         "audio": base64Encode(wavBytes),
         "targetLang": "en",
       });
 
-      final text = response.data['translatedText'];
-      final remaining = response.data['remainingCredits'];
+      final data = Map<String, dynamic>.from(response.data);
 
       setState(() {
-        _credits = remaining ?? _credits - 1;
+        _credits = data['remainingCredits'] ?? _credits;
       });
+
+      final text = data['translatedText'];
 
       if (text != null && text.isNotEmpty) {
         await _tts.speak(text);
@@ -232,10 +230,8 @@ class _LimpopoHomeState extends State<LimpopoHome> {
 
   @override
   Widget build(BuildContext context) {
-    final bool disabled = _credits <= 0;
-
     return Scaffold(
-      backgroundColor: disabled ? Colors.grey : Colors.green,
+      backgroundColor: Colors.green,
       body: SafeArea(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -249,13 +245,13 @@ class _LimpopoHomeState extends State<LimpopoHome> {
             ),
             const SizedBox(height: 40),
             GestureDetector(
-              onLongPressStart: disabled ? null : (_) => startRecording(),
-              onLongPressEnd: disabled ? null : (_) => stopRecording(),
+              onLongPressStart: (_) => startRecording(),
+              onLongPressEnd: (_) => stopRecording(),
               child: Container(
                 width: 160,
                 height: 160,
-                decoration: BoxDecoration(
-                  color: disabled ? Colors.black26 : Colors.white,
+                decoration: const BoxDecoration(
+                  color: Colors.white,
                   shape: BoxShape.circle,
                 ),
                 child: const Center(
