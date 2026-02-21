@@ -17,6 +17,9 @@ dependencies:
   cloud_functions: ^4.7.6
   cloud_firestore: ^4.17.5
 
+  # 🔥 Google Play Billing
+  in_app_purchase: ^3.1.11
+
   # 🔥 Audio Engine (ENTERPRISE LOCKED)
   flutter_sound: ^9.28.0
   audio_session: ^0.1.16
@@ -26,6 +29,7 @@ dependencies:
 
   # 🔥 Permissions
   permission_handler: ^11.3.1
+  change_app_package_name: ^1.5.0
 
 dev_dependencies:
   flutter_test:

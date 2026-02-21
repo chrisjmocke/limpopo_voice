@@ -57,6 +57,8 @@ class _LimpopoHomeState extends State<LimpopoHome> {
 
   VoiceState state = VoiceState.idle;
 
+  bool get _hasCredits => _credits > 0;
+
   @override
   void initState() {
     super.initState();
@@ -84,7 +86,9 @@ class _LimpopoHomeState extends State<LimpopoHome> {
 
     await _initializeUserCredits();
 
-    _ready = true;
+    setState(() {
+      _ready = true;
+    });
   }
 
   Future<void> _initializeUserCredits() async {
@@ -110,7 +114,7 @@ class _LimpopoHomeState extends State<LimpopoHome> {
   }
 
   Future<void> startRecording() async {
-    if (!_ready || _busy) return;
+    if (!_ready || _busy || !_hasCredits) return;
 
     _pcmBuffer.clear();
 
@@ -152,6 +156,11 @@ class _LimpopoHomeState extends State<LimpopoHome> {
       return;
     }
 
+    if (!_hasCredits) {
+      _reset();
+      return;
+    }
+
     final wavBytes = _buildWav(Uint8List.fromList(_pcmBuffer));
 
     try {
@@ -177,6 +186,10 @@ class _LimpopoHomeState extends State<LimpopoHome> {
       }
 
     } catch (e) {
+      setState(() {
+        _credits = 0;
+      });
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("No credits remaining.")),
       );
@@ -230,8 +243,10 @@ class _LimpopoHomeState extends State<LimpopoHome> {
 
   @override
   Widget build(BuildContext context) {
+    final bool locked = !_hasCredits;
+
     return Scaffold(
-      backgroundColor: Colors.green,
+      backgroundColor: locked ? Colors.grey : Colors.green,
       body: SafeArea(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -243,21 +258,33 @@ class _LimpopoHomeState extends State<LimpopoHome> {
                 fontWeight: FontWeight.bold,
               ),
             ),
+            const SizedBox(height: 20),
+            if (locked)
+              const Text(
+                "No credits remaining",
+                style: TextStyle(
+                  color: Colors.red,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             const SizedBox(height: 40),
             GestureDetector(
-              onLongPressStart: (_) => startRecording(),
-              onLongPressEnd: (_) => stopRecording(),
+              onLongPressStart:
+                  locked ? null : (_) => startRecording(),
+              onLongPressEnd:
+                  locked ? null : (_) => stopRecording(),
               child: Container(
                 width: 160,
                 height: 160,
-                decoration: const BoxDecoration(
-                  color: Colors.white,
+                decoration: BoxDecoration(
+                  color: locked ? Colors.grey[400] : Colors.white,
                   shape: BoxShape.circle,
                 ),
-                child: const Center(
+                child: Center(
                   child: Text(
-                    "HOLD",
-                    style: TextStyle(fontSize: 24),
+                    locked ? "LOCKED" : "HOLD",
+                    style: const TextStyle(fontSize: 24),
                   ),
                 ),
               ),
