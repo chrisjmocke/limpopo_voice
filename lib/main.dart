@@ -1,3 +1,5 @@
+// LIMPOPO VOICE - RESTORED FULL VERSION
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -5,10 +7,10 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:audio_session/audio_session.dart';
 import 'firebase_options.dart';
 
 void main() async {
@@ -18,8 +20,6 @@ void main() async {
   );
   runApp(const LimpopoVoiceApp());
 }
-
-enum VoiceState { idle, recording, processing }
 
 class LimpopoVoiceApp extends StatelessWidget {
   const LimpopoVoiceApp({super.key});
@@ -41,254 +41,403 @@ class LimpopoHome extends StatefulWidget {
 }
 
 class _LimpopoHomeState extends State<LimpopoHome> {
-  final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
-  final FlutterTts _tts = FlutterTts();
 
+  final FlutterTts _tts = FlutterTts();
+  final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
+  final TextEditingController _textController = TextEditingController();
+
+  StreamController<Uint8List>? _controller;
   final List<int> _pcmBuffer = [];
-  StreamController<Uint8List>? _recordingController;
-  StreamSubscription? _recordingSubscription;
+
+  int _credits = 0;
+  bool _recording = false;
+  bool _processing = false;
+
+  String _sourceLanguage = "English";
+  String _targetLanguage = "Sepedi";
+
+  String _originalText = "";
+  String _translatedText = "";
 
   static const int sampleRate = 16000;
-  static const int channels = 1;
 
-  bool _ready = false;
-  bool _busy = false;
-  int _credits = 0;
+  final Map<String, String> _languageCodes = {
+    "English": "en",
+    "Sepedi": "nso",
+    "Xitsonga": "ts",
+    "Tshivenda": "ve",
+    "Afrikaans": "af",
+  };
 
-  VoiceState state = VoiceState.idle;
-
-  bool get _hasCredits => _credits > 0;
+  final Color africanGreen = const Color(0xFF0B6E4F);
+  final Color africanRed = const Color(0xFFC1121F);
+  final Color africanGold = const Color(0xFFF4A261);
 
   @override
   void initState() {
     super.initState();
-    _initialize();
+    _init();
   }
 
-  Future<void> _initialize() async {
+  Future<void> _init() async {
     await FirebaseAuth.instance.signInAnonymously();
     await Permission.microphone.request();
-
-    final session = await AudioSession.instance;
-    await session.configure(const AudioSessionConfiguration(
-      avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
-      avAudioSessionMode: AVAudioSessionMode.spokenAudio,
-      androidAudioAttributes: AndroidAudioAttributes(
-        contentType: AndroidAudioContentType.speech,
-        usage: AndroidAudioUsage.voiceCommunication,
-      ),
-      androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
-    ));
-
     await _recorder.openRecorder();
-    await _tts.setLanguage("en-US");
-    await _tts.setSpeechRate(0.5);
-
-    await _initializeUserCredits();
-
-    setState(() {
-      _ready = true;
-    });
+    await _loadCredits();
   }
 
-  Future<void> _initializeUserCredits() async {
+  Future<void> _loadCredits() async {
     final callable =
         FirebaseFunctions.instanceFor(region: 'africa-south1')
             .httpsCallable('initializeUser');
 
-    final response = await callable.call();
-    final data = Map<String, dynamic>.from(response.data);
-
-    setState(() {
-      _credits = data['credits'] ?? 0;
-    });
+    final res = await callable.call();
+    setState(() => _credits = res.data['credits']);
   }
 
-  @override
-  void dispose() {
-    _recordingSubscription?.cancel();
-    _recordingController?.close();
-    _recorder.closeRecorder();
-    _tts.stop();
-    super.dispose();
+  void _openHistory() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const HistoryScreen()),
+    );
   }
 
-  Future<void> startRecording() async {
-    if (!_ready || _busy || !_hasCredits) return;
+  void _openTopUp() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PurchaseScreen(onPurchase: (credits) async {
+          final callable =
+              FirebaseFunctions.instanceFor(region: 'africa-south1')
+                  .httpsCallable('addCredits');
+          final res = await callable.call({"amount": credits});
+          setState(() => _credits = res.data['credits']);
+        }),
+      ),
+    );
+  }
+
+  Future<void> _startRecording() async {
+    if (_credits <= 0) return;
+
+    setState(() => _recording = true);
 
     _pcmBuffer.clear();
-
-    _recordingController = StreamController<Uint8List>();
-    _recordingSubscription =
-        _recordingController!.stream.listen((data) {
+    _controller = StreamController<Uint8List>();
+    _controller!.stream.listen((data) {
       _pcmBuffer.addAll(data);
     });
 
     await _recorder.startRecorder(
       codec: Codec.pcm16,
       sampleRate: sampleRate,
-      numChannels: channels,
-      toStream: _recordingController!.sink,
+      numChannels: 1,
+      toStream: _controller!.sink,
     );
-
-    setState(() => state = VoiceState.recording);
-
-    Future.delayed(const Duration(seconds: 10), () async {
-      if (state == VoiceState.recording) {
-        await stopRecording();
-      }
-    });
   }
 
-  Future<void> stopRecording() async {
-    if (!_recorder.isRecording || _busy) return;
+  Future<void> _stopRecording() async {
+    if (!_recorder.isRecording) return;
 
-    _busy = true;
+    setState(() => _recording = false);
+
     await _recorder.stopRecorder();
-
-    await _recordingSubscription?.cancel();
-    await _recordingController?.close();
-
-    setState(() => state = VoiceState.processing);
-
-    if (_pcmBuffer.length < 4000) {
-      _reset();
-      return;
-    }
-
-    if (!_hasCredits) {
-      _reset();
-      return;
-    }
+    await _controller?.close();
 
     final wavBytes = _buildWav(Uint8List.fromList(_pcmBuffer));
-
-    try {
-      final callable =
-          FirebaseFunctions.instanceFor(region: 'africa-south1')
-              .httpsCallable('processSpeech');
-
-      final response = await callable.call({
-        "audio": base64Encode(wavBytes),
-        "targetLang": "en",
-      });
-
-      final data = Map<String, dynamic>.from(response.data);
-
-      setState(() {
-        _credits = data['remainingCredits'] ?? _credits;
-      });
-
-      final text = data['translatedText'];
-
-      if (text != null && text.isNotEmpty) {
-        await _tts.speak(text);
-      }
-
-    } catch (e) {
-      setState(() {
-        _credits = 0;
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("No credits remaining.")),
-      );
-    }
-
-    _reset();
+    await _processTranslation(audio: wavBytes);
   }
 
-  Uint8List _buildWav(Uint8List pcmData) {
-    final int byteRate = sampleRate * channels * 2;
-    final int blockAlign = channels * 2;
-    final int dataLength = pcmData.length;
-    final int fileLength = 44 + dataLength;
-
-    final buffer = BytesBuilder();
-
-    buffer.add(ascii.encode('RIFF'));
-    buffer.add(_intToBytes(fileLength - 8, 4));
-    buffer.add(ascii.encode('WAVE'));
-    buffer.add(ascii.encode('fmt '));
-    buffer.add(_intToBytes(16, 4));
-    buffer.add(_intToBytes(1, 2));
-    buffer.add(_intToBytes(channels, 2));
-    buffer.add(_intToBytes(sampleRate, 4));
-    buffer.add(_intToBytes(byteRate, 4));
-    buffer.add(_intToBytes(blockAlign, 2));
-    buffer.add(_intToBytes(16, 2));
-    buffer.add(ascii.encode('data'));
-    buffer.add(_intToBytes(dataLength, 4));
-    buffer.add(pcmData);
-
-    return buffer.toBytes();
+  Future<void> _translateText() async {
+    if (_textController.text.trim().isEmpty) return;
+    await _processTranslation(text: _textController.text.trim());
+    _textController.clear();
   }
 
-  Uint8List _intToBytes(int value, int byteCount) {
-    final bytes = ByteData(byteCount);
-    if (byteCount == 2) {
-      bytes.setUint16(0, value, Endian.little);
-    } else {
-      bytes.setUint32(0, value, Endian.little);
-    }
-    return bytes.buffer.asUint8List();
-  }
+  Future<void> _processTranslation({Uint8List? audio, String? text}) async {
+    setState(() => _processing = true);
 
-  void _reset() {
-    setState(() {
-      state = VoiceState.idle;
-      _busy = false;
+    final callable =
+        FirebaseFunctions.instanceFor(region: 'africa-south1')
+            .httpsCallable('processSpeech');
+
+    final res = await callable.call({
+      if (audio != null) "audio": base64Encode(audio),
+      if (text != null) "text": text,
+      "sourceLanguage": _languageCodes[_sourceLanguage],
+      "targetLanguage": _languageCodes[_targetLanguage],
     });
+
+    setState(() {
+      _credits = res.data['remainingCredits'];
+      _originalText = res.data['originalText'] ?? text ?? "";
+      _translatedText = res.data['translatedText'] ?? "";
+      _processing = false;
+    });
+
+    await _tts.setLanguage(_languageCodes[_targetLanguage]!);
+    await _tts.speak(_translatedText);
+  }
+
+  Uint8List _buildWav(Uint8List pcm) {
+    final builder = BytesBuilder();
+    final byteRate = sampleRate * 2;
+
+    builder.add(ascii.encode('RIFF'));
+    builder.add(_intToBytes(36 + pcm.length, 4));
+    builder.add(ascii.encode('WAVEfmt '));
+    builder.add(_intToBytes(16, 4));
+    builder.add(_intToBytes(1, 2));
+    builder.add(_intToBytes(1, 2));
+    builder.add(_intToBytes(sampleRate, 4));
+    builder.add(_intToBytes(byteRate, 4));
+    builder.add(_intToBytes(2, 2));
+    builder.add(_intToBytes(16, 2));
+    builder.add(ascii.encode('data'));
+    builder.add(_intToBytes(pcm.length, 4));
+    builder.add(pcm);
+
+    return builder.toBytes();
+  }
+
+  Uint8List _intToBytes(int val, int bytes) {
+    final data = ByteData(bytes);
+    if (bytes == 2) {
+      data.setUint16(0, val, Endian.little);
+    } else {
+      data.setUint32(0, val, Endian.little);
+    }
+    return data.buffer.asUint8List();
+  }
+
+  Widget _languageRow(bool isSource) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: _languageCodes.keys.map((lang) {
+        final selected =
+            isSource ? _sourceLanguage == lang : _targetLanguage == lang;
+
+        return GestureDetector(
+          onTap: () {
+            setState(() {
+              if (isSource) {
+                _sourceLanguage = lang;
+              } else {
+                _targetLanguage = lang;
+              }
+            });
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              color: selected ? africanRed : africanGold,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              lang,
+              style: const TextStyle(color: Colors.white),
+            ),
+          ),
+        );
+      }).toList(),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final bool locked = !_hasCredits;
-
     return Scaffold(
-      backgroundColor: locked ? Colors.grey : Colors.green,
-      body: SafeArea(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              "Credits: $_credits",
-              style: const TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-              ),
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: Image.asset(
+              'assets/limpopo_voice.png',
+              fit: BoxFit.cover,
             ),
-            const SizedBox(height: 20),
-            if (locked)
-              const Text(
-                "No credits remaining",
-                style: TextStyle(
-                  color: Colors.red,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            const SizedBox(height: 40),
-            GestureDetector(
-              onLongPressStart:
-                  locked ? null : (_) => startRecording(),
-              onLongPressEnd:
-                  locked ? null : (_) => stopRecording(),
-              child: Container(
-                width: 160,
-                height: 160,
-                decoration: BoxDecoration(
-                  color: locked ? Colors.grey[400] : Colors.white,
-                  shape: BoxShape.circle,
-                ),
-                child: Center(
-                  child: Text(
-                    locked ? "LOCKED" : "HOLD",
-                    style: const TextStyle(fontSize: 24),
+          ),
+          SafeArea(
+            child: SingleChildScrollView(
+              child: Column(
+                children: [
+
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      GestureDetector(
+                        onTap: _openTopUp,
+                        child: Container(
+                          margin: const EdgeInsets.all(12),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: africanGold,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            "Credits: $_credits",
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ),
+                      TextButton.icon(
+                        onPressed: _openHistory,
+                        icon: const Icon(Icons.history),
+                        label: const Text("History"),
+                      )
+                    ],
                   ),
-                ),
+
+                  const SizedBox(height: 10),
+                  const Text("Input Language",
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  _languageRow(true),
+
+                  const SizedBox(height: 20),
+                  const Text("Output Language",
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  _languageRow(false),
+
+                  const SizedBox(height: 30),
+
+                  GestureDetector(
+                    onLongPressStart: (_) => _startRecording(),
+                    onLongPressEnd: (_) => _stopRecording(),
+                    child: Container(
+                      width: 160,
+                      height: 160,
+                      decoration: BoxDecoration(
+                        color: _recording ? africanRed : africanGreen,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Center(
+                        child: Text(
+                          "Hold to Talk",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.white),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  if (_originalText.isNotEmpty)
+                    Text("You said: $_originalText",
+                        style: const TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.bold)),
+
+                  if (_translatedText.isNotEmpty)
+                    Text("Translation: $_translatedText",
+                        style: const TextStyle(
+                            fontSize: 18, fontWeight: FontWeight.bold)),
+
+                  const SizedBox(height: 20),
+
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: TextField(
+                      controller: _textController,
+                      decoration: const InputDecoration(
+                        hintText: "Type text to translate",
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 10),
+
+                  ElevatedButton(
+                    onPressed: _processing ? null : _translateText,
+                    child: const Text("Translate Text"),
+                  ),
+
+                  const SizedBox(height: 40),
+                ],
               ),
             ),
+          )
+        ],
+      ),
+    );
+  }
+}
+
+class HistoryScreen extends StatelessWidget {
+  const HistoryScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("Translation History")),
+      body: StreamBuilder(
+        stream: FirebaseFirestore.instance
+            .collection('history')
+            .orderBy('timestamp', descending: true)
+            .snapshots(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+          final docs = snapshot.data!.docs;
+
+          return ListView.builder(
+            itemCount: docs.length,
+            itemBuilder: (context, index) {
+              final data = docs[index].data();
+              return ListTile(
+                title: Text(data['translatedText'] ?? ""),
+                subtitle: Text(data['originalText'] ?? ""),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+class PurchaseScreen extends StatelessWidget {
+  final Function(int) onPurchase;
+  const PurchaseScreen({super.key, required this.onPurchase});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("Top Up")),
+      body: Column(
+        children: [
+          _pack(context, "Starter", "R10", 20),
+          _pack(context, "Pro", "R25", 60),
+          _pack(context, "Max", "R50", 150),
+        ],
+      ),
+    );
+  }
+
+  Widget _pack(BuildContext context, String name, String price, int credits) {
+    return GestureDetector(
+      onTap: () {
+        onPurchase(credits);
+        Navigator.pop(context);
+      },
+      child: Container(
+        margin: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: const Color(0xFFC1121F),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Column(
+          children: [
+            Text(name,
+                style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white)),
+            Text(price, style: const TextStyle(color: Colors.white)),
+            Text("$credits Credits",
+                style: const TextStyle(color: Colors.white)),
           ],
         ),
       ),

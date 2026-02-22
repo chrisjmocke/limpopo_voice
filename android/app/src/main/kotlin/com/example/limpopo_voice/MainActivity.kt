@@ -1,4 +1,4 @@
-package com.example.limpopo_voice
+package com.limpopovoice.translate
 
 import io.flutter.embedding.android.FlutterActivity
 
