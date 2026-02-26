@@ -1,131 +1,52 @@
-const { onCall } = require("firebase-functions/v2/https");
+const { onRequest } = require("firebase-functions/v2/https");
 const { setGlobalOptions } = require("firebase-functions/v2");
-const admin = require("firebase-admin");
-const { SpeechClient } = require("@google-cloud/speech");
-const { Translate } = require("@google-cloud/translate").v2;
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+const cors = require("cors")({ origin: true });
 
-admin.initializeApp();
+setGlobalOptions({ region: "africa-south1" });
 
-setGlobalOptions({
-  region: "africa-south1",
-  memory: "512MiB",
-  timeoutSeconds: 60,
-});
+exports.processSpeech = onRequest({ secrets: ["GEMINI_API_KEY"] }, (req, res) => {
+    // 1. Handle CORS so Flutter can talk to it
+    cors(req, res, async () => {
+        try {
+            // 2. Security Check (The Password)
+            const providedPassword = req.headers['x-app-password'];
+            if (providedPassword !== "MySecureSouthAfricaApp2026") {
+                return res.status(401).send({ error: "Unauthorized" });
+            }
 
-const db = admin.firestore();
-const speechClient = new SpeechClient();
-const translate = new Translate();
+            // 3. Get Data (Standard JSON format)
+            const { text, targetLanguage, isRespectMode } = req.body;
 
-//////////////////////////////////////////////////////////
-// INITIALIZE USER
-//////////////////////////////////////////////////////////
+            if (!text) {
+                return res.status(400).send({ error: "No text provided" });
+            }
 
-exports.initializeUser = onCall(async (request) => {
-  const uid = request.auth?.uid;
-  if (!uid) throw new Error("Unauthorized");
+            // 4. Gemini Setup
+            const apiKey = process.env.GEMINI_API_KEY;
+            const genAI = new GoogleGenerativeAI(apiKey);
+            const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
-  const userRef = db.collection("users").doc(uid);
-  const doc = await userRef.get();
+            const prompt = `You are an expert translator for South African languages. 
+            Translate the following text into ${targetLanguage || 'isiZulu'}. 
+            ${isRespectMode ? "IMPORTANT: Use the most formal, respectful version." : "Use casual language."}
+            Text: "${text}"
+            Return ONLY the translated string.`;
 
-  if (!doc.exists) {
-    await userRef.set({
-      credits: 6,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            // 5. Generate and Send
+            const result = await model.generateContent(prompt);
+            const response = await result.response;
+            const translatedText = response.text().trim();
+
+            // Sending back as "translation" to match your Flutter code
+            res.status(200).send({ 
+                translation: translatedText,
+                status: "success" 
+            });
+
+        } catch (error) {
+            console.error("Gemini Error:", error);
+            res.status(500).send({ error: "Translation Failed", details: error.message });
+        }
     });
-    return { credits: 6 };
-  }
-
-  return { credits: doc.data().credits || 0 };
-});
-
-//////////////////////////////////////////////////////////
-// ADD CREDITS (SIMULATED PAYMENT)
-//////////////////////////////////////////////////////////
-
-exports.addCredits = onCall(async (request) => {
-  const uid = request.auth?.uid;
-  if (!uid) throw new Error("Unauthorized");
-
-  const amount = request.data.amount;
-
-  const userRef = db.collection("users").doc(uid);
-  const userDoc = await userRef.get();
-
-  const current = userDoc.data().credits || 0;
-  const updated = current + amount;
-
-  await userRef.update({
-    credits: updated,
-  });
-
-  return { credits: updated };
-});
-
-//////////////////////////////////////////////////////////
-// PROCESS SPEECH OR TEXT
-//////////////////////////////////////////////////////////
-
-exports.processSpeech = onCall(async (request) => {
-  const uid = request.auth?.uid;
-  if (!uid) throw new Error("Unauthorized");
-
-  const { audio, text, sourceLanguage, targetLanguage } = request.data;
-
-  const userRef = db.collection("users").doc(uid);
-  const userDoc = await userRef.get();
-
-  if (!userDoc.exists || userDoc.data().credits <= 0)
-    throw new Error("No credits remaining");
-
-  let transcript = text || "";
-
-  if (audio) {
-    const audioBytes = Buffer.from(audio, "base64");
-
-    const [sttResponse] = await speechClient.recognize({
-      audio: { content: audioBytes },
-      config: {
-        encoding: "LINEAR16",
-        sampleRateHertz: 16000,
-        languageCode: sourceLanguage,
-      },
-    });
-
-    transcript =
-      sttResponse.results
-        ?.map((r) => r.alternatives[0].transcript)
-        .join(" ") || "";
-  }
-
-  if (!transcript)
-    return {
-      translatedText: "No speech detected.",
-      remainingCredits: userDoc.data().credits,
-    };
-
-  const [translation] = await translate.translate(
-    transcript,
-    targetLanguage
-  );
-
-  const newCredits = userDoc.data().credits - 1;
-
-  await userRef.update({ credits: newCredits });
-
-  await db
-    .collection("users")
-    .doc(uid)
-    .collection("history")
-    .add({
-      originalText: transcript,
-      translatedText: translation,
-      sourceLanguage,
-      targetLanguage,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-  return {
-    translatedText: translation,
-    remainingCredits: newCredits,
-  };
 });

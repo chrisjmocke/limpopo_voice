@@ -1,28 +1,57 @@
-# Flutter
+# ------------------------------------------------------------
+# Limpopo Voice - 2026 Production GitIgnore
+# ------------------------------------------------------------
+
+# --- Flutter/Dart ---
 .dart_tool/
 .packages
-build/
 .flutter-plugins
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
+build/
+lib/generated_plugin_registrant.dart
 
-# Android
+# --- Android ---
 android/.gradle/
 android/app/build/
+android/local.properties
+android/key.properties
+android/app/*.keystore
+android/app/*.jks
 
-# iOS
+# --- iOS ---
 ios/Pods/
 ios/.symlinks/
 ios/Flutter/Flutter.framework
 ios/Flutter/Flutter.podspec
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+ios/ServiceDefinitions.json
+ios/Runner/GoogleService-Info.plist
 
-# Firebase
+# --- Firebase & Cloud Functions ---
+node_modules/
+functions/node_modules/
 firebase-debug.log
 firebase-debug.*.log
-functions/node_modules/
+.firebaserc
+# Ignore local secret files (used for local testing)
+functions/.runtimeconfig.json
+functions/.env
+.env
+service-account-key.json
 
-# Misc
+# --- 2026 Security: Critical Configs ---
+# We ignore these because they contain project-specific IDs. 
+# It's better to regenerate them on a new machine using 'flutterfire configure'
+lib/firebase_options.dart
+android/app/google-services.json
+
+# --- IDEs & OS ---
+.vscode/
+.idea/
+*.iml
+*.swp
 *.log
-*.tmp
-*.lock
+.DS_Store

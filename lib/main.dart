@@ -1,23 +1,21 @@
-// LIMPOPO VOICE - RESTORED FULL VERSION
-
-import 'dart:async';
-import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_functions/cloud_functions.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:http/http.dart' as http; 
+import 'dart:convert';               
 import 'package:flutter_tts/flutter_tts.dart';
-import 'package:flutter_sound/flutter_sound.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:permission_handler/permission_handler.dart';
 import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    ).timeout(const Duration(seconds: 5));
+  } catch (e) {
+    debugPrint("Firebase init timeout: $e");
+  }
   runApp(const LimpopoVoiceApp());
 }
 
@@ -26,9 +24,14 @@ class LimpopoVoiceApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
+    return MaterialApp(
       debugShowCheckedModeBanner: false,
-      home: LimpopoHome(),
+      title: 'Limpopo Voice',
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF008080)),
+      ),
+      home: const LimpopoHome(),
     );
   }
 }
@@ -41,403 +44,182 @@ class LimpopoHome extends StatefulWidget {
 }
 
 class _LimpopoHomeState extends State<LimpopoHome> {
-
   final FlutterTts _tts = FlutterTts();
-  final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
-  final TextEditingController _textController = TextEditingController();
+  final stt.SpeechToText _speech = stt.SpeechToText();
 
-  StreamController<Uint8List>? _controller;
-  final List<int> _pcmBuffer = [];
-
-  int _credits = 0;
-  bool _recording = false;
-  bool _processing = false;
-
-  String _sourceLanguage = "English";
+  bool _isListening = false;
+  bool _isRespectMode = false;
+  String _text = "Hold the button to speak";
+  String _translatedResult = "";
   String _targetLanguage = "Sepedi";
+  
+  int _userCredits = 6; 
+  final Color _appColor = const Color(0xFF008080); 
 
-  String _originalText = "";
-  String _translatedText = "";
-
-  static const int sampleRate = 16000;
-
-  final Map<String, String> _languageCodes = {
+  final Map<String, String> _languages = {
     "English": "en",
+    "Afrikaans": "af",
     "Sepedi": "nso",
     "Xitsonga": "ts",
     "Tshivenda": "ve",
-    "Afrikaans": "af",
   };
-
-  final Color africanGreen = const Color(0xFF0B6E4F);
-  final Color africanRed = const Color(0xFFC1121F);
-  final Color africanGold = const Color(0xFFF4A261);
 
   @override
   void initState() {
     super.initState();
-    _init();
+    _initApp();
   }
 
-  Future<void> _init() async {
-    await FirebaseAuth.instance.signInAnonymously();
+  Future<void> _initApp() async {
     await Permission.microphone.request();
-    await _recorder.openRecorder();
-    await _loadCredits();
+    await _tts.setLanguage("en-US");
   }
 
-  Future<void> _loadCredits() async {
-    final callable =
-        FirebaseFunctions.instanceFor(region: 'africa-south1')
-            .httpsCallable('initializeUser');
+  // --- LOGIC: THE VERIFIED HTTPS TRANSLATION ---
+  Future<void> _sendToTranslation(String input) async {
+    if (input.trim().isEmpty) return;
 
-    final res = await callable.call();
-    setState(() => _credits = res.data['credits']);
-  }
-
-  void _openHistory() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const HistoryScreen()),
-    );
-  }
-
-  void _openTopUp() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => PurchaseScreen(onPurchase: (credits) async {
-          final callable =
-              FirebaseFunctions.instanceFor(region: 'africa-south1')
-                  .httpsCallable('addCredits');
-          final res = await callable.call({"amount": credits});
-          setState(() => _credits = res.data['credits']);
-        }),
-      ),
-    );
-  }
-
-  Future<void> _startRecording() async {
-    if (_credits <= 0) return;
-
-    setState(() => _recording = true);
-
-    _pcmBuffer.clear();
-    _controller = StreamController<Uint8List>();
-    _controller!.stream.listen((data) {
-      _pcmBuffer.addAll(data);
-    });
-
-    await _recorder.startRecorder(
-      codec: Codec.pcm16,
-      sampleRate: sampleRate,
-      numChannels: 1,
-      toStream: _controller!.sink,
-    );
-  }
-
-  Future<void> _stopRecording() async {
-    if (!_recorder.isRecording) return;
-
-    setState(() => _recording = false);
-
-    await _recorder.stopRecorder();
-    await _controller?.close();
-
-    final wavBytes = _buildWav(Uint8List.fromList(_pcmBuffer));
-    await _processTranslation(audio: wavBytes);
-  }
-
-  Future<void> _translateText() async {
-    if (_textController.text.trim().isEmpty) return;
-    await _processTranslation(text: _textController.text.trim());
-    _textController.clear();
-  }
-
-  Future<void> _processTranslation({Uint8List? audio, String? text}) async {
-    setState(() => _processing = true);
-
-    final callable =
-        FirebaseFunctions.instanceFor(region: 'africa-south1')
-            .httpsCallable('processSpeech');
-
-    final res = await callable.call({
-      if (audio != null) "audio": base64Encode(audio),
-      if (text != null) "text": text,
-      "sourceLanguage": _languageCodes[_sourceLanguage],
-      "targetLanguage": _languageCodes[_targetLanguage],
-    });
-
-    setState(() {
-      _credits = res.data['remainingCredits'];
-      _originalText = res.data['originalText'] ?? text ?? "";
-      _translatedText = res.data['translatedText'] ?? "";
-      _processing = false;
-    });
-
-    await _tts.setLanguage(_languageCodes[_targetLanguage]!);
-    await _tts.speak(_translatedText);
-  }
-
-  Uint8List _buildWav(Uint8List pcm) {
-    final builder = BytesBuilder();
-    final byteRate = sampleRate * 2;
-
-    builder.add(ascii.encode('RIFF'));
-    builder.add(_intToBytes(36 + pcm.length, 4));
-    builder.add(ascii.encode('WAVEfmt '));
-    builder.add(_intToBytes(16, 4));
-    builder.add(_intToBytes(1, 2));
-    builder.add(_intToBytes(1, 2));
-    builder.add(_intToBytes(sampleRate, 4));
-    builder.add(_intToBytes(byteRate, 4));
-    builder.add(_intToBytes(2, 2));
-    builder.add(_intToBytes(16, 2));
-    builder.add(ascii.encode('data'));
-    builder.add(_intToBytes(pcm.length, 4));
-    builder.add(pcm);
-
-    return builder.toBytes();
-  }
-
-  Uint8List _intToBytes(int val, int bytes) {
-    final data = ByteData(bytes);
-    if (bytes == 2) {
-      data.setUint16(0, val, Endian.little);
-    } else {
-      data.setUint32(0, val, Endian.little);
+    if (_userCredits <= 0) {
+      _showPurchasePopup();
+      return;
     }
-    return data.buffer.asUint8List();
-  }
 
-  Widget _languageRow(bool isSource) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: _languageCodes.keys.map((lang) {
-        final selected =
-            isSource ? _sourceLanguage == lang : _targetLanguage == lang;
+    // UPDATED: This is the URL we verified in PowerShell
+    const String firebaseUrl = "https://africa-south1-limpopo-voice-prod.cloudfunctions.net/processSpeech";
 
-        return GestureDetector(
-          onTap: () {
-            setState(() {
-              if (isSource) {
-                _sourceLanguage = lang;
-              } else {
-                _targetLanguage = lang;
-              }
-            });
-          },
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            decoration: BoxDecoration(
-              color: selected ? africanRed : africanGold,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Text(
-              lang,
-              style: const TextStyle(color: Colors.white),
-            ),
-          ),
-        );
-      }).toList(),
-    );
-  }
+    try {
+      setState(() => _translatedResult = "Thinking...");
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: Image.asset(
-              'assets/limpopo_voice.png',
-              fit: BoxFit.cover,
-            ),
-          ),
-          SafeArea(
-            child: SingleChildScrollView(
-              child: Column(
-                children: [
-
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      GestureDetector(
-                        onTap: _openTopUp,
-                        child: Container(
-                          margin: const EdgeInsets.all(12),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: africanGold,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            "Credits: $_credits",
-                            style: const TextStyle(
-                                fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                      ),
-                      TextButton.icon(
-                        onPressed: _openHistory,
-                        icon: const Icon(Icons.history),
-                        label: const Text("History"),
-                      )
-                    ],
-                  ),
-
-                  const SizedBox(height: 10),
-                  const Text("Input Language",
-                      style:
-                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                  _languageRow(true),
-
-                  const SizedBox(height: 20),
-                  const Text("Output Language",
-                      style:
-                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                  _languageRow(false),
-
-                  const SizedBox(height: 30),
-
-                  GestureDetector(
-                    onLongPressStart: (_) => _startRecording(),
-                    onLongPressEnd: (_) => _stopRecording(),
-                    child: Container(
-                      width: 160,
-                      height: 160,
-                      decoration: BoxDecoration(
-                        color: _recording ? africanRed : africanGreen,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Center(
-                        child: Text(
-                          "Hold to Talk",
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: Colors.white),
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  if (_originalText.isNotEmpty)
-                    Text("You said: $_originalText",
-                        style: const TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.bold)),
-
-                  if (_translatedText.isNotEmpty)
-                    Text("Translation: $_translatedText",
-                        style: const TextStyle(
-                            fontSize: 18, fontWeight: FontWeight.bold)),
-
-                  const SizedBox(height: 20),
-
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: TextField(
-                      controller: _textController,
-                      decoration: const InputDecoration(
-                        hintText: "Type text to translate",
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 10),
-
-                  ElevatedButton(
-                    onPressed: _processing ? null : _translateText,
-                    child: const Text("Translate Text"),
-                  ),
-
-                  const SizedBox(height: 40),
-                ],
-              ),
-            ),
-          )
-        ],
-      ),
-    );
-  }
-}
-
-class HistoryScreen extends StatelessWidget {
-  const HistoryScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text("Translation History")),
-      body: StreamBuilder(
-        stream: FirebaseFirestore.instance
-            .collection('history')
-            .orderBy('timestamp', descending: true)
-            .snapshots(),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-          final docs = snapshot.data!.docs;
-
-          return ListView.builder(
-            itemCount: docs.length,
-            itemBuilder: (context, index) {
-              final data = docs[index].data();
-              return ListTile(
-                title: Text(data['translatedText'] ?? ""),
-                subtitle: Text(data['originalText'] ?? ""),
-              );
-            },
-          );
+      final response = await http.post(
+        Uri.parse(firebaseUrl),
+        headers: {
+          "Content-Type": "application/json",
+          "x-app-password": "MySecureSouthAfricaApp2026", // Verified Password
         },
-      ),
-    );
+        body: jsonEncode({
+          "text": input,
+          "targetLanguage": _targetLanguage,
+          "isRespectMode": _isRespectMode,
+        }),
+      ).timeout(const Duration(seconds: 15)); // 15-second timeout for spotty 3G
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        setState(() {
+          // 'translation' matches the key returned by your index.js
+          _translatedResult = data['translation'] ?? "No translation returned";
+          _userCredits--;
+        });
+
+        // Speak the result
+        if (_translatedResult.isNotEmpty) {
+          await _tts.speak(_translatedResult);
+        }
+      } else {
+        setState(() => _translatedResult = "Server Error: ${response.statusCode}");
+        debugPrint("Server Response: ${response.body}");
+      }
+    } catch (e) {
+      setState(() => _translatedResult = "Connection Error. Check Internet.");
+      debugPrint("Error detail: $e");
+    }
   }
-}
 
-class PurchaseScreen extends StatelessWidget {
-  final Function(int) onPurchase;
-  const PurchaseScreen({super.key, required this.onPurchase});
+  // Helper for Speech to Text
+  void _listen() async {
+    if (!_isListening) {
+      bool available = await _speech.initialize();
+      if (available) {
+        setState(() => _isListening = true);
+        _speech.listen(onResult: (val) {
+          setState(() {
+            _text = val.recognizedWords;
+          });
+          if (val.finalResult) {
+            setState(() => _isListening = false);
+            _sendToTranslation(_text);
+          }
+        });
+      }
+    } else {
+      setState(() => _isListening = false);
+      _speech.stop();
+    }
+  }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text("Top Up")),
-      body: Column(
-        children: [
-          _pack(context, "Starter", "R10", 20),
-          _pack(context, "Pro", "R25", 60),
-          _pack(context, "Max", "R50", 150),
+  void _showPurchasePopup() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Out of Credits"),
+        content: const Text("Please top up to continue translating."),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("OK")),
         ],
       ),
     );
   }
 
-  Widget _pack(BuildContext context, String name, String price, int credits) {
-    return GestureDetector(
-      onTap: () {
-        onPurchase(credits);
-        Navigator.pop(context);
-      },
-      child: Container(
-        margin: const EdgeInsets.all(12),
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: const Color(0xFFC1121F),
-          borderRadius: BorderRadius.circular(20),
-        ),
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("Limpopo Voice"),
+        backgroundColor: _appColor,
+        foregroundColor: Colors.white,
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(20.0),
         child: Column(
           children: [
-            Text(name,
-                style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white)),
-            Text(price, style: const TextStyle(color: Colors.white)),
-            Text("$credits Credits",
-                style: const TextStyle(color: Colors.white)),
+            Text("Credits: $_userCredits", style: const TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 20),
+            DropdownButton<String>(
+              value: _targetLanguage,
+              items: _languages.keys.map((String lang) {
+                return DropdownMenuItem(value: lang, child: Text(lang));
+              }).toList(),
+              onChanged: (val) => setState(() => _targetLanguage = val!),
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Text("Respect Mode"),
+                Switch(
+                  value: _isRespectMode,
+                  onChanged: (val) => setState(() => _isRespectMode = val),
+                ),
+              ],
+            ),
+            const Expanded(
+              child: Center(child: Icon(Icons.mic, size: 100, color: Colors.grey)),
+            ),
+            Container(
+              padding: const EdgeInsets.all(15),
+              decoration: BoxDecoration(
+                color: Colors.grey[200],
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(_text, style: const TextStyle(fontSize: 18)),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              _translatedResult,
+              style: TextStyle(fontSize: 22, color: _appColor, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 20),
+            GestureDetector(
+              onLongPress: _listen,
+              onLongPressUp: () {
+                setState(() => _isListening = false);
+                _speech.stop();
+              },
+              child: FloatingActionButton.large(
+                onPressed: () {}, // Handled by LongPress
+                backgroundColor: _isListening ? Colors.red : _appColor,
+                child: Icon(_isListening ? Icons.stop : Icons.mic, color: Colors.white),
+              ),
+            ),
           ],
         ),
       ),

@@ -1,32 +1,34 @@
 name: limpopo_voice
-description: Limpopo Voice App
-publish_to: "none"
+description: A new Flutter project for Limpopo translations.
+publish_to: 'none'
 
-version: 1.0.0+1
-
+# 1. This block fixes the "no lower-bound SDK constraint" error
 environment:
-  sdk: ">=3.2.0 <4.0.0"
+  sdk: '>=3.11.0 <4.0.0'
 
 dependencies:
   flutter:
     sdk: flutter
-
-  firebase_core: ^2.27.0
-  firebase_auth: ^4.17.0
-  cloud_functions: ^4.6.0
-  cloud_firestore: ^4.15.0
-
-  flutter_tts: ^3.8.5
-  flutter_sound: ^9.2.13
-  permission_handler: ^11.3.0
+  
+  # 2. Modern 2026 Firebase & Core Packages
+  firebase_core: ^4.4.0
+  firebase_auth: ^6.1.4
+  cloud_firestore: ^6.1.2
+  
+  # 3. Essential Networking & Logic
+  http: ^1.2.0
+  provider: ^6.1.2
+  
+  # 4. Voice & Multimedia Packages
+  speech_to_text: ^7.3.0
+  flutter_tts: ^4.2.0
+  permission_handler: ^11.3.1
+  share_plus: ^10.1.4
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^3.0.2
+  flutter_lints: ^5.0.0
 
 flutter:
   uses-material-design: true
-
-  assets:
-    - assets/limpopo_voice.png

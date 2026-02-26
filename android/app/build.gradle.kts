@@ -6,12 +6,20 @@ plugins {
 }
 
 android {
+    // 🔥 Add this line exactly as requested:
+    ndkVersion = "28.2.13676358"
+
+    namespace = "com.limpopovoice.translate"
+    compileSdk = flutter.compileSdkVersion
     namespace = "com.limpopovoice.translate"
     compileSdk = flutter.compileSdkVersion
 
     defaultConfig {
         applicationId = "com.limpopovoice.translate"
+
+        // 🔥 IMPORTANT FIX
         minSdk = flutter.minSdkVersion
+
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -36,8 +44,13 @@ android {
     }
 
     buildTypes {
+
         release {
+
+            // 🔥 USE REAL SIGNING
             signingConfig = signingConfigs.getByName("release")
+
+            // 🔥 KEEP THESE OFF FOR NOW
             isMinifyEnabled = false
             isShrinkResources = false
         }
