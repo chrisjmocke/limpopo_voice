@@ -55,3 +55,5 @@ android/app/google-services.json
 *.swp
 *.log
 .DS_Store
+
+.env
