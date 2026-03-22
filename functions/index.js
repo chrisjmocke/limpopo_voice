@@ -293,7 +293,8 @@ function mapGender(isMale) {
 }
 
 function appCheckEnforced() {
-    return String(process.env.ENFORCE_APP_CHECK || "false").toLowerCase() === "true";
+    // Secure-by-default: enforce App Check unless explicitly turned off.
+    return String(process.env.ENFORCE_APP_CHECK || "true").toLowerCase() === "true";
 }
 
 async function verifyAppCheck(req) {
