@@ -11,7 +11,7 @@
   },
   "main": "index.js",
   "dependencies": {
-    "@google-cloud/text-to-speech": "^5.8.0",
+    "@google-cloud/text-to-speech": "^6.4.0",
     "@google-cloud/speech": "^7.2.1",
     "@google-cloud/translate": "^9.3.0",
     "@google/generative-ai": "^0.24.1",
