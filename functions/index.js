@@ -15,6 +15,60 @@ let cachedVoices = null;
 let cachedVoicesAtMs = 0;
 
 const VOICE_CACHE_TTL_MS = 10 * 60 * 1000;
+const MAX_TEXT_LENGTH = Number(process.env.MAX_TEXT_LENGTH || 600);
+const MAX_CONTENT_LENGTH_BYTES = Number(process.env.MAX_CONTENT_LENGTH_BYTES || 32 * 1024);
+
+const KNOWN_TTS_PROVIDERS = ["google", "azure", "elevenlabs"];
+
+function getAllowedOrigins() {
+    const raw = String(process.env.ALLOWED_ORIGINS || "").trim();
+    if (!raw) {
+        return [];
+    }
+    return raw
+        .split(",")
+        .map((origin) => origin.trim())
+        .filter(Boolean);
+}
+
+function isOriginAllowed(origin) {
+    const allowed = getAllowedOrigins();
+    if (allowed.length === 0) {
+        return true;
+    }
+    if (!origin) {
+        // Native mobile clients often have no Origin header.
+        return true;
+    }
+    return allowed.includes(origin);
+}
+
+function enforceRequestGuardrails(req, res) {
+    if (req.method !== "POST") {
+        res.status(405).send({ error: "Method Not Allowed. Use POST." });
+        return false;
+    }
+
+    const origin = String(req.headers.origin || "").trim();
+    if (!isOriginAllowed(origin)) {
+        res.status(403).send({
+            error: "Origin not allowed.",
+            details: "Set ALLOWED_ORIGINS to a comma-separated allowlist for web clients.",
+        });
+        return false;
+    }
+
+    const declaredLength = Number(req.headers["content-length"] || 0);
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_CONTENT_LENGTH_BYTES) {
+        res.status(413).send({
+            error: "Payload too large.",
+            maxBytes: MAX_CONTENT_LENGTH_BYTES,
+        });
+        return false;
+    }
+
+    return true;
+}
 
 function getTtsClient() {
     if (!ttsClient) {
@@ -61,6 +115,11 @@ function sortVoicesByQuality(voices) {
 function buildGenderAttempts(requestedGender) {
     const attempts = [requestedGender, "NEUTRAL", "FEMALE", "MALE"];
     return attempts.filter((v, i, arr) => typeof v === "string" && arr.indexOf(v) === i);
+}
+
+function buildTtsProviderChain(requestedProvider) {
+    const preferred = String(requestedProvider || process.env.TTS_PROVIDER || "google").toLowerCase().trim();
+    return [preferred, "google"].filter((v, i, arr) => KNOWN_TTS_PROVIDERS.includes(v) && arr.indexOf(v) === i);
 }
 
 // Geographic fallback for languages unsupported by Google Cloud TTS.
@@ -150,6 +209,59 @@ async function synthesizeBestSpeech({ text, requestedCode, requestedGender }) {
         voiceLanguageUsed: requestedCode,
         voiceGenderUsed: requestedGender,
         voiceNameUsed: null,
+    };
+}
+
+async function synthesizeWithProviderChain({
+    text,
+    requestedCode,
+    requestedGender,
+    requestedProvider,
+}) {
+    const providerChain = buildTtsProviderChain(requestedProvider);
+    let lastResult = null;
+
+    for (const provider of providerChain) {
+        if (provider === "google") {
+            const googleResult = await synthesizeBestSpeech({
+                text,
+                requestedCode,
+                requestedGender,
+            });
+
+            const decorated = {
+                ...googleResult,
+                ttsProviderUsed: "google",
+                ttsProviderChain: providerChain,
+            };
+
+            if (decorated.audioContent) {
+                return decorated;
+            }
+
+            lastResult = decorated;
+            continue;
+        }
+
+        // Not wired yet by design: this provides a minimal-change future path for true native voices.
+        console.warn(`TTS provider '${provider}' requested but not configured; falling back.`);
+        lastResult = {
+            audioContent: null,
+            voiceLanguageUsed: requestedCode,
+            voiceGenderUsed: requestedGender,
+            voiceNameUsed: null,
+            ttsProviderUsed: provider,
+            ttsProviderChain: providerChain,
+        };
+    }
+
+    return lastResult || {
+        audioContent: null,
+        voiceLanguageUsed: requestedCode,
+        voiceGenderUsed: requestedGender,
+        voiceNameUsed: null,
+        ttsProviderUsed: "google",
+        ttsProviderChain: ["google"],
     };
 }
 
@@ -308,6 +420,10 @@ Return ONLY the translated string.`;
 exports.processSpeech = onRequest({ secrets: ["GEMINI_API_KEY"] }, (req, res) => {
     cors(req, res, async () => {
         try {
+            if (!enforceRequestGuardrails(req, res)) {
+                return;
+            }
+
             const appCheckResult = await verifyAppCheck(req);
             if (!appCheckResult.ok) {
                 return res.status(401).send({ error: appCheckResult.reason });
@@ -335,14 +451,23 @@ exports.processSpeech = onRequest({ secrets: ["GEMINI_API_KEY"] }, (req, res) =>
                 isRespectMode,
                 isMale,
                 model,
+                ttsProvider,
             } = req.body;
 
-            if (!text) {
+            const inputText = String(text || "").trim();
+            if (!inputText) {
                 return res.status(400).send({ error: "No text provided" });
             }
 
+            if (inputText.length > MAX_TEXT_LENGTH) {
+                return res.status(413).send({
+                    error: "Input text too long",
+                    maxCharacters: MAX_TEXT_LENGTH,
+                });
+            }
+
             const { translatedText, modelUsed } = await translateWithGemini(
-                text,
+                inputText,
                 targetLanguage,
                 isRespectMode,
                 model,
@@ -350,10 +475,11 @@ exports.processSpeech = onRequest({ secrets: ["GEMINI_API_KEY"] }, (req, res) =>
 
             const requestedCode = mapLanguageCode(targetLanguage);
             const requestedGender = mapGender(isMale !== false);
-            const ttsResult = await synthesizeBestSpeech({
+            const ttsResult = await synthesizeWithProviderChain({
                 text: translatedText,
                 requestedCode,
                 requestedGender,
+                requestedProvider: ttsProvider,
             });
 
             res.status(200).send({
@@ -362,6 +488,8 @@ exports.processSpeech = onRequest({ secrets: ["GEMINI_API_KEY"] }, (req, res) =>
                 voiceLanguageUsed: ttsResult.voiceLanguageUsed,
                 voiceGenderUsed: ttsResult.voiceGenderUsed,
                 voiceNameUsed: ttsResult.voiceNameUsed,
+                ttsProviderUsed: ttsResult.ttsProviderUsed,
+                ttsProviderChain: ttsResult.ttsProviderChain,
                 modelUsed,
                 status: "success",
             });
@@ -381,6 +509,10 @@ exports.processSpeech = onRequest({ secrets: ["GEMINI_API_KEY"] }, (req, res) =>
 exports.liveHealthCheck = onRequest({ secrets: ["GEMINI_API_KEY"] }, (req, res) => {
     cors(req, res, async () => {
         try {
+            if (!enforceRequestGuardrails(req, res)) {
+                return;
+            }
+
             const appCheckResult = await verifyAppCheck(req);
             if (!appCheckResult.ok) {
                 return res.status(401).send({ error: appCheckResult.reason });
@@ -478,5 +610,39 @@ exports.liveHealthCheck = onRequest({ secrets: ["GEMINI_API_KEY"] }, (req, res) 
                 details: String(error?.message || "Unknown error"),
             });
         }
+    });
+});
+
+exports.ttsProviderReadiness = onRequest((req, res) => {
+    cors(req, res, async () => {
+        if (req.method !== "GET") {
+            return res.status(405).send({ error: "Method Not Allowed. Use GET." });
+        }
+
+        if (!isOriginAllowed(String(req.headers.origin || "").trim())) {
+            return res.status(403).send({ error: "Origin not allowed." });
+        }
+
+        // Quick capability matrix to guide rollout of native African voice providers.
+        return res.status(200).send({
+            status: "ok",
+            providers: {
+                google: {
+                    configured: true,
+                    notes: "Current production provider. Broad coverage but limited truly native African voices.",
+                },
+                azure: {
+                    configured: false,
+                    notes: "Recommended first expansion target for wider native African neural voice coverage.",
+                    requiredSecrets: ["AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION"],
+                },
+                elevenlabs: {
+                    configured: false,
+                    notes: "Good quality for custom voices; evaluate language authenticity carefully.",
+                    requiredSecrets: ["ELEVENLABS_API_KEY"],
+                },
+            },
+            requestedProviderChainExample: buildTtsProviderChain(req.query.provider),
+        });
     });
 });
