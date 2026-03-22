@@ -40,6 +40,7 @@ firebase-debug.*.log
 functions/.runtimeconfig.json
 functions/.env
 .env
+lib/.env
 service-account-key.json
 
 # --- 2026 Security: Critical Configs ---

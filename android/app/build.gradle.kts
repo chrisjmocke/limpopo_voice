@@ -1,8 +1,20 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("com.google.gms.google-services")
     id("org.jetbrains.kotlin.android")
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+val hasKeystoreProperties = keystorePropertiesFile.exists()
+
+if (hasKeystoreProperties) {
+    keystorePropertiesFile.inputStream().use { stream ->
+        keystoreProperties.load(stream)
+    }
 }
 
 android {
@@ -35,11 +47,13 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            keyAlias = "limpopo"
-            keyPassword = "KatbokStudiosLimpopoVoice2026"
-            storeFile = file("limpopo-release-key.jks")
-            storePassword = "KatbokStudiosLimpopoVoice2026"
+        if (hasKeystoreProperties) {
+            create("release") {
+                keyAlias = keystoreProperties["keyAlias"] as String?
+                keyPassword = keystoreProperties["keyPassword"] as String?
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String?
+            }
         }
     }
 
@@ -48,7 +62,11 @@ android {
         release {
 
             // 🔥 USE REAL SIGNING
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = if (hasKeystoreProperties) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
 
             // 🔥 KEEP THESE OFF FOR NOW
             isMinifyEnabled = false
