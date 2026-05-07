@@ -1,1408 +1,609 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
-import 'package:flutter_tts/flutter_tts.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
-import 'package:share_plus/share_plus.dart';
-import 'package:audioplayers/audioplayers.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
+import 'package:http/http.dart' as http;
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:share_plus/share_plus.dart';
+import 'package:audioplayers/audioplayers.dart';
+import 'translation_service.dart';
 import 'firebase_options.dart';
-import 'dart:io';
-import 'package:path_provider/path_provider.dart';
-
-// LL language controller for Pan-African expansion.
-enum LLRegion { SouthAfrica, WestAfrica, EastAfrica, CentralAfrica }
-
-class LLLanguageController {
-  static List<String> getLanguagesForRegion(LLRegion region) {
-    switch (region) {
-      case LLRegion.SouthAfrica:
-        return [
-          'English',
-          'isiZulu',
-          'Afrikaans',
-          'Sesotho',
-          'Setswana',
-        ];
-      case LLRegion.WestAfrica:
-        return [
-          'English',
-          'Yoruba',
-          'Hausa',
-          'Akan (Ghana)',
-          'Wolof (Senegal)',
-        ];
-      case LLRegion.EastAfrica:
-        return [
-          'English',
-          'Kiswahili (Kenya/Tanzania)',
-          'Amharic',
-          'Afaan Oromoo',
-          'Somali',
-        ];
-      case LLRegion.CentralAfrica:
-        return [
-          'English',
-          'Kinyarwanda (Rwanda)',
-        ];
-    }
-  }
-
-  static String _normalizeLanguageKey(String language) {
-    return language
-        .trim()
-        .toLowerCase()
-        .replaceAll('ù', 'u')
-        .replaceAll('á', 'a')
-        .replaceAll('’', "'");
-  }
-
-  static String getGeminiCode(String language) {
-    final key = _normalizeLanguageKey(language);
-    switch (key) {
-      case 'isizulu':
-      case 'zulu':
-        return 'zu-ZA';
-      case 'yoruba':
-      case 'yoruba (nigeria)':
-      case 'yoruba (nigerian)':
-      case 'yoruba (yoruba)':
-      case 'yoruba (yoruba language)':
-      case "yoru'ba":
-        return 'yo-NG';
-      case 'kiswahili (kenya/tanzania)':
-      case 'kiswahili':
-      case 'swahili':
-        return 'sw-KE';
-      case 'hausa':
-        return 'ha-NE';
-      case 'afrikaans':
-        return 'af-ZA';
-      case 'sesotho':
-        return 'st-ZA';
-      case 'setswana':
-      case 'tswana':
-        return 'tn-ZA';
-      case 'akan (ghana)':
-      case 'akan':
-        return 'ak-GH';
-      case 'wolof (senegal)':
-      case 'wolof':
-        return 'wo-SN';
-      case 'amharic':
-        return 'am-ET';
-      case 'afaan oromoo':
-      case 'oromo':
-        return 'om-ET';
-      case 'somali':
-        return 'so-SO';
-      case 'kinyarwanda (rwanda)':
-      case 'kinyarwanda':
-        return 'rw-RW';
-      case 'english':
-      default:
-        return 'en-US';
-    }
-  }
-
-  static String regionLabel(LLRegion region) {
-    switch (region) {
-      case LLRegion.SouthAfrica:
-        return 'South Africa';
-      case LLRegion.WestAfrica:
-        return 'West Africa';
-      case LLRegion.EastAfrica:
-        return 'East Africa';
-      case LLRegion.CentralAfrica:
-        return 'Central Africa';
-    }
-  }
-}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
     await FirebaseAppCheck.instance.activate(
-      androidProvider:
-          kDebugMode ? AndroidProvider.debug : AndroidProvider.playIntegrity,
+      androidProvider: kDebugMode ? AndroidProvider.debug : AndroidProvider.playIntegrity,
     );
     await dotenv.load(fileName: ".env");
-  } catch (e) {
-    debugPrint("Firebase/Env Error: $e");
-  }
-  runApp(const LingoLangaApp());
+  } catch (e) { debugPrint("Firebase/Env Error: $e"); }
+  runApp(const LimpopoVoiceApp());
 }
 
-class LingoLangaApp extends StatefulWidget {
-  const LingoLangaApp({super.key});
-
-  @override
-  State<LingoLangaApp> createState() => _LingoLangaAppState();
+class LimpopoVoiceApp extends StatefulWidget {
+  const LimpopoVoiceApp({super.key});
+  @override State<LimpopoVoiceApp> createState() => _LimpopoVoiceAppState();
 }
 
-class _LingoLangaAppState extends State<LingoLangaApp> {
-  ThemeMode _themeMode = ThemeMode.light;
-  MaterialColor _primaryColor = Colors.blue;
-  bool _isMale = true; // gender toggle
-
-  void toggleTheme() {
-    setState(() {
-      _themeMode =
-          _themeMode == ThemeMode.light ? ThemeMode.dark : ThemeMode.light;
-    });
-  }
-
-  void toggleGender() {
-    setState(() {
-      _isMale = !_isMale;
-      _primaryColor = _isMale ? Colors.blue : Colors.indigo;
-    });
-  }
+class _LimpopoVoiceAppState extends State<LimpopoVoiceApp> {
+  ThemeMode _themeMode = ThemeMode.dark;
+  void _toggleTheme() => setState(() =>
+      _themeMode = _themeMode == ThemeMode.light ? ThemeMode.dark : ThemeMode.light);
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      title: 'Limpopo Voice',
       debugShowCheckedModeBanner: false,
       themeMode: _themeMode,
       theme: ThemeData(
+        brightness: Brightness.light,
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF1E3C72),
+          primary: const Color(0xFF1E3C72), secondary: const Color(0xFF2A5298)),
         useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: _primaryColor),
       ),
       darkTheme: ThemeData(
+        brightness: Brightness.dark,
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF1E3C72),
+          primary: const Color(0xFF3B6FD4), secondary: const Color(0xFF5B8FEE),
+          brightness: Brightness.dark),
         useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: _primaryColor,
-          brightness: Brightness.dark,
-        ),
       ),
-      home: AuthWrapper(
-          toggleTheme: toggleTheme,
-          toggleGender: toggleGender,
-          isMale: _isMale),
+      home: HomeScreen(onToggleTheme: _toggleTheme),
     );
   }
 }
 
-class AuthWrapper extends StatelessWidget {
-  final VoidCallback toggleTheme;
-  final VoidCallback toggleGender;
-  final bool isMale;
-  const AuthWrapper(
-      {super.key,
-      required this.toggleTheme,
-      required this.toggleGender,
-      required this.isMale});
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<User?>(
-      stream: FirebaseAuth.instance.authStateChanges(),
-      builder: (context, snapshot) {
-        if (snapshot.hasData) {
-          return LingoLangaHome(
-              toggleTheme: toggleTheme,
-              toggleGender: toggleGender,
-              isMale: isMale);
-        }
-        return LingoLangaLogin(
-            toggleTheme: toggleTheme,
-            toggleGender: toggleGender,
-            isMale: isMale);
-      },
-    );
-  }
+class _CreditTier { final String name; final int secs; final String price;
+  const _CreditTier(this.name, this.secs, this.price); }
+
+const _tiers = [_CreditTier('Standard', 180, 'R40.00'),
+                _CreditTier('Premium', 600, 'R120.00'),
+                _CreditTier('Enterprise', 1500, 'R300.00')];
+
+class HistoryItem {
+  final String inputLang, outputLang, original, translated;
+  final DateTime time;
+  HistoryItem(this.inputLang, this.outputLang, this.original, this.translated, this.time);
 }
 
-class LingoLangaHome extends StatefulWidget {
-  final VoidCallback toggleTheme;
-  final VoidCallback toggleGender;
-  final bool isMale;
-  const LingoLangaHome(
-      {super.key,
-      required this.toggleTheme,
-      required this.toggleGender,
-      required this.isMale});
-  @override
-  State<LingoLangaHome> createState() => _LingoLangaHomeState();
+class HomeScreen extends StatefulWidget {
+  final VoidCallback onToggleTheme;
+  const HomeScreen({super.key, required this.onToggleTheme});
+  @override State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _LingoLangaHomeState extends State<LingoLangaHome> {
+class _HomeScreenState extends State<HomeScreen> {
+  String _activeTab = 'translate';
   final stt.SpeechToText _speech = stt.SpeechToText();
-  final FlutterTts _tts = FlutterTts();
-  final AudioPlayer _audioPlayer = AudioPlayer();
-
-  bool _isListening = false;
-  bool _isLoading = false;
-  bool _useLiveMode = false;
-  String _liveModel = 'gemini-2.5-flash';
-  String _text = "Hold mic to speak";
-  String _result = "";
-
-  // Credit Tiers: Free (10), Pro (100), Enterprise (Unlimited/999)
+  late final TranslationService _translationService;
+  late final AudioPlayer _audioPlayer;
+  bool _speechAvailable = false;
+  bool _isTalking = false;
+  bool _isTranslating = false;
+  bool _isPlayingAudio = false;
+  String _selectedInputLang = 'English';
+  String _selectedOutputLang = 'Sesotho';
+  final _langs = ['English', 'Sesotho', 'Sepedi', 'Tshivenda', 'Tsonga', 'Xitsonga', 'Afrikaans',
+    'isiNdebele', 'Portuguese', 'Mandarin', 'Hindi', 'German', 'French'];
+  final _locales = {'English': 'en-ZA', 'Sesotho': 'st-ZA', 'Sepedi': 'nso-ZA', 'Tshivenda': 've-ZA',
+    'Tsonga': 'ts-ZA', 'Xitsonga': 'ts-ZA', 'Afrikaans': 'af-ZA', 'isiNdebele': 'nr-ZA',
+    'Portuguese': 'pt-PT', 'Mandarin': 'zh-CN', 'Hindi': 'hi-IN', 'German': 'de-DE', 'French': 'fr-FR'};
+  final _translateCodes = {
+    'English': 'en',
+    'Sesotho': 'st',
+    'Sepedi': 'nso',
+    'Tshivenda': 've',
+    'Tsonga': 'ts',
+    'Xitsonga': 'ts',
+    'Afrikaans': 'af',
+    'isiNdebele': 'nr',
+    'Portuguese': 'pt',
+    'Mandarin': 'zh-CN',
+    'Hindi': 'hi',
+    'German': 'de',
+    'French': 'fr',
+  };
+  static const _voiceNames = {
+    'Sesotho':   'Palesa',
+    'Sepedi':    'Mpho',
+    'Tshivenda': 'Mulalo',
+    'Tsonga':    'Basetsana',
+    'Xitsonga':  'Basetsana',
+    'Afrikaans': 'Rolanda',
+    'isiNdebele': 'Dumisani',
+    'Portuguese': 'Lurdes',
+    'Mandarin': 'Yifei',
+    'Hindi': 'Aditi',
+    'German': 'Martina',
+    'French': 'Marion',
+    'English':   'Aletta',
+  };
+  String _spokenText = '';
+  String _translatedText = '';
+  final TextEditingController _tttController = TextEditingController();
   int _credits = 0;
-  String _tier = "Free";
-
-  final List<Map<String, String>> _history = []; // translation history
-
-  LLRegion _selectedRegion = LLRegion.SouthAfrica;
-  String _fromLang = "English";
-  String _toLang = "isiZulu";
-  List<String> get _langs =>
-      LLLanguageController.getLanguagesForRegion(_selectedRegion);
-
-  DateTime? _speechStart;
-  Duration _lastDuration = Duration.zero;
+  final List<HistoryItem> _history = [];
 
   @override
   void initState() {
     super.initState();
-    _syncCreditsAndTier();
-    _tts.setLanguage(LLLanguageController.getGeminiCode(_toLang));
+    _audioPlayer = AudioPlayer();
+    final apiKey = dotenv.env['NARAKEET_API_KEY'] ?? '';
+    _translationService = TranslationService(apiKey: apiKey);
+    _initSpeech();
   }
 
-  @override
-  void dispose() {
-    _audioPlayer.dispose();
-    _tts.stop();
-    super.dispose();
+  Future<void> _initSpeech() async {
+    final ok = await _speech.initialize(onError: (e) => debugPrint('STT: $e'));
+    setState(() => _speechAvailable = ok);
   }
 
-  InputDecoration _modernDropdownDecoration({
-    required bool isDark,
-    required Color accent,
-    required Color surface,
-  }) {
-    return InputDecoration(
-      isDense: true,
-      filled: true,
-      fillColor: surface,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
-        borderSide: BorderSide.none,
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
-        borderSide: BorderSide(color: accent.withValues(alpha: 0.22)),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
-        borderSide: BorderSide(color: accent, width: 1.4),
-      ),
-    );
-  }
-
-  Widget _elevatedField({
-    required Widget child,
-    required Color shadowColor,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-            color: shadowColor.withValues(alpha: 0.16),
-            blurRadius: 14,
-            offset: const Offset(0, 5),
-          ),
-        ],
-      ),
-      child: child,
-    );
-  }
-
-  Future<void> _playAiAudio(String audioBase64) async {
-    try {
-      debugPrint(
-          '🔊 Attempting to play AI audio, base64 length: ${audioBase64.length}');
-      final bytes = base64Decode(audioBase64);
-      debugPrint('✅ Decoded ${bytes.length} bytes of audio data');
-
-      // Write to temporary file for proper MP3 playback
-      final tempDir = await getTemporaryDirectory();
-      final tempFile = File('${tempDir.path}/google_tts_audio.mp3');
-      await tempFile.writeAsBytes(bytes);
-      debugPrint('💾 Audio file created: ${tempFile.path}');
-
-      await _audioPlayer.stop();
-      await _audioPlayer.play(DeviceFileSource(tempFile.path));
-      debugPrint('🎵 AI audio playback started (Google TTS voice)');
-    } catch (e) {
-      debugPrint('❌ AI audio playback failed: $e');
-      debugPrint('⚠️  Generic local TTS fallback disabled by design.');
-    }
-  }
-
-  // REMEMBER: Credits are managed in Firestore users/{uid}
-  void _syncCreditsAndTier() {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .snapshots()
-          .listen((doc) {
-        if (doc.exists && mounted) {
-          setState(() {
-            _credits = doc.data()?['credits'] ?? 0;
-            _tier = doc.data()?['tier'] ?? "Free";
-          });
+  void _startListening() async {
+    if (!_speechAvailable) { _showSnack('Microphone not available'); return; }
+    setState(() { _isTalking = true; _spokenText = ''; _translatedText = ''; });
+    await _speech.listen(
+      onResult: (r) {
+        setState(() => _spokenText = r.recognizedWords);
+        if (r.finalResult && _spokenText.isNotEmpty) {
+          _doTranslate(_spokenText);
         }
-      });
-    }
+      },
+      localeId: _locales[_selectedInputLang] ?? 'en-ZA',
+      listenFor: const Duration(seconds: 30),
+      pauseFor: const Duration(seconds: 3),
+    );
   }
 
-  void _swap() => setState(() {
-        final t = _fromLang;
-        _fromLang = _toLang;
-        _toLang = t;
-      });
+  void _stopListening() async {
+    await _speech.stop();
+    setState(() => _isTalking = false);
+  }
 
-  void _onRegionChanged(LLRegion? region) {
-    if (region == null) return;
+  Future<void> _doTranslate(String input) async {
+    setState(() => _isTranslating = true);
+    final result = await _translateText(input);
+    if (!mounted) {
+      return;
+    }
+
     setState(() {
-      _selectedRegion = region;
-      final langs = _langs;
-      if (!langs.contains(_fromLang)) {
-        _fromLang = langs.first;
-      }
-      if (!langs.contains(_toLang)) {
-        _toLang = langs.length > 1 ? langs[1] : langs.first;
-      }
+      _translatedText = result;
+      _isTranslating = false;
     });
+
+    _history.insert(0, HistoryItem(_selectedInputLang, _selectedOutputLang,
+        input, result, DateTime.now()));
+    await _speakTranslatedText(result);
   }
 
-  Future<void> _translate() async {
-    int creditsNeeded = (_lastDuration.inSeconds / 10).ceil();
-    if (_credits < creditsNeeded && _tier != "Enterprise") {
-      _showTopUp();
-      return;
-    }
-
-    setState(() => _isLoading = true);
-    final functionUrl = dotenv.env['TRANSLATE_FUNCTION_URL'];
-    final user = FirebaseAuth.instance.currentUser;
-
-    if (functionUrl == null || functionUrl.isEmpty) {
-      setState(() {
-        _result = 'TRANSLATE_FUNCTION_URL not found in .env';
-        _isLoading = false;
-      });
-      return;
-    }
-
-    if (user == null) {
-      setState(() {
-        _result = 'Please sign in again.';
-        _isLoading = false;
-      });
-      return;
-    }
-
-    final idToken = await user.getIdToken();
-    if (idToken == null || idToken.isEmpty) {
-      setState(() {
-        _result = 'Unable to authenticate request.';
-        _isLoading = false;
-      });
-      return;
-    }
-
-    final url = Uri.parse(functionUrl);
-    debugPrint('Function URL: $url');
-    final requestBody = jsonEncode({
-      "text": _text,
-      "sourceLanguage": _fromLang,
-      "targetLanguage": _toLang,
-      "sourceLanguageCode": LLLanguageController.getGeminiCode(_fromLang),
-      "targetLanguageCode": LLLanguageController.getGeminiCode(_toLang),
-      "isRespectMode": false,
-      "isMale": widget.isMale,
-      if (_useLiveMode) "model": _liveModel,
-    });
-    debugPrint('Request body: $requestBody');
-
-    String? appCheckToken;
-    try {
-      appCheckToken = await FirebaseAppCheck.instance.getToken();
-    } catch (e) {
-      // In debug or rollout mode, proceed without App Check header.
-      // Backend enforcement should remain off until debug tokens are enrolled.
-      debugPrint('App Check token unavailable: $e');
-      appCheckToken = null;
-    }
-    final response = await http.post(
-      url,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $idToken',
-        if (appCheckToken != null && appCheckToken.isNotEmpty)
-          'X-Firebase-AppCheck': appCheckToken,
-      },
-      body: requestBody,
+  Future<String> _translateText(String input) async {
+    final source = _translateCodes[_selectedInputLang] ?? 'auto';
+    final target = _translateCodes[_selectedOutputLang] ?? 'en';
+    final uri = Uri.parse(
+      'https://translate.googleapis.com/translate_a/single?client=gtx&sl=$source&tl=$target&dt=t&q=${Uri.encodeQueryComponent(input)}',
     );
-    debugPrint('API response code: ${response.statusCode}');
-    debugPrint('API response body: ${response.body}');
-
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      setState(() {
-        if (data['translation'] != null &&
-            data['translation'].toString().isNotEmpty) {
-          _result = data['translation'];
-        } else {
-          _result = 'No translation returned';
-        }
-        _isLoading = false;
-
-        // Update Firestore credits
-        FirebaseFirestore.instance
-            .collection('users')
-            .doc(FirebaseAuth.instance.currentUser?.uid)
-            .update({
-          'credits': FieldValue.increment(-creditsNeeded),
-          'last_translation': DateTime.now(),
-        });
-      });
-      // Add to history
-      setState(() {
-        _history.insert(0, {
-          'q': _text,
-          'a': _result,
-          'from': _fromLang,
-          'to': _toLang,
-        });
-      });
-
-      // Save to Firestore history
-      final user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
-        FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .collection('translation_history')
-            .add({
-          'text': _text,
-          'translation': _result,
-          'from': _fromLang,
-          'to': _toLang,
-          'timestamp': DateTime.now(),
-        });
-      }
-
-      if (data['audioContent'] != null &&
-          data['audioContent'].toString().isNotEmpty) {
-        debugPrint(
-            '📥 audioContent received from backend, playing AI audio...');
-        await _playAiAudio(data['audioContent']);
-      } else {
-        debugPrint(
-            '⚠️  No native high-quality audio available for this language/voice.');
-      }
-    } else {
-      debugPrint('API call failed with status ${response.statusCode}');
-      setState(() {
-        _result = 'Error: ${response.statusCode} - ${response.body}';
-        _isLoading = false;
-      });
-    }
-  }
-
-  Future<void> _checkLiveHealth() async {
-    final functionUrl = dotenv.env['TRANSLATE_FUNCTION_URL'];
-    final user = FirebaseAuth.instance.currentUser;
-
-    if (functionUrl == null || functionUrl.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('TRANSLATE_FUNCTION_URL not found in .env')),
-      );
-      return;
-    }
-
-    if (user == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please sign in first.')),
-      );
-      return;
-    }
-
-    setState(() => _isLoading = true);
 
     try {
-      final idToken = await user.getIdToken();
-      if (idToken == null || idToken.isEmpty) {
-        setState(() => _isLoading = false);
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Unable to get Firebase ID token.')),
-        );
-        return;
+      final response = await http.get(uri);
+      if (response.statusCode != 200) {
+        return input;
       }
-
-      String? appCheckToken;
-      try {
-        appCheckToken = await FirebaseAppCheck.instance.getToken();
-      } catch (e) {
-        debugPrint('Live health App Check token unavailable: $e');
+      final decoded = jsonDecode(response.body);
+      if (decoded is List && decoded.isNotEmpty && decoded[0] is List) {
+        final pieces = decoded[0] as List;
+        final translated = pieces
+            .whereType<List>()
+            .map((segment) => segment.isNotEmpty ? segment.first.toString() : '')
+            .join();
+        return translated.trim().isEmpty ? input : translated.trim();
       }
-
-      final healthUrl = functionUrl.replaceAll('/processSpeech', '/liveHealthCheck');
-      final response = await http.post(
-        Uri.parse(healthUrl),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $idToken',
-          if (appCheckToken != null && appCheckToken.isNotEmpty)
-            'X-Firebase-AppCheck': appCheckToken,
-        },
-        body: jsonEncode({}),
-      );
-
-      setState(() => _isLoading = false);
-      if (!mounted) return;
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final model = data['model']?.toString() ?? 'unknown';
-        setState(() {
-          _liveModel = model;
-          _useLiveMode = true;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Live check OK: $model (Live Mode ON)')),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Live check failed: ${response.statusCode}'),
-            duration: const Duration(seconds: 4),
-          ),
-        );
-        debugPrint('Live check body: ${response.body}');
-      }
-    } catch (e) {
-      setState(() => _isLoading = false);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Live check error: $e')),
-      );
+      return input;
+    } catch (_) {
+      return input;
     }
   }
 
-  void _showTopUp() {
-    showDialog(
-        context: context,
-        builder: (c) => AlertDialog(
-              title: const Text("Top Up Credits"),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text("Choose a credit package:"),
-                  const SizedBox(height: 10),
-                  ElevatedButton(
-                    onPressed: () {
-                      FirebaseFirestore.instance
-                          .collection('users')
-                          .doc(FirebaseAuth.instance.currentUser?.uid)
-                          .update({
-                        'credits': FieldValue.increment(35),
-                      });
-                      Navigator.pop(context);
-                    },
-                    child: const Text("R10 - 35 Credits"),
-                  ),
-                  const SizedBox(height: 5),
-                  ElevatedButton(
-                    onPressed: () {
-                      FirebaseFirestore.instance
-                          .collection('users')
-                          .doc(FirebaseAuth.instance.currentUser?.uid)
-                          .update({
-                        'credits': FieldValue.increment(200),
-                      });
-                      Navigator.pop(context);
-                    },
-                    child: const Text("R60 - 200 Credits"),
-                  ),
-                  const SizedBox(height: 5),
-                  ElevatedButton(
-                    onPressed: () {
-                      FirebaseFirestore.instance
-                          .collection('users')
-                          .doc(FirebaseAuth.instance.currentUser?.uid)
-                          .update({
-                        'credits': FieldValue.increment(1000),
-                      });
-                      Navigator.pop(context);
-                    },
-                    child: const Text("R200 - 1000 Credits"),
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text("CLOSE")),
-              ],
-            ));
-  }
-
-  Future<String> getImageUrl() async {
+  Future<void> _speakTranslatedText(String text) async {
+    if (text.trim().isEmpty) {
+      return;
+    }
+    
     try {
-      return await FirebaseStorage.instance
-          .ref('limpopo_voice.png')
-          .getDownloadURL();
+      setState(() => _isPlayingAudio = true);
+      
+      final voiceName = _voiceNames[_selectedOutputLang] ?? 'Aletta';
+      debugPrint('Requesting audio for: $text (voice: $voiceName)');
+      final audioData = await _translationService.generateTranslation(text, voiceName);
+      
+      debugPrint('Audio data received - size: ${audioData?.length ?? 0} bytes');
+      
+      if (audioData != null && audioData.isNotEmpty) {
+        // Play directly from memory to reduce startup latency.
+        await _audioPlayer.play(BytesSource(audioData));
+        debugPrint('Audio playback started');
+      } else {
+        debugPrint('No audio data returned from API');
+        _showSnack('Failed to generate audio');
+      }
     } catch (e) {
-      debugPrint('Error loading image: $e');
-      return '';
+      debugPrint('Audio playback error: $e');
+      _showSnack('Error: Unable to play audio');
+    } finally {
+      setState(() => _isPlayingAudio = false);
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accent =
-        widget.isMale ? Colors.blue.shade500 : Colors.indigo.shade400;
-    final accentDeep =
-        widget.isMale ? Colors.blue.shade800 : Colors.indigo.shade700;
-    final surface = isDark ? const Color(0xFF1B2331) : Colors.white;
-    final pageStart =
-        isDark ? const Color(0xFF0A1220) : const Color(0xFFF4F8FF);
-    final pageEnd = isDark ? const Color(0xFF0F1A2E) : const Color(0xFFEAF1FF);
+  void _submitTTT() {
+    final t = _tttController.text.trim();
+    if (t.isEmpty) return;
+    setState(() { _spokenText = t; _translatedText = ''; });
+    _doTranslate(t);
+    _tttController.clear();
+    FocusScope.of(context).unfocus();
+  }
 
-    return Scaffold(
-      backgroundColor: pageStart,
-      appBar: AppBar(
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        backgroundColor: Colors.transparent,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.brightness_6),
-            onPressed: widget.toggleTheme,
-          ),
-          Row(
-            children: [
-              const Text('Male', style: TextStyle(fontSize: 12)),
-              Switch(
-                value: widget.isMale,
-                activeThumbColor: Colors.blue,
-                inactiveThumbColor: Colors.indigo,
-                onChanged: (_) => widget.toggleGender(),
-              ),
-              const Text('Female', style: TextStyle(fontSize: 12)),
-            ],
-          ),
-          IconButton(
-            icon: const Icon(Icons.credit_card),
-            tooltip: 'Top up credits',
-            onPressed: _showTopUp,
-          ),
-          Padding(
-            padding: const EdgeInsets.only(right: 10),
-            child: Tooltip(
-              message: '1 credit = 10 seconds of speech',
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(_tier,
-                      style: const TextStyle(
-                          fontSize: 10, fontWeight: FontWeight.bold)),
-                  Text("$_credits",
-                      style: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.bold)),
-                  const Text('(1=10s)',
-                      style: TextStyle(fontSize: 9, color: Colors.grey)),
-                ],
-              ),
-            ),
-          )
-        ],
-      ),
-      bottomNavigationBar: null,
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [pageStart, pageEnd],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
-        child: SafeArea(
-          child: DefaultTabController(
-            length: 2,
-            child: Column(
+  void _resetOutput() => setState(() { _spokenText = ''; _translatedText = ''; });
+
+  void _showSnack(String m) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+
+  void _showCreditTiers() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
               children: [
-                Container(
-                  margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                  height: 118,
-                  width: double.infinity,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(18),
-                      boxShadow: [
-                        BoxShadow(
-                          color: accent.withValues(alpha: 0.24),
-                          blurRadius: 18,
-                          offset: const Offset(0, 8),
-                        ),
-                      ],
-                      gradient: LinearGradient(
-                        colors: [accentDeep, accent],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                    ),
-                    child: Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text(
-                            'LingoLanga',
-                            style: TextStyle(
-                              fontSize: 30,
-                              fontWeight: FontWeight.w800,
-                              color: Colors.white,
-                              letterSpacing: 0.5,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            'Your Africa Voice Translation Studio',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.white.withValues(alpha: 0.9),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Container(
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: surface,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: accent.withValues(alpha: 0.25)),
-                    ),
-                    child: TabBar(
-                      indicatorSize: TabBarIndicatorSize.tab,
-                      indicator: BoxDecoration(
-                        borderRadius: BorderRadius.all(Radius.circular(12)),
-                        color: accent,
-                      ),
-                      labelColor: Colors.white,
-                      unselectedLabelColor: accent,
-                      dividerColor: Colors.transparent,
-                      tabs: const [
-                        Tab(text: 'Translate'),
-                        Tab(text: 'History'),
-                      ],
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: TabBarView(
-                    children: [
-                      SingleChildScrollView(
-                        child: Column(
-                          children: [
-                            const SizedBox(height: 10),
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(22, 12, 22, 8),
-                              child: _isLoading
-                                  ? const CircularProgressIndicator()
-                                  : Column(
-                                      children: [
-                                        if (_result.isNotEmpty) ...
-                                        [
-                                          Container(
-                                            width: double.infinity,
-                                            padding: const EdgeInsets.all(14),
-                                            decoration: BoxDecoration(
-                                              color: surface,
-                                              borderRadius: BorderRadius.circular(14),
-                                              border: Border.all(
-                                                  color: accent.withValues(alpha: 0.25)),
-                                              boxShadow: [
-                                                BoxShadow(
-                                                  color: accent.withValues(alpha: 0.10),
-                                                  blurRadius: 10,
-                                                  offset: const Offset(0, 4),
-                                                ),
-                                              ],
-                                            ),
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                Text('Translation',
-                                                    style: TextStyle(
-                                                        fontSize: 11,
-                                                        fontWeight:
-                                                            FontWeight.w600,
-                                                        color: accent,
-                                                        letterSpacing: 0.8)),
-                                                const SizedBox(height: 6),
-                                                Text(_result,
-                                                    style: TextStyle(
-                                                        fontSize: 26,
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                        color: accentDeep),
-                                                    textAlign:
-                                                        TextAlign.start),
-                                              ],
-                                            ),
-                                          ),
-                                          const SizedBox(height: 10),
-                                        ],
-                                        Wrap(
-                                          alignment: WrapAlignment.center,
-                                          children: [
-                                            FilterChip(
-                                              label: Text(_useLiveMode
-                                                  ? 'Live: ON'
-                                                  : 'Live: OFF'),
-                                              selected: _useLiveMode,
-                                              onSelected: (v) {
-                                                setState(() => _useLiveMode = v);
-                                              },
-                                            ),
-                                            const SizedBox(width: 6),
-                                            IconButton(
-                                              icon: const Icon(Icons.wifi_tethering),
-                                              tooltip: 'Live API check',
-                                              onPressed: _checkLiveHealth,
-                                            ),
-                                            IconButton(
-                                              icon: const Icon(Icons.share),
-                                              onPressed: () async {
-                                                if (_result.isNotEmpty) {
-                                                  await SharePlus.instance
-                                                      .share(
-                                                    ShareParams(text: _result),
-                                                  );
-                                                }
-                                              },
-                                            ),
-                                            IconButton(
-                                              icon: const Icon(Icons.replay),
-                                              onPressed: () {
-                                                if (_text.length > 2 &&
-                                                    _text !=
-                                                        "Hold mic to speak") {
-                                                  _translate();
-                                                }
-                                              },
-                                            ),
-                                          ],
-                                        ),
-                                      ],
-                                    ),
-                            ),
-                            const SizedBox(height: 20),
-                            Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 16),
-                              child: Row(
-                                children: [
-                                  const Text('Region',
-                                      style: TextStyle(
-                                          fontWeight: FontWeight.w600,
-                                          color: Colors.blue)),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: _elevatedField(
-                                      shadowColor: accent,
-                                      child: DropdownButtonFormField<LLRegion>(
-                                        decoration: _modernDropdownDecoration(
-                                          isDark: isDark,
-                                          accent: accent,
-                                          surface: surface,
-                                        ),
-                                        isExpanded: true,
-                                        initialValue: _selectedRegion,
-                                        items: LLRegion.values
-                                            .map((region) => DropdownMenuItem(
-                                                  value: region,
-                                                  child: Text(
-                                                      LLLanguageController
-                                                          .regionLabel(region),
-                                                      overflow: TextOverflow
-                                                          .ellipsis),
-                                                ))
-                                            .toList(),
-                                        onChanged: _onRegionChanged,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 16),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: _elevatedField(
-                                      shadowColor: accent,
-                                      child: DropdownButtonFormField<String>(
-                                          decoration: _modernDropdownDecoration(
-                                            isDark: isDark,
-                                            accent: accent,
-                                            surface: surface,
-                                          ),
-                                          isExpanded: true,
-                                          initialValue: _fromLang,
-                                          items: _langs
-                                              .map((l) => DropdownMenuItem(
-                                                  value: l,
-                                                  child: Text(l,
-                                                      overflow: TextOverflow
-                                                          .ellipsis)))
-                                              .toList(),
-                                          onChanged: (v) =>
-                                              setState(() => _fromLang = v!)),
-                                    ),
-                                  ),
-                                  IconButton(
-                                      icon:
-                                          Icon(Icons.swap_horiz, color: accent),
-                                      onPressed: _swap),
-                                  Expanded(
-                                    child: _elevatedField(
-                                      shadowColor: accent,
-                                      child: DropdownButtonFormField<String>(
-                                          decoration: _modernDropdownDecoration(
-                                            isDark: isDark,
-                                            accent: accent,
-                                            surface: surface,
-                                          ),
-                                          isExpanded: true,
-                                          initialValue: _toLang,
-                                          items: _langs
-                                              .map((l) => DropdownMenuItem(
-                                                  value: l,
-                                                  child: Text(l,
-                                                      overflow: TextOverflow
-                                                          .ellipsis)))
-                                              .toList(),
-                                          onChanged: (v) =>
-                                              setState(() => _toLang = v!)),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 0),
-                              child: Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 14, vertical: 12),
-                                decoration: BoxDecoration(
-                                  color: isDark
-                                      ? const Color(0xFF1B2331)
-                                      : Colors.grey.shade100,
-                                  borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(
-                                      color: accent.withValues(alpha: 0.18)),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text('You said',
-                                        style: TextStyle(
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w600,
-                                            color: isDark
-                                                ? Colors.white38
-                                                : Colors.blueGrey.shade400,
-                                            letterSpacing: 0.8)),
-                                    const SizedBox(height: 4),
-                                    Text(_text,
-                                        style: TextStyle(
-                                            fontSize: 16,
-                                            color: isDark
-                                                ? Colors.white70
-                                                : Colors.blueGrey.shade700)),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            GestureDetector(
-                              onLongPressStart: (_) async {
-                                _speechStart = DateTime.now();
-                                bool available = await _speech.initialize();
-                                if (available) {
-                                  setState(() => _isListening = true);
-                                  _speech.listen(
-                                      onResult: (v) => setState(
-                                          () => _text = v.recognizedWords));
-                                }
-                              },
-                              onLongPressEnd: (_) {
-                                if (_speechStart != null) {
-                                  _lastDuration =
-                                      DateTime.now().difference(_speechStart!);
-                                }
-                                _speech.stop();
-                                setState(() => _isListening = false);
-                                if (_text.length > 2 &&
-                                    _text != "Hold mic to speak") {
-                                  _translate();
-                                }
-                              },
-                              child: CircleAvatar(
-                                  radius: 40,
-                                  backgroundColor:
-                                      _isListening ? Colors.red : accent,
-                                  child: const Icon(Icons.mic,
-                                      color: Colors.white, size: 35)),
-                            ),
-                            const SizedBox(height: 18),
-                          ],
-                        ),
-                      ),
-                      // history page
-                      Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          children: [
-                            if (_history.isNotEmpty)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 10),
-                                child: ElevatedButton.icon(
-                                  icon: const Icon(Icons.delete),
-                                  label: const Text('Delete All History'),
-                                  style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.red),
-                                  onPressed: () {
-                                    showDialog(
-                                      context: context,
-                                      builder: (c) => AlertDialog(
-                                        title: const Text('Delete History?'),
-                                        content: const Text(
-                                            'This will permanently delete all translation history.'),
-                                        actions: [
-                                          TextButton(
-                                              onPressed: () =>
-                                                  Navigator.pop(context),
-                                              child: const Text('CANCEL')),
-                                          TextButton(
-                                            onPressed: () {
-                                              setState(() => _history.clear());
-                                              final user = FirebaseAuth
-                                                  .instance.currentUser;
-                                              if (user != null) {
-                                                FirebaseFirestore.instance
-                                                    .collection('users')
-                                                    .doc(user.uid)
-                                                    .collection(
-                                                        'translation_history')
-                                                    .get()
-                                                    .then((snapshot) {
-                                                  for (var doc
-                                                      in snapshot.docs) {
-                                                    doc.reference.delete();
-                                                  }
-                                                });
-                                              }
-                                              Navigator.pop(context);
-                                            },
-                                            child: const Text('DELETE',
-                                                style: TextStyle(
-                                                    color: Colors.red)),
-                                          ),
-                                        ],
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-                            Expanded(
-                              child: _history.isEmpty
-                                  ? const Center(child: Text('No history yet'))
-                                  : ListView.builder(
-                                      itemCount: _history.length,
-                                      itemBuilder: (c, i) {
-                                        final e = _history[i];
-                                        return ListTile(
-                                          title: Text(e['a']!),
-                                          subtitle: Text(
-                                              '${e['q']} (${e['from']} → ${e['to']})'),
-                                          trailing: IconButton(
-                                            icon: const Icon(Icons.replay),
-                                            onPressed: () {
-                                              setState(() {
-                                                _text = e['q']!;
-                                                _fromLang = e['from']!;
-                                                _toLang = e['to']!;
-                                              });
-                                              _translate();
-                                            },
-                                          ),
-                                        );
-                                      },
-                                    ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+                const Icon(Icons.account_balance_wallet, color: Color(0xFF2A5298)),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Credit Packages',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ],
             ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class LingoLangaLogin extends StatefulWidget {
-  final VoidCallback toggleTheme;
-  final VoidCallback toggleGender;
-  final bool isMale;
-  const LingoLangaLogin(
-      {super.key,
-      required this.toggleTheme,
-      required this.toggleGender,
-      required this.isMale});
-
-  @override
-  State<LingoLangaLogin> createState() => _LingoLangaLoginState();
-}
-
-class _LingoLangaLoginState extends State<LingoLangaLogin> {
-  final TextEditingController _phoneController = TextEditingController();
-  final TextEditingController _codeController = TextEditingController();
-  String _verificationId = '';
-  bool _codeSent = false;
-  bool _isLoading = false;
-
-  @override
-  void dispose() {
-    _phoneController.dispose();
-    _codeController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _sendCode() async {
-    String phone = _phoneController.text.trim();
-    if (phone.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please enter your phone number')));
-      return;
-    }
-
-    // Ensure phone starts with country code
-    if (!phone.startsWith('+')) {
-      phone = '+27$phone'; // Default to South Africa
-    }
-
-    setState(() => _isLoading = true);
-
-    await FirebaseAuth.instance.verifyPhoneNumber(
-      phoneNumber: phone,
-      verificationCompleted: (PhoneAuthCredential credential) async {
-        await FirebaseAuth.instance.signInWithCredential(credential);
-        await _createUserDocument();
-      },
-      verificationFailed: (FirebaseAuthException e) {
-        setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Error: ${e.message}')));
-      },
-      codeSent: (String verificationId, int? resendToken) {
-        setState(() {
-          _verificationId = verificationId;
-          _codeSent = true;
-          _isLoading = false;
-        });
-      },
-      codeAutoRetrievalTimeout: (String verificationId) {
-        setState(() => _verificationId = verificationId);
-      },
-    );
-  }
-
-  Future<void> _verifyCode() async {
-    String code = _codeController.text.trim();
-    if (code.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please enter the verification code')));
-      return;
-    }
-
-    setState(() => _isLoading = true);
-
-    try {
-      PhoneAuthCredential credential = PhoneAuthProvider.credential(
-        verificationId: _verificationId,
-        smsCode: code,
-      );
-      await FirebaseAuth.instance.signInWithCredential(credential);
-      await _createUserDocument();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Invalid code: $e')));
-    }
-  }
-
-  Future<void> _createUserDocument() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      final doc = FirebaseFirestore.instance.collection('users').doc(user.uid);
-      final snapshot = await doc.get();
-      if (!snapshot.exists) {
-        await doc.set({
-          'phone': user.phoneNumber,
-          'credits': 10, // Free tier starts with 10 credits
-          'tier': 'Free',
-          'created': DateTime.now(),
-        });
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final cardColor = isDark ? const Color(0xFF1B2331) : Colors.blue.shade50;
-    final textColor = isDark ? Colors.blue.shade200 : Colors.blue.shade700;
-
-    return Scaffold(
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                height: 120,
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: cardColor,
-                  borderRadius: BorderRadius.circular(14),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: Chip(label: Text('Balance: $_credits secs')),
+            ),
+            const SizedBox(height: 16),
+            ..._tiers.map((tier) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1E3C72),
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(double.infinity, 52),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
-                alignment: Alignment.center,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  setState(() => _credits += tier.secs);
+                  _showSnack('Topped up ${tier.secs} secs (${tier.price})');
+                },
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      'LingoLanga',
-                      style: TextStyle(
-                        fontSize: 30,
-                        fontWeight: FontWeight.w800,
-                        color: textColor,
+                    Expanded(
+                      child: Text(
+                        tier.name,
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    SizedBox(height: 4),
-                    Text(
-                      'Your Africa Voice',
-                      style: TextStyle(
-                        fontSize: 15,
-                        color: textColor,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
+                    const SizedBox(width: 8),
+                    Text('${tier.secs} secs'),
+                    const SizedBox(width: 8),
+                    Text(tier.price, style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
                   ],
                 ),
               ),
-              const SizedBox(height: 20),
-              Text("LingoLanga Pty Ltd",
-                  style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: textColor)),
-              const SizedBox(height: 50),
-              if (!_codeSent) ...[
-                TextField(
-                  controller: _phoneController,
-                  keyboardType: TextInputType.phone,
-                  decoration: const InputDecoration(
-                    labelText: 'Phone Number',
-                    hintText: '0821234567',
-                    prefixText: '+27 ',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                _isLoading
-                    ? const CircularProgressIndicator()
-                    : ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blue,
-                          foregroundColor: Colors.white,
-                          minimumSize: const Size(200, 50),
-                        ),
-                        onPressed: _sendCode,
-                        child: const Text("SEND CODE"),
-                      ),
-              ] else ...[
-                const Text('Enter the verification code sent to your phone:',
-                    textAlign: TextAlign.center),
-                const SizedBox(height: 20),
-                TextField(
-                  controller: _codeController,
-                  keyboardType: TextInputType.number,
-                  maxLength: 6,
-                  decoration: const InputDecoration(
-                    labelText: 'Verification Code',
-                    hintText: '123456',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                _isLoading
-                    ? const CircularProgressIndicator()
-                    : ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blue,
-                          foregroundColor: Colors.white,
-                          minimumSize: const Size(200, 50),
-                        ),
-                        onPressed: _verifyCode,
-                        child: const Text("VERIFY"),
-                      ),
-                const SizedBox(height: 10),
-                TextButton(
-                  onPressed: () {
-                    setState(() {
-                      _codeSent = false;
-                      _codeController.clear();
-                    });
-                  },
-                  child: const Text('Change Phone Number'),
-                ),
-              ],
-            ],
-          ),
+            )),
+          ],
         ),
       ),
     );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    return Scaffold(
+      body: SafeArea(
+        child: Column(children: [
+          // Top bar
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: Row(children: [
+              IconButton(
+                icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
+                onPressed: widget.onToggleTheme),
+              const Spacer(),
+              OutlinedButton.icon(
+                icon: Icon(Icons.account_balance_wallet, size: 16,
+                    color: isDark ? Colors.white : const Color(0xFF1E3C72)),
+                label: Text('$_credits secs',
+                    style: TextStyle(
+                        color: isDark ? Colors.white : const Color(0xFF1E3C72),
+                        fontWeight: FontWeight.bold)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: isDark ? Colors.white : const Color(0xFF1E3C72),
+                  side: BorderSide(color: isDark ? Colors.white60 : const Color(0xFF1E3C72)),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                ),
+                onPressed: _showCreditTiers,
+              ),
+            ]),
+          ),
+          // Header
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Container(
+                width: double.infinity,
+                height: 112,
+                color: Colors.transparent,
+                alignment: Alignment.center,
+                child: Image.asset(
+                  'assets/lv.png',
+                  width: double.infinity,
+                  height: 112,
+                  fit: BoxFit.contain,
+                  filterQuality: FilterQuality.high,
+                  errorBuilder: (_, __, ___) => Container(
+                    width: double.infinity,
+                    height: 112,
+                    alignment: Alignment.center,
+                    child: const Icon(Icons.image_not_supported, color: Colors.white),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // Tab switcher
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Container(
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white12 : const Color(0xFF1E3C72).withOpacity(0.08),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: ['translate', 'history'].map((tab) {
+                  final active = _activeTab == tab;
+                  return Expanded(
+                    child: GestureDetector(
+                      onTap: () => setState(() => _activeTab = tab),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        margin: const EdgeInsets.all(4),
+                        padding: const EdgeInsets.symmetric(vertical: 11),
+                        decoration: BoxDecoration(
+                          color: active ? const Color(0xFF1E3C72) : Colors.transparent,
+                          borderRadius: BorderRadius.circular(9),
+                        ),
+                        child: Center(child: Text(
+                          tab == 'translate' ? 'Translate' : 'History',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 15,
+                            color: active ? Colors.white
+                                : (isDark ? Colors.white60 : const Color(0xFF1E3C72)),
+                          ),
+                        )),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+          // Content
+          Expanded(child: _activeTab == 'translate'
+              ? _buildTranslateTab(isDark)
+              : _buildHistoryTab(isDark)),
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildTranslateTab(bool isDark) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Language dropdowns
+        Row(children: [
+          Expanded(child: _langDrop(_selectedInputLang, (v) => setState(() => _selectedInputLang = v!), isDark)),
+          Padding(padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Icon(Icons.arrow_forward, color: isDark ? Colors.white54 : Colors.grey)),
+          Expanded(child: _langDrop(_selectedOutputLang, (v) => setState(() => _selectedOutputLang = v!), isDark)),
+        ]),
+        const SizedBox(height: 14),
+        // TTT row
+        Row(children: [
+          Expanded(child: TextField(
+            controller: _tttController,
+            decoration: InputDecoration(
+              hintText: 'Type text to translate...',
+              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              filled: true, fillColor: isDark ? Colors.white10 : Colors.grey.shade50,
+            ),
+            onSubmitted: (_) => _submitTTT(),
+            textInputAction: TextInputAction.send,
+          )),
+          const SizedBox(width: 8),
+          IconButton.filled(
+            onPressed: _submitTTT,
+            icon: const Icon(Icons.send),
+            style: IconButton.styleFrom(
+                backgroundColor: const Color(0xFF1E3C72),
+                foregroundColor: Colors.white,
+                minimumSize: const Size(48, 48)),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+          TextButton.icon(onPressed: _translatedText.isNotEmpty ? () => _speakTranslatedText(_translatedText) : null,
+              icon: const Icon(Icons.repeat, size: 18), label: const Text('Repeat')),
+          TextButton.icon(onPressed: _spokenText.isNotEmpty ? () => Share.share(_spokenText) : null,
+              icon: const Icon(Icons.share, size: 18), label: const Text('Share')),
+          TextButton.icon(onPressed: _spokenText.isNotEmpty ? _resetOutput : null,
+              icon: const Icon(Icons.refresh, size: 18), label: const Text('Reset')),
+        ]),
+        if (_spokenText.isNotEmpty) ...[
+          _outBox('You said ($_selectedInputLang):', _spokenText, Colors.blue, isDark),
+          const SizedBox(height: 10),
+        ],
+        if (_isTranslating)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 10),
+            child: LinearProgressIndicator(),
+          ),
+        if (_translatedText.isNotEmpty) ...[
+          _outBox('Translation ($_selectedOutputLang):', _translatedText, Colors.green, isDark),
+          const SizedBox(height: 10),
+        ],
+        if (_spokenText.isEmpty && _translatedText.isEmpty)
+          Container(
+            width: double.infinity, padding: const EdgeInsets.all(20),
+            margin: const EdgeInsets.only(top: 8),
+            decoration: BoxDecoration(
+              color: isDark ? Colors.white10 : Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: isDark ? Colors.white24 : Colors.grey.shade300),
+            ),
+            child: Text('Hold TALK to speak, or type above to translate.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: isDark ? Colors.white60 : Colors.grey.shade600)),
+          ),
+        const SizedBox(height: 32),
+        // Talk button
+        Center(child: GestureDetector(
+          onTapDown: (_) => _startListening(),
+          onTapUp: (_) => _stopListening(),
+          onTapCancel: _stopListening,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            width: _isTalking ? 130 : 120, height: _isTalking ? 130 : 120,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _isTalking ? Colors.red : const Color(0xFF1E3C72),
+              boxShadow: [BoxShadow(
+                color: (_isTalking ? Colors.red : const Color(0xFF1E3C72)).withOpacity(0.4),
+                blurRadius: _isTalking ? 20 : 10, spreadRadius: _isTalking ? 4 : 2,
+              )],
+            ),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Icon(_isTalking ? Icons.mic : Icons.mic_none, color: Colors.white, size: 40),
+              const SizedBox(height: 4),
+              Text(_isTalking ? 'LISTENING' : 'HOLD TO TALK',
+                  style: const TextStyle(color: Colors.white, fontSize: 10,
+                      fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+            ]),
+          ),
+        )),
+        const SizedBox(height: 24),
+      ]),
+    );
+  }
+
+  Widget _langDrop(String value, ValueChanged<String?> onChanged, bool isDark) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+      decoration: BoxDecoration(
+        border: Border.all(color: isDark ? Colors.white38 : const Color(0xFF1E3C72)),
+        borderRadius: BorderRadius.circular(10),
+        color: isDark ? Colors.white10 : Colors.white,
+      ),
+      child: DropdownButtonHideUnderline(child: DropdownButton<String>(
+        isExpanded: true, value: value,
+        dropdownColor: isDark ? const Color(0xFF1B263B) : Colors.white,
+        style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontWeight: FontWeight.w600),
+        items: _langs.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+        onChanged: onChanged,
+      )),
+    );
+  }
+
+  Widget _outBox(String label, String text, Color color, bool isDark) {
+    return Container(
+      width: double.infinity, padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withOpacity(isDark ? 0.12 : 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.5)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label, style: TextStyle(fontWeight: FontWeight.bold, color: color, fontSize: 12)),
+        const SizedBox(height: 6),
+        Text(text, style: TextStyle(fontSize: 16, color: isDark ? Colors.white : Colors.black87)),
+      ]),
+    );
+  }
+
+  Widget _buildHistoryTab(bool isDark) {
+    if (_history.isEmpty) return Center(child: Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(Icons.history, size: 64, color: isDark ? Colors.white30 : Colors.grey.shade300),
+        const SizedBox(height: 12),
+        Text('No translations yet', style: TextStyle(
+            color: isDark ? Colors.white38 : Colors.grey.shade500, fontSize: 16)),
+      ],
+    ));
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      itemCount: _history.length,
+      itemBuilder: (context, i) {
+        final item = _history[i];
+        return Card(
+          margin: const EdgeInsets.only(bottom: 10),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          child: Padding(padding: const EdgeInsets.all(14), child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Text('${item.inputLang} -> ${item.outputLang}',
+                    style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF2A5298))),
+                const Spacer(),
+                Text('${item.time.hour.toString().padLeft(2, "0")}:${item.time.minute.toString().padLeft(2, "0")}',
+                    style: TextStyle(fontSize: 12, color: isDark ? Colors.white38 : Colors.grey.shade500)),
+              ]),
+              const SizedBox(height: 6),
+              Text(item.original, style: const TextStyle(fontWeight: FontWeight.w500)),
+              const SizedBox(height: 4),
+              Text(item.translated, style: TextStyle(
+                  color: isDark ? Colors.white60 : Colors.grey.shade600,
+                  fontStyle: FontStyle.italic)),
+            ],
+          )),
+        );
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _speech.stop();
+    _audioPlayer.release();
+    _tttController.dispose();
+    super.dispose();
   }
 }
