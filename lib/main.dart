@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
@@ -63,6 +64,7 @@ class _CreditTier { final String name; final int secs; final String price;
 const _tiers = [_CreditTier('Standard', 180, 'R40.00'),
                 _CreditTier('Premium', 600, 'R120.00'),
                 _CreditTier('Enterprise', 1500, 'R300.00')];
+const int _usageCostSecs = 5;
 
 class HistoryItem {
   final String inputLang, outputLang, original, translated;
@@ -87,8 +89,12 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isPlayingAudio = false;
   String _selectedInputLang = 'English';
   String _selectedOutputLang = 'Sesotho';
-  final _langs = ['English', 'Sesotho', 'Sepedi', 'Tshivenda', 'Tsonga', 'Xitsonga', 'Afrikaans',
-    'isiNdebele', 'Portuguese', 'Mandarin', 'Hindi', 'German', 'French'];
+  // Input: English, Afrikaans, Limpopo 3, Secondary African, International
+  final _inputLangs = ['English', 'Afrikaans', 'Sepedi', 'Tshivenda', 'Xitsonga', 'Tsonga',
+    'Sesotho', 'isiNdebele', 'Portuguese', 'Mandarin', 'Hindi', 'German', 'French'];
+  // Output: Limpopo 3, Secondary African, Afrikaans, English, International
+  final _outputLangs = ['Sepedi', 'Tshivenda', 'Xitsonga', 'Tsonga', 'Sesotho', 'isiNdebele',
+    'Afrikaans', 'English', 'Portuguese', 'Mandarin', 'Hindi', 'German', 'French'];
   final _locales = {'English': 'en-ZA', 'Sesotho': 'st-ZA', 'Sepedi': 'nso-ZA', 'Tshivenda': 've-ZA',
     'Tsonga': 'ts-ZA', 'Xitsonga': 'ts-ZA', 'Afrikaans': 'af-ZA', 'isiNdebele': 'nr-ZA',
     'Portuguese': 'pt-PT', 'Mandarin': 'zh-CN', 'Hindi': 'hi-IN', 'German': 'de-DE', 'French': 'fr-FR'};
@@ -126,6 +132,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String _translatedText = '';
   final TextEditingController _tttController = TextEditingController();
   int _credits = 0;
+  int _freeTryTokens = 2;
   final List<HistoryItem> _history = [];
 
   @override
@@ -163,7 +170,24 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _isTalking = false);
   }
 
+  bool _consumeUsageAllowance() {
+    if (_credits >= _usageCostSecs) {
+      setState(() => _credits -= _usageCostSecs);
+      return true;
+    }
+    if (_freeTryTokens > 0) {
+      setState(() => _freeTryTokens -= 1);
+      _showSnack('Used 1 free try token (${_freeTryTokens} left).');
+      return true;
+    }
+    _showSnack('No balance left. Please top up to continue.');
+    return false;
+  }
+
   Future<void> _doTranslate(String input) async {
+    if (!_consumeUsageAllowance()) {
+      return;
+    }
     setState(() => _isTranslating = true);
     final result = await _translateText(input);
     if (!mounted) {
@@ -251,6 +275,65 @@ class _HomeScreenState extends State<HomeScreen> {
   void _showSnack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
+  void _showQrShare() {
+    const appUrl = 'https://play.google.com/store/apps/details?id=com.limpopovoice.translate';
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Scan Here',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 20),
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 8, offset: const Offset(0, 2))],
+                ),
+                padding: const EdgeInsets.all(12),
+                child: QrImageView(
+                  data: appUrl,
+                  version: QrVersions.auto,
+                  size: 200,
+                  backgroundColor: Colors.white,
+                  eyeStyle: const QrEyeStyle(
+                    eyeShape: QrEyeShape.square,
+                    color: Color(0xFF1E3C72),
+                  ),
+                  dataModuleStyle: const QrDataModuleStyle(
+                    dataModuleShape: QrDataModuleShape.square,
+                    color: Color(0xFF1E3C72),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text('Limpopo Voice',
+                  style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: isDark ? Colors.white70 : const Color(0xFF1E3C72))),
+              const SizedBox(height: 4),
+              Text('Your local and tourist voice translation studio',
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: isDark ? Colors.white38 : Colors.grey.shade500)),
+              const SizedBox(height: 16),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Close'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   void _showCreditTiers() {
     showModalBottomSheet(
       context: context,
@@ -278,7 +361,7 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 8),
             Align(
               alignment: Alignment.centerRight,
-              child: Chip(label: Text('Balance: $_credits secs')),
+              child: Chip(label: Text('Balance: $_credits secs | Free tries: $_freeTryTokens')),
             ),
             const SizedBox(height: 16),
             ..._tiers.map((tier) => Padding(
@@ -333,11 +416,16 @@ class _HomeScreenState extends State<HomeScreen> {
               IconButton(
                 icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
                 onPressed: widget.onToggleTheme),
+              IconButton(
+                icon: const Icon(Icons.qr_code_2),
+                tooltip: 'Share App',
+                onPressed: _showQrShare,
+              ),
               const Spacer(),
               OutlinedButton.icon(
                 icon: Icon(Icons.account_balance_wallet, size: 16,
                     color: isDark ? Colors.white : const Color(0xFF1E3C72)),
-                label: Text('$_credits secs',
+                label: Text('$_credits s | $_freeTryTokens tries',
                     style: TextStyle(
                         color: isDark ? Colors.white : const Color(0xFF1E3C72),
                         fontWeight: FontWeight.bold)),
@@ -362,7 +450,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 color: Colors.transparent,
                 alignment: Alignment.center,
                 child: Image.asset(
-                  'assets/lv.png',
+                  isDark ? 'assets/lv2.png' : 'assets/lv.png',
                   width: double.infinity,
                   height: 112,
                   fit: BoxFit.contain,
@@ -429,10 +517,10 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // Language dropdowns
         Row(children: [
-          Expanded(child: _langDrop(_selectedInputLang, (v) => setState(() => _selectedInputLang = v!), isDark)),
+          Expanded(child: _langDrop(_selectedInputLang, _inputLangs, (v) => setState(() => _selectedInputLang = v!), isDark)),
           Padding(padding: const EdgeInsets.symmetric(horizontal: 8),
               child: Icon(Icons.arrow_forward, color: isDark ? Colors.white54 : Colors.grey)),
-          Expanded(child: _langDrop(_selectedOutputLang, (v) => setState(() => _selectedOutputLang = v!), isDark)),
+          Expanded(child: _langDrop(_selectedOutputLang, _outputLangs, (v) => setState(() => _selectedOutputLang = v!), isDark)),
         ]),
         const SizedBox(height: 14),
         // TTT row
@@ -524,7 +612,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _langDrop(String value, ValueChanged<String?> onChanged, bool isDark) {
+  Widget _langDrop(String value, List<String> langs, ValueChanged<String?> onChanged, bool isDark) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
       decoration: BoxDecoration(
@@ -536,7 +624,7 @@ class _HomeScreenState extends State<HomeScreen> {
         isExpanded: true, value: value,
         dropdownColor: isDark ? const Color(0xFF1B263B) : Colors.white,
         style: TextStyle(color: isDark ? Colors.white : Colors.black87, fontWeight: FontWeight.w600),
-        items: _langs.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+        items: langs.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
         onChanged: onChanged,
       )),
     );
@@ -568,34 +656,57 @@ class _HomeScreenState extends State<HomeScreen> {
             color: isDark ? Colors.white38 : Colors.grey.shade500, fontSize: 16)),
       ],
     ));
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      itemCount: _history.length,
-      itemBuilder: (context, i) {
-        final item = _history[i];
-        return Card(
-          margin: const EdgeInsets.only(bottom: 10),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          child: Padding(padding: const EdgeInsets.all(14), child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
             children: [
-              Row(children: [
-                Text('${item.inputLang} -> ${item.outputLang}',
-                    style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF2A5298))),
-                const Spacer(),
-                Text('${item.time.hour.toString().padLeft(2, "0")}:${item.time.minute.toString().padLeft(2, "0")}',
-                    style: TextStyle(fontSize: 12, color: isDark ? Colors.white38 : Colors.grey.shade500)),
-              ]),
-              const SizedBox(height: 6),
-              Text(item.original, style: const TextStyle(fontWeight: FontWeight.w500)),
-              const SizedBox(height: 4),
-              Text(item.translated, style: TextStyle(
-                  color: isDark ? Colors.white60 : Colors.grey.shade600,
-                  fontStyle: FontStyle.italic)),
+              TextButton.icon(
+                onPressed: () => setState(() => _history.clear()),
+                icon: const Icon(Icons.delete_sweep, size: 18),
+                label: const Text('Clear History'),
+                style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+              ),
             ],
-          )),
-        );
-      },
+          ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            itemCount: _history.length,
+            itemBuilder: (context, i) {
+              final item = _history[i];
+              return Card(
+                margin: const EdgeInsets.only(bottom: 10),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        Text('${item.inputLang} -> ${item.outputLang}',
+                            style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF2A5298))),
+                        const Spacer(),
+                        Text('${item.time.hour.toString().padLeft(2, "0")}:${item.time.minute.toString().padLeft(2, "0")}',
+                            style: TextStyle(fontSize: 12, color: isDark ? Colors.white38 : Colors.grey.shade500)),
+                      ]),
+                      const SizedBox(height: 6),
+                      Text(item.original, style: const TextStyle(fontWeight: FontWeight.w500)),
+                      const SizedBox(height: 4),
+                      Text(item.translated, style: TextStyle(
+                          color: isDark ? Colors.white60 : Colors.grey.shade600,
+                          fontStyle: FontStyle.italic)),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 

@@ -25,6 +25,8 @@ dependencies:
   # Sharing
   share_plus: ^12.0.1
   audioplayers: ^6.1.0
+  shared_preferences: ^2.3.3
+  qr_flutter: ^4.1.0
   # Note: audioplayers removed to save space as we use generic TTS now.
 
 dev_dependencies:
@@ -36,4 +38,5 @@ flutter:
   uses-material-design: true
   assets:
      - assets/lv.png
+     - assets/lv2.png
      - .env
