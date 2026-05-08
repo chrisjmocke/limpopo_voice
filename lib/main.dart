@@ -72,8 +72,9 @@ const int _usageCostSecs = 5;
 
 class HistoryItem {
   final String inputLang, outputLang, original, translated;
+  final String? phonetic;
   final DateTime time;
-  HistoryItem(this.inputLang, this.outputLang, this.original, this.translated, this.time);
+  HistoryItem(this.inputLang, this.outputLang, this.original, this.translated, this.time, {this.phonetic});
 }
 
 class HomeScreen extends StatefulWidget {
@@ -203,10 +204,10 @@ class _HomeScreenState extends State<HomeScreen> {
       {'text': 'Ate logo.', 'en': 'Goodbye.'},
     ],
     'Mandarin': [
-      {'text': 'Ni hao, ni zenme yang?', 'en': 'Hello, how are you?'},
-      {'text': 'Feichang ganxie.', 'en': 'Thank you very much.'},
-      {'text': 'Qing bang wo.', 'en': 'Please help me.'},
-      {'text': 'Zaijian.', 'en': 'Goodbye.'},
+      {'text': '你好，你怎么样？', 'en': 'Hello, how are you?', 'phonetic': 'Nǐ hǎo, nǐ zěnme yàng?'},
+      {'text': '非常感谢。', 'en': 'Thank you very much.', 'phonetic': 'Fēicháng gǎnxiè.'},
+      {'text': '请帮帮我。', 'en': 'Please help me.', 'phonetic': 'Qǐng bāng bāng wǒ.'},
+      {'text': '再见。', 'en': 'Goodbye.', 'phonetic': 'Zàijiàn.'},
     ],
     'Hindi': [
       {'text': 'नमस्ते, आप कैसे हैं?', 'en': 'Hello, how are you?', 'phonetic': 'Namaste, aap kaise hain?'},
@@ -329,17 +330,18 @@ class _HomeScreenState extends State<HomeScreen> {
       _translatedText = result;
       _translatedLang = _selectedOutputLang;
       _isTranslating = false;
+      // _phoneticText is set as a side-effect inside _translateText; include it here so the UI rebuilds with it
     });
 
     _history.insert(0, HistoryItem(_selectedInputLang, _selectedOutputLang,
-        input, result, DateTime.now()));
+        input, result, DateTime.now(), phonetic: _phoneticText));
     await _speakTranslatedText(result);
   }
 
   Future<String> _translateText(String input) async {
     final source = _translateCodes[_selectedInputLang] ?? 'auto';
     final target = _translateCodes[_selectedOutputLang] ?? 'en';
-    final needsPhonetics = _selectedOutputLang == 'Hindi' || _selectedOutputLang == 'Urdu';
+    final needsPhonetics = _selectedOutputLang == 'Hindi' || _selectedOutputLang == 'Urdu' || _selectedOutputLang == 'Mandarin';
     final uri = Uri.parse(
       'https://translate.googleapis.com/translate_a/single?client=gtx&sl=$source&tl=$target&dt=t${needsPhonetics ? '&dt=rm' : ''}&q=${Uri.encodeQueryComponent(input)}',
     );
@@ -359,14 +361,19 @@ class _HomeScreenState extends State<HomeScreen> {
             .join();
 
         if (needsPhonetics) {
-          // Google Translate returns romanization at index [3] of each segment
+          // dt=rm: romanization of each translated segment is at index [2] of each piece
           final phonetic = pieces
               .whereType<List>()
-              .map((s) => s.length > 3 && s[3] != null ? s[3].toString() : '')
+              .map((s) => s.length > 2 && s[2] != null ? s[2].toString().trim() : '')
               .where((s) => s.isNotEmpty)
               .join(' ')
               .trim();
-          _phoneticText = phonetic;
+          // Fallback: check top-level decoded[1] (some API variants put it there)
+          final fallback = (phonetic.isEmpty && decoded.length > 1 && decoded[1] is String)
+              ? (decoded[1] as String).trim()
+              : '';
+          _phoneticText = phonetic.isNotEmpty ? phonetic : fallback;
+          debugPrint('Phonetics found: "$_phoneticText"');
         } else {
           _phoneticText = '';
         }
@@ -1094,6 +1101,30 @@ class _HomeScreenState extends State<HomeScreen> {
                           constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                         ),
                       ]),
+                      if ((item.phonetic ?? '').isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withOpacity(isDark ? 0.12 : 0.08),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.orange.withOpacity(0.4)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Phonetics:',
+                                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold,
+                                      color: isDark ? Colors.orange.shade300 : Colors.orange.shade800)),
+                              const SizedBox(height: 2),
+                              Text(item.phonetic ?? '',
+                                  style: TextStyle(fontSize: 13, fontStyle: FontStyle.italic,
+                                      color: isDark ? Colors.white70 : Colors.black87)),
+                            ],
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
