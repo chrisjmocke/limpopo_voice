@@ -15,7 +15,7 @@ dependencies:
   vibration: ^3.1.8
   # Backend & AI
   firebase_core: ^4.5.0
-  firebase_auth: ^6.2.0
+  firebase_auth: ^6.3.0
   firebase_app_check: ^0.4.1+1
   cloud_firestore: ^6.1.3
   firebase_storage: ^13.1.0
