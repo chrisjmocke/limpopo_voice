@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -8,6 +10,8 @@ import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:http/http.dart' as http;
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:share_plus/share_plus.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'translation_service.dart';
 import 'firebase_options.dart';
@@ -90,20 +94,20 @@ class _HomeScreenState extends State<HomeScreen> {
   String _selectedInputLang = 'English';
   String _selectedOutputLang = 'Sepedi';
   // Input: English, Afrikaans, Limpopo 3, Secondary African, International
-  final _inputLangs = ['English', 'Afrikaans', 'Sepedi', 'Tshivenda', 'Xitsonga', 'Tsonga',
+  final _inputLangs = ['English', 'Afrikaans', 'Sepedi', 'Xitsonga', 'Tshivenda', 'Shona',
     'Sesotho', 'isiNdebele', 'Portuguese', 'Mandarin', 'Hindi', 'Urdu', 'German', 'French'];
   // Output: Limpopo 3, Secondary African, Afrikaans, English, International
-  final _outputLangs = ['Sepedi', 'Tshivenda', 'Xitsonga', 'Tsonga', 'Sesotho', 'isiNdebele',
+  final _outputLangs = ['Sepedi', 'Xitsonga', 'Tshivenda', 'Shona', 'Sesotho', 'isiNdebele',
     'Afrikaans', 'English', 'Portuguese', 'Mandarin', 'Hindi', 'Urdu', 'German', 'French'];
   final _locales = {'English': 'en-ZA', 'Sesotho': 'st-ZA', 'Sepedi': 'nso-ZA', 'Tshivenda': 've-ZA',
-    'Tsonga': 'ts-ZA', 'Xitsonga': 'ts-ZA', 'Afrikaans': 'af-ZA', 'isiNdebele': 'nr-ZA',
+    'Shona': 'sn-ZW', 'Xitsonga': 'ts-ZA', 'Afrikaans': 'af-ZA', 'isiNdebele': 'nr-ZA',
     'Portuguese': 'pt-PT', 'Mandarin': 'zh-CN', 'Hindi': 'hi-IN', 'Urdu': 'ur-PK', 'German': 'de-DE', 'French': 'fr-FR'};
   final _translateCodes = {
     'English': 'en',
     'Sesotho': 'st',
     'Sepedi': 'nso',
     'Tshivenda': 've',
-    'Tsonga': 'ts',
+    'Shona': 'sn',
     'Xitsonga': 'ts',
     'Afrikaans': 'af',
     'isiNdebele': 'nr',
@@ -118,8 +122,8 @@ class _HomeScreenState extends State<HomeScreen> {
     'Sesotho':   'Palesa',
     'Sepedi':    'Mpho',
     'Tshivenda': 'Mulalo',
-    'Tsonga':    'Basetsana',
     'Xitsonga':  'Basetsana',
+    'Shona':     'Nandi',
     'Afrikaans': 'Rolanda',
     'isiNdebele': 'Dumisani',
     'Portuguese': 'Lurdes',
@@ -132,12 +136,103 @@ class _HomeScreenState extends State<HomeScreen> {
   };
   String _spokenText = '';
   String _translatedText = '';
+  String _phoneticText = '';
   String _spokenLang = '';
   String _translatedLang = '';
   final TextEditingController _tttController = TextEditingController();
   int _credits = 0;
   int _freeTryTokens = 2;
   final List<HistoryItem> _history = [];
+  String _selectedLearnLang = 'Sepedi';
+  bool _exportingHistory = false;
+  Timer? _autocorrectTimer;
+
+  static const Map<String, List<Map<String, String>>> _learnPhrasesByLang = {
+    'English': [
+      {'text': 'Hello, how are you?', 'en': 'Hello, how are you?'},
+      {'text': 'Thank you very much.', 'en': 'Thank you very much.'},
+      {'text': 'Please help me.', 'en': 'Please help me.'},
+      {'text': 'Goodbye, see you later.', 'en': 'Goodbye, see you later.'},
+    ],
+    'Sepedi': [
+      {'text': 'Dumela, o kae?', 'en': 'Hello, how are you?'},
+      {'text': 'Ke a leboga kudu.', 'en': 'Thank you very much.'},
+      {'text': 'Hle nthuise.', 'en': 'Please help me.'},
+      {'text': 'Sala gabotse.', 'en': 'Goodbye.'},
+    ],
+    'Xitsonga': [
+      {'text': 'Avuxeni, u njhani?', 'en': 'Hello, how are you?'},
+      {'text': 'Ndza nkhensa swinene.', 'en': 'Thank you very much.'},
+      {'text': 'Ndzi kombela mpfuno.', 'en': 'Please help me.'},
+      {'text': 'A hi tlhelela.', 'en': 'Goodbye.'},
+    ],
+    'Tshivenda': [
+      {'text': 'Ndaa, ni hone?', 'en': 'Hello, how are you?'},
+      {'text': 'Ndo livhuwa vhukuma.', 'en': 'Thank you very much.'},
+      {'text': 'Ndichelphe, ndi khou humbela.', 'en': 'Please help me.'},
+      {'text': 'Ndo livhuwa, tshee.', 'en': 'Goodbye.'},
+    ],
+    'Shona': [
+      {'text': 'Mhoro, makadii?', 'en': 'Hello, how are you?'},
+      {'text': 'Ndatenda zvikuru.', 'en': 'Thank you very much.'},
+      {'text': 'Ndapota ndibatsireiwo.', 'en': 'Please help me.'},
+      {'text': 'Chisarai zvakanaka.', 'en': 'Goodbye.'},
+    ],
+    'Sesotho': [
+      {'text': 'Dumela, o phela jwang?', 'en': 'Hello, how are you?'},
+      {'text': 'Ke a leboha haholo.', 'en': 'Thank you very much.'},
+      {'text': 'Ka kopo nthuse.', 'en': 'Please help me.'},
+      {'text': 'Sala hantle.', 'en': 'Goodbye.'},
+    ],
+    'isiNdebele': [
+      {'text': 'Lotjhani, unjani?', 'en': 'Hello, how are you?'},
+      {'text': 'Ngiyathokoza khulu.', 'en': 'Thank you very much.'},
+      {'text': 'Ngicela ungisize.', 'en': 'Please help me.'},
+      {'text': 'Sala kahle.', 'en': 'Goodbye.'},
+    ],
+    'Afrikaans': [
+      {'text': 'Hallo, hoe gaan dit?', 'en': 'Hello, how are you?'},
+      {'text': 'Baie dankie.', 'en': 'Thank you very much.'},
+      {'text': 'Help my asseblief.', 'en': 'Please help me.'},
+      {'text': 'Totsiens.', 'en': 'Goodbye.'},
+    ],
+    'Portuguese': [
+      {'text': 'Ola, como esta?', 'en': 'Hello, how are you?'},
+      {'text': 'Muito obrigado.', 'en': 'Thank you very much.'},
+      {'text': 'Por favor, ajude-me.', 'en': 'Please help me.'},
+      {'text': 'Ate logo.', 'en': 'Goodbye.'},
+    ],
+    'Mandarin': [
+      {'text': 'Ni hao, ni zenme yang?', 'en': 'Hello, how are you?'},
+      {'text': 'Feichang ganxie.', 'en': 'Thank you very much.'},
+      {'text': 'Qing bang wo.', 'en': 'Please help me.'},
+      {'text': 'Zaijian.', 'en': 'Goodbye.'},
+    ],
+    'Hindi': [
+      {'text': 'नमस्ते, आप कैसे हैं?', 'en': 'Hello, how are you?', 'phonetic': 'Namaste, aap kaise hain?'},
+      {'text': 'बहुत धन्यवाद।', 'en': 'Thank you very much.', 'phonetic': 'Bahut dhanyavaad.'},
+      {'text': 'कृपया मेरी मदद कीजिए।', 'en': 'Please help me.', 'phonetic': 'Kripya meri madad kijiye.'},
+      {'text': 'अलविदा।', 'en': 'Goodbye.', 'phonetic': 'Alvida.'},
+    ],
+    'Urdu': [
+      {'text': 'السلام علیکم، آپ کیسے ہیں؟', 'en': 'Hello, how are you?', 'phonetic': 'As-salaam-alaikum, aap kaise hain?'},
+      {'text': 'بہت شکریہ۔', 'en': 'Thank you very much.', 'phonetic': 'Bohat shukriya.'},
+      {'text': 'مہربانی کرکے میری مدد کریں۔', 'en': 'Please help me.', 'phonetic': 'Meherbani karke meri madad karein.'},
+      {'text': 'خدا حافظ۔', 'en': 'Goodbye.', 'phonetic': 'Khuda hafiz.'},
+    ],
+    'German': [
+      {'text': 'Hallo, wie geht es dir?', 'en': 'Hello, how are you?'},
+      {'text': 'Vielen Dank.', 'en': 'Thank you very much.'},
+      {'text': 'Bitte hilf mir.', 'en': 'Please help me.'},
+      {'text': 'Tschuss, bis spater.', 'en': 'Goodbye, see you later.'},
+    ],
+    'French': [
+      {'text': 'Bonjour, comment ca va?', 'en': 'Hello, how are you?'},
+      {'text': 'Merci beaucoup.', 'en': 'Thank you very much.'},
+      {'text': 'S il vous plait, aidez-moi.', 'en': 'Please help me.'},
+      {'text': 'Au revoir, a bientot.', 'en': 'Goodbye, see you soon.'},
+    ],
+  };
 
   @override
   void initState() {
@@ -146,6 +241,38 @@ class _HomeScreenState extends State<HomeScreen> {
     final apiKey = dotenv.env['NARAKEET_API_KEY'] ?? '';
     _translationService = TranslationService(apiKey: apiKey);
     _initSpeech();
+    _tttController.addListener(_onInputChanged);
+  }
+
+  void _onInputChanged() {
+    _autocorrectTimer?.cancel();
+    if (_tttController.text.trim().length < 4) return;
+    _autocorrectTimer = Timer(const Duration(milliseconds: 700), _runAutocorrect);
+  }
+
+  Future<void> _runAutocorrect() async {
+    final text = _tttController.text;
+    if (text.trim().length < 4) return;
+    final source = _translateCodes[_selectedInputLang] ?? 'auto';
+    final uri = Uri.parse(
+      'https://translate.googleapis.com/translate_a/single?client=gtx&sl=$source&tl=en&dt=t&dt=ss&q=${Uri.encodeQueryComponent(text)}',
+    );
+    try {
+      final response = await http.get(uri);
+      if (response.statusCode != 200) return;
+      final decoded = jsonDecode(response.body) as List?;
+      if (decoded == null || decoded.length <= 7) return;
+      final ssArr = decoded[7];
+      if (ssArr is! List || ssArr.isEmpty) return;
+      final corrected = ssArr[0];
+      if (corrected is! String || corrected.isEmpty || corrected == text) return;
+      _tttController.removeListener(_onInputChanged);
+      _tttController.value = TextEditingValue(
+        text: corrected,
+        selection: TextSelection.collapsed(offset: corrected.length),
+      );
+      _tttController.addListener(_onInputChanged);
+    } catch (_) {}
   }
 
   Future<void> _initSpeech() async {
@@ -155,7 +282,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _startListening() async {
     if (!_speechAvailable) { _showSnack('Microphone not available'); return; }
-    setState(() { _isTalking = true; _spokenText = ''; _translatedText = ''; _spokenLang = ''; _translatedLang = ''; });
+    setState(() { _isTalking = true; _spokenText = ''; _translatedText = ''; _phoneticText = ''; _spokenLang = ''; _translatedLang = ''; });
     await _speech.listen(
       onResult: (r) {
         setState(() { _spokenText = r.recognizedWords; _spokenLang = _selectedInputLang; });
@@ -212,13 +339,15 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<String> _translateText(String input) async {
     final source = _translateCodes[_selectedInputLang] ?? 'auto';
     final target = _translateCodes[_selectedOutputLang] ?? 'en';
+    final needsPhonetics = _selectedOutputLang == 'Hindi' || _selectedOutputLang == 'Urdu';
     final uri = Uri.parse(
-      'https://translate.googleapis.com/translate_a/single?client=gtx&sl=$source&tl=$target&dt=t&q=${Uri.encodeQueryComponent(input)}',
+      'https://translate.googleapis.com/translate_a/single?client=gtx&sl=$source&tl=$target&dt=t${needsPhonetics ? '&dt=rm' : ''}&q=${Uri.encodeQueryComponent(input)}',
     );
 
     try {
       final response = await http.get(uri);
       if (response.statusCode != 200) {
+        _phoneticText = '';
         return input;
       }
       final decoded = jsonDecode(response.body);
@@ -228,10 +357,26 @@ class _HomeScreenState extends State<HomeScreen> {
             .whereType<List>()
             .map((segment) => segment.isNotEmpty ? segment.first.toString() : '')
             .join();
+
+        if (needsPhonetics) {
+          // Google Translate returns romanization at index [3] of each segment
+          final phonetic = pieces
+              .whereType<List>()
+              .map((s) => s.length > 3 && s[3] != null ? s[3].toString() : '')
+              .where((s) => s.isNotEmpty)
+              .join(' ')
+              .trim();
+          _phoneticText = phonetic;
+        } else {
+          _phoneticText = '';
+        }
+
         return translated.trim().isEmpty ? input : translated.trim();
       }
+      _phoneticText = '';
       return input;
     } catch (_) {
+      _phoneticText = '';
       return input;
     }
   }
@@ -282,13 +427,13 @@ class _HomeScreenState extends State<HomeScreen> {
   void _submitTTT() {
     final t = _tttController.text.trim();
     if (t.isEmpty) return;
-    setState(() { _spokenText = t; _spokenLang = _selectedInputLang; _translatedText = ''; _translatedLang = ''; });
+    setState(() { _spokenText = t; _spokenLang = _selectedInputLang; _translatedText = ''; _phoneticText = ''; _translatedLang = ''; });
     _doTranslate(t);
     _tttController.clear();
     FocusScope.of(context).unfocus();
   }
 
-  void _resetOutput() => setState(() { _spokenText = ''; _translatedText = ''; _spokenLang = ''; _translatedLang = ''; });
+  void _resetOutput() => setState(() { _spokenText = ''; _translatedText = ''; _phoneticText = ''; _spokenLang = ''; _translatedLang = ''; });
 
   void _showSnack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
@@ -489,8 +634,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Row(
-                children: ['translate', 'history'].map((tab) {
+                children: ['translate', 'history', 'learn'].map((tab) {
                   final active = _activeTab == tab;
+                  final label = tab == 'translate'
+                      ? 'Translate'
+                      : (tab == 'history' ? 'History' : 'Learn');
                   return Expanded(
                     child: GestureDetector(
                       onTap: () => setState(() => _activeTab = tab),
@@ -503,7 +651,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           borderRadius: BorderRadius.circular(9),
                         ),
                         child: Center(child: Text(
-                          tab == 'translate' ? 'Translate' : 'History',
+                          label,
                           style: TextStyle(
                             fontWeight: FontWeight.bold, fontSize: 15,
                             color: active ? Colors.white
@@ -518,10 +666,94 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           // Content
-          Expanded(child: _activeTab == 'translate'
-              ? _buildTranslateTab(isDark)
-              : _buildHistoryTab(isDark)),
+          Expanded(
+            child: _activeTab == 'translate'
+                ? _buildTranslateTab(isDark)
+                : (_activeTab == 'history'
+                    ? _buildHistoryTab(isDark)
+                    : _buildLearnTab(isDark)),
+          ),
         ]),
+      ),
+    );
+  }
+
+  Widget _buildLearnTab(bool isDark) {
+    final phrases = _learnPhrasesByLang[_selectedLearnLang] ?? _learnPhrasesByLang['English']!;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Learn Everyday Phrases',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: isDark ? Colors.white : const Color(0xFF1E3C72),
+            ),
+          ),
+          const SizedBox(height: 10),
+          _langDrop(
+            _selectedLearnLang,
+            _outputLangs,
+            (v) => setState(() => _selectedLearnLang = v!),
+            isDark,
+          ),
+          const SizedBox(height: 14),
+          ...phrases.map((phrase) => Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: isDark ? Colors.white10 : Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: isDark ? Colors.white24 : Colors.grey.shade300),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        phrase['text'] ?? '',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
+                      ),
+                      if ((phrase['phonetic'] ?? '').isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          phrase['phonetic']!,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontStyle: FontStyle.italic,
+                            color: isDark ? Colors.orange.shade300 : Colors.orange.shade800,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 3),
+                      Text(
+                        phrase['en'] ?? '',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isDark ? Colors.white60 : Colors.grey.shade700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.volume_up),
+                  tooltip: 'Listen',
+                  onPressed: () => _speakText(phrase['text'] ?? '', _selectedLearnLang),
+                ),
+              ],
+            ),
+          )),
+        ],
       ),
     );
   }
@@ -604,6 +836,31 @@ class _HomeScreenState extends State<HomeScreen> {
               tooltip: 'Repeat',
             ),
           ]),
+          if (_phoneticText.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(isDark ? 0.12 : 0.08),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.orange.withOpacity(0.4)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Phonetics (how to say it):',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold,
+                          color: isDark ? Colors.orange.shade300 : Colors.orange.shade800)),
+                  const SizedBox(height: 3),
+                  Text(_phoneticText,
+                      style: TextStyle(fontSize: 14,
+                          color: isDark ? Colors.white : Colors.black87,
+                          fontStyle: FontStyle.italic)),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 10),
         ],
         if (_spokenText.isEmpty && _translatedText.isEmpty)
@@ -684,6 +941,64 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _exportHistory() async {
+    if (_history.isEmpty) return;
+    setState(() => _exportingHistory = true);
+    try {
+      final dir = await getTemporaryDirectory();
+      final files = <XFile>[];
+
+      // Build text summary file
+      final buf = StringBuffer();
+      buf.writeln('Limpopo Voice — Translation History');
+      buf.writeln('Exported: ${DateTime.now().toString().substring(0, 16)}');
+      buf.writeln();
+      for (int i = 0; i < _history.length; i++) {
+        final item = _history[i];
+        buf.writeln('[${i + 1}] ${item.inputLang} -> ${item.outputLang}  '
+            '${item.time.hour.toString().padLeft(2,"0")}:${item.time.minute.toString().padLeft(2,"0")}');
+        buf.writeln('Original:    ${item.original}');
+        buf.writeln('Translation: ${item.translated}');
+        buf.writeln();
+      }
+      final txtFile = File('${dir.path}/limpopo_voice_history.txt');
+      await txtFile.writeAsString(buf.toString());
+      files.add(XFile(txtFile.path, mimeType: 'text/plain'));
+
+      // Generate audio files
+      for (int i = 0; i < _history.length; i++) {
+        final item = _history[i];
+        try {
+          final inVoice = _voiceNames[item.inputLang] ?? 'Aletta';
+          final inAudio = await _translationService.generateTranslation(item.original, inVoice);
+          if (inAudio != null && inAudio.isNotEmpty) {
+            final mp3 = File('${dir.path}/entry_${i+1}_${item.inputLang}_original.mp3');
+            await mp3.writeAsBytes(inAudio);
+            files.add(XFile(mp3.path, mimeType: 'audio/mpeg'));
+          }
+        } catch (_) {}
+        try {
+          final outVoice = _voiceNames[item.outputLang] ?? 'Aletta';
+          final outAudio = await _translationService.generateTranslation(item.translated, outVoice);
+          if (outAudio != null && outAudio.isNotEmpty) {
+            final mp3 = File('${dir.path}/entry_${i+1}_${item.outputLang}_translation.mp3');
+            await mp3.writeAsBytes(outAudio);
+            files.add(XFile(mp3.path, mimeType: 'audio/mpeg'));
+          }
+        } catch (_) {}
+      }
+
+      if (files.isNotEmpty) {
+        await Share.shareXFiles(files, subject: 'Limpopo Voice — Translation History');
+      }
+    } catch (e) {
+      debugPrint('Export error: $e');
+      _showSnack('Export failed');
+    } finally {
+      setState(() => _exportingHistory = false);
+    }
+  }
+
   Widget _buildHistoryTab(bool isDark) {
     if (_history.isEmpty) return Center(child: Column(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -701,6 +1016,30 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
+              if (_exportingHistory)
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12),
+                  child: Row(children: [
+                    SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                    SizedBox(width: 8),
+                    Text('Preparing...', style: TextStyle(fontSize: 13, color: Colors.grey)),
+                  ]),
+                )
+              else
+                TextButton.icon(
+                  onPressed: () {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Preparing audio & history...'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                    _exportHistory();
+                  },
+                  icon: const Icon(Icons.email_outlined, size: 18),
+                  label: const Text('Download All'),
+                  style: TextButton.styleFrom(foregroundColor: const Color(0xFF2A5298)),
+                ),
               TextButton.icon(
                 onPressed: () => setState(() => _history.clear()),
                 icon: const Icon(Icons.delete_sweep, size: 18),
@@ -770,6 +1109,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     _speech.stop();
     _audioPlayer.release();
+    _autocorrectTimer?.cancel();
     _tttController.dispose();
     super.dispose();
   }
