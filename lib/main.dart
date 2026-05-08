@@ -88,16 +88,16 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isTranslating = false;
   bool _isPlayingAudio = false;
   String _selectedInputLang = 'English';
-  String _selectedOutputLang = 'Sesotho';
+  String _selectedOutputLang = 'Sepedi';
   // Input: English, Afrikaans, Limpopo 3, Secondary African, International
   final _inputLangs = ['English', 'Afrikaans', 'Sepedi', 'Tshivenda', 'Xitsonga', 'Tsonga',
-    'Sesotho', 'isiNdebele', 'Portuguese', 'Mandarin', 'Hindi', 'German', 'French'];
+    'Sesotho', 'isiNdebele', 'Portuguese', 'Mandarin', 'Hindi', 'Urdu', 'German', 'French'];
   // Output: Limpopo 3, Secondary African, Afrikaans, English, International
   final _outputLangs = ['Sepedi', 'Tshivenda', 'Xitsonga', 'Tsonga', 'Sesotho', 'isiNdebele',
-    'Afrikaans', 'English', 'Portuguese', 'Mandarin', 'Hindi', 'German', 'French'];
+    'Afrikaans', 'English', 'Portuguese', 'Mandarin', 'Hindi', 'Urdu', 'German', 'French'];
   final _locales = {'English': 'en-ZA', 'Sesotho': 'st-ZA', 'Sepedi': 'nso-ZA', 'Tshivenda': 've-ZA',
     'Tsonga': 'ts-ZA', 'Xitsonga': 'ts-ZA', 'Afrikaans': 'af-ZA', 'isiNdebele': 'nr-ZA',
-    'Portuguese': 'pt-PT', 'Mandarin': 'zh-CN', 'Hindi': 'hi-IN', 'German': 'de-DE', 'French': 'fr-FR'};
+    'Portuguese': 'pt-PT', 'Mandarin': 'zh-CN', 'Hindi': 'hi-IN', 'Urdu': 'ur-PK', 'German': 'de-DE', 'French': 'fr-FR'};
   final _translateCodes = {
     'English': 'en',
     'Sesotho': 'st',
@@ -110,6 +110,7 @@ class _HomeScreenState extends State<HomeScreen> {
     'Portuguese': 'pt',
     'Mandarin': 'zh-CN',
     'Hindi': 'hi',
+    'Urdu': 'ur',
     'German': 'de',
     'French': 'fr',
   };
@@ -124,12 +125,15 @@ class _HomeScreenState extends State<HomeScreen> {
     'Portuguese': 'Lurdes',
     'Mandarin': 'Yifei',
     'Hindi': 'Aditi',
+    'Urdu': 'Mawra',
     'German': 'Martina',
     'French': 'Marion',
     'English':   'Aletta',
   };
   String _spokenText = '';
   String _translatedText = '';
+  String _spokenLang = '';
+  String _translatedLang = '';
   final TextEditingController _tttController = TextEditingController();
   int _credits = 0;
   int _freeTryTokens = 2;
@@ -151,10 +155,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _startListening() async {
     if (!_speechAvailable) { _showSnack('Microphone not available'); return; }
-    setState(() { _isTalking = true; _spokenText = ''; _translatedText = ''; });
+    setState(() { _isTalking = true; _spokenText = ''; _translatedText = ''; _spokenLang = ''; _translatedLang = ''; });
     await _speech.listen(
       onResult: (r) {
-        setState(() => _spokenText = r.recognizedWords);
+        setState(() { _spokenText = r.recognizedWords; _spokenLang = _selectedInputLang; });
         if (r.finalResult && _spokenText.isNotEmpty) {
           _doTranslate(_spokenText);
         }
@@ -196,6 +200,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() {
       _translatedText = result;
+      _translatedLang = _selectedOutputLang;
       _isTranslating = false;
     });
 
@@ -228,6 +233,19 @@ class _HomeScreenState extends State<HomeScreen> {
       return input;
     } catch (_) {
       return input;
+    }
+  }
+
+  Future<void> _speakText(String text, String language) async {
+    if (text.trim().isEmpty) return;
+    try {
+      final voiceName = _voiceNames[language] ?? 'Aletta';
+      final audioData = await _translationService.generateTranslation(text, voiceName);
+      if (audioData != null && audioData.isNotEmpty) {
+        await _audioPlayer.play(BytesSource(audioData));
+      }
+    } catch (e) {
+      debugPrint('Audio playback error: $e');
     }
   }
 
@@ -264,13 +282,13 @@ class _HomeScreenState extends State<HomeScreen> {
   void _submitTTT() {
     final t = _tttController.text.trim();
     if (t.isEmpty) return;
-    setState(() { _spokenText = t; _translatedText = ''; });
+    setState(() { _spokenText = t; _spokenLang = _selectedInputLang; _translatedText = ''; _translatedLang = ''; });
     _doTranslate(t);
     _tttController.clear();
     FocusScope.of(context).unfocus();
   }
 
-  void _resetOutput() => setState(() { _spokenText = ''; _translatedText = ''; });
+  void _resetOutput() => setState(() { _spokenText = ''; _translatedText = ''; _spokenLang = ''; _translatedLang = ''; });
 
   void _showSnack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
@@ -288,6 +306,8 @@ class _HomeScreenState extends State<HomeScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text('Scan Here',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              const Text('to share',
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
               const SizedBox(height: 20),
               Container(
@@ -317,11 +337,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: TextStyle(
                       fontWeight: FontWeight.w600,
                       color: isDark ? Colors.white70 : const Color(0xFF1E3C72))),
-              const SizedBox(height: 4),
-              Text('Your local and tourist voice translation studio',
-                  style: TextStyle(
-                      fontSize: 11,
-                      color: isDark ? Colors.white38 : Colors.grey.shade500)),
               const SizedBox(height: 16),
               TextButton(
                 onPressed: () => Navigator.of(context).pop(),
@@ -518,8 +533,16 @@ class _HomeScreenState extends State<HomeScreen> {
         // Language dropdowns
         Row(children: [
           Expanded(child: _langDrop(_selectedInputLang, _inputLangs, (v) => setState(() => _selectedInputLang = v!), isDark)),
-          Padding(padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Icon(Icons.arrow_forward, color: isDark ? Colors.white54 : Colors.grey)),
+          Padding(padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: IconButton(
+                icon: Icon(Icons.swap_horiz, color: isDark ? Colors.white70 : Colors.grey),
+                onPressed: () => setState(() {
+                  final tmp = _selectedInputLang;
+                  _selectedInputLang = _selectedOutputLang;
+                  _selectedOutputLang = tmp;
+                }),
+                tooltip: 'Swap languages',
+              )),
           Expanded(child: _langDrop(_selectedOutputLang, _outputLangs, (v) => setState(() => _selectedOutputLang = v!), isDark)),
         ]),
         const SizedBox(height: 14),
@@ -547,16 +570,23 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ]),
         const SizedBox(height: 8),
-        Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-          TextButton.icon(onPressed: _translatedText.isNotEmpty ? () => _speakTranslatedText(_translatedText) : null,
-              icon: const Icon(Icons.repeat, size: 18), label: const Text('Repeat')),
+        Row(mainAxisAlignment: MainAxisAlignment.start, children: [
           TextButton.icon(onPressed: _spokenText.isNotEmpty ? () => Share.share(_spokenText) : null,
               icon: const Icon(Icons.share, size: 18), label: const Text('Share')),
+          const Spacer(),
           TextButton.icon(onPressed: _spokenText.isNotEmpty ? _resetOutput : null,
               icon: const Icon(Icons.refresh, size: 18), label: const Text('Reset')),
         ]),
         if (_spokenText.isNotEmpty) ...[
-          _outBox('You said ($_selectedInputLang):', _spokenText, Colors.blue, isDark),
+          Row(children: [
+            Expanded(child: _outBox('You said $_spokenLang:', _spokenText, Colors.blue, isDark)),
+            const SizedBox(width: 8),
+            IconButton(
+              icon: const Icon(Icons.repeat),
+              onPressed: () => _speakText(_spokenText, _selectedInputLang),
+              tooltip: 'Repeat',
+            ),
+          ]),
           const SizedBox(height: 10),
         ],
         if (_isTranslating)
@@ -565,7 +595,15 @@ class _HomeScreenState extends State<HomeScreen> {
             child: LinearProgressIndicator(),
           ),
         if (_translatedText.isNotEmpty) ...[
-          _outBox('Translation ($_selectedOutputLang):', _translatedText, Colors.green, isDark),
+          Row(children: [
+            Expanded(child: _outBox('Translation $_translatedLang:', _translatedText, Colors.green, isDark)),
+            const SizedBox(width: 8),
+            IconButton(
+              icon: const Icon(Icons.repeat),
+              onPressed: () => _speakTranslatedText(_translatedText),
+              tooltip: 'Repeat',
+            ),
+          ]),
           const SizedBox(height: 10),
         ],
         if (_spokenText.isEmpty && _translatedText.isEmpty)
@@ -694,11 +732,29 @@ class _HomeScreenState extends State<HomeScreen> {
                             style: TextStyle(fontSize: 12, color: isDark ? Colors.white38 : Colors.grey.shade500)),
                       ]),
                       const SizedBox(height: 6),
-                      Text(item.original, style: const TextStyle(fontWeight: FontWeight.w500)),
+                      Row(children: [
+                        Expanded(child: Text(item.original, style: const TextStyle(fontWeight: FontWeight.w500))),
+                        IconButton(
+                          icon: const Icon(Icons.repeat, size: 20),
+                          onPressed: () => _speakText(item.original, item.inputLang),
+                          tooltip: 'Repeat',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                        ),
+                      ]),
                       const SizedBox(height: 4),
-                      Text(item.translated, style: TextStyle(
-                          color: isDark ? Colors.white60 : Colors.grey.shade600,
-                          fontStyle: FontStyle.italic)),
+                      Row(children: [
+                        Expanded(child: Text(item.translated, style: TextStyle(
+                            color: isDark ? Colors.white60 : Colors.grey.shade600,
+                            fontStyle: FontStyle.italic))),
+                        IconButton(
+                          icon: const Icon(Icons.repeat, size: 20),
+                          onPressed: () => _speakText(item.translated, item.outputLang),
+                          tooltip: 'Repeat',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                        ),
+                      ]),
                     ],
                   ),
                 ),
