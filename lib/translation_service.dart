@@ -1,107 +1,118 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:firebase_app_check/firebase_app_check.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 class TranslationService {
-  final String apiKey;
-  final String baseUrl = 'https://api.narakeet.com';
+  final String functionUrl;
+  final http.Client _client = http.Client();
 
-  TranslationService({required this.apiKey});
+  String? _cachedIdToken;
+  DateTime _idTokenFetchedAt = DateTime.fromMillisecondsSinceEpoch(0);
+  String? _cachedAppCheckToken;
+  DateTime _appCheckFetchedAt = DateTime.fromMillisecondsSinceEpoch(0);
 
-  Future<Uint8List?> generateTranslation(String text, String voiceName) async {
-    final endpoint = '$baseUrl/text-to-speech/mp3?voice=$voiceName';
+  TranslationService({required this.functionUrl});
+
+  Future<void> primeSession() async {
     try {
-      print('TranslationService: POST $endpoint (voice=$voiceName)');
+      await _buildHeaders();
+    } catch (_) {
+      // Best-effort warmup only.
+    }
+  }
 
-      // Step 1: Submit job
-      final submitResp = await http.post(
-        Uri.parse(endpoint),
-        headers: {'x-api-key': apiKey, 'Content-Type': 'text/plain'},
-        body: utf8.encode(text),
-      );
-
-      print('TranslationService: Submit status: ${submitResp.statusCode}');
-      if (submitResp.statusCode != 200) {
-        print('TranslationService: Submit error — ${submitResp.body}');
-        return null;
-      }
-
-      final jobJson = jsonDecode(submitResp.body);
-      final statusUrl = jobJson['statusUrl'] as String?;
-      final taskId   = jobJson['taskId']    as String?;
-
-      if (statusUrl == null || taskId == null) {
-        print('TranslationService: Missing taskId/statusUrl');
-        return null;
-      }
-
-      print('TranslationService: Task ID: $taskId — polling...');
-      return await _pollForAudio(statusUrl, taskId);
-    } catch (e) {
-      print('TranslationService: Exception — $e');
+  Future<Map<String, String>?> _buildHeaders() async {
+    User? user = FirebaseAuth.instance.currentUser;
+    user ??= (await FirebaseAuth.instance.signInAnonymously()).user;
+    if (user == null) {
+      debugPrint('TranslationService: No Firebase user available');
       return null;
     }
-  }
 
-  Future<Uint8List?> _pollForAudio(String statusUrl, String taskId,
-      {int maxAttempts = 40}) async {
-    for (int attempt = 0; attempt < maxAttempts; attempt++) {
-      // Fast at first, then slow down
-      await Future.delayed(Duration(milliseconds: attempt < 8 ? 250 : 500));
+    final now = DateTime.now();
+    if (_cachedIdToken == null ||
+        now.difference(_idTokenFetchedAt) > const Duration(minutes: 45)) {
+      _cachedIdToken = await user.getIdToken();
+      _idTokenFetchedAt = now;
+    }
 
+    if (_cachedAppCheckToken == null ||
+        now.difference(_appCheckFetchedAt) > const Duration(minutes: 8)) {
       try {
-        // Pre-signed S3 URL — no auth header needed
-        final resp = await http.get(Uri.parse(statusUrl));
-        final ct = resp.headers['content-type'] ?? '';
-        print('TranslationService: Poll ${attempt + 1}/$maxAttempts — '
-            'HTTP ${resp.statusCode}, bytes: ${resp.bodyBytes.length}, ct: $ct, '
-            'body: ${resp.body.length > 200 ? resp.body.substring(0, 200) : resp.body}');
-
-        if (resp.statusCode != 200) continue;
-
-        final data = jsonDecode(resp.body);
-        final finished  = data['finished']  == true;
-        final succeeded = data['succeeded'] == true;
-        final percent   = data['percent']   ?? 0;
-        final message   = data['message']   ?? '';
-        print('TranslationService: JSON finished=$finished, succeeded=$succeeded, '
-            'percent=$percent, message=$message');
-
-        if (finished && succeeded) {
-          final resultUrl = data['result'] as String?;
-          if (resultUrl == null) {
-            print('TranslationService: finished but no result URL');
-            return null;
-          }
-          print('TranslationService: Fetching from result URL: $resultUrl');
-          final audioResp = await http.get(Uri.parse(resultUrl));
-          print('TranslationService: Result URL — ${audioResp.statusCode}, '
-              '${audioResp.bodyBytes.length} bytes');
-          if (audioResp.statusCode == 200 && audioResp.bodyBytes.isNotEmpty) {
-            print('TranslationService: Audio fetched! ${audioResp.bodyBytes.length} bytes');
-            return audioResp.bodyBytes;
-          }
-          return null;
-        }
-
-        if (finished && !succeeded) {
-          print('TranslationService: Task failed — $message');
-          return null;
-        }
+        // Do not force refresh every call; this significantly reduces TTS latency.
+        _cachedAppCheckToken = await FirebaseAppCheck.instance.getToken(false);
       } catch (e) {
-        print('TranslationService: Poll error — $e');
+        // Some older/unsupported devices fail App Check token retrieval.
+        debugPrint('TranslationService: App Check token unavailable: $e');
+      } finally {
+        _appCheckFetchedAt = now;
       }
     }
-    print('TranslationService: Timed out after $maxAttempts polls');
-    return null;
+
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ${_cachedIdToken ?? ''}',
+    };
+    if (_cachedAppCheckToken != null && _cachedAppCheckToken!.isNotEmpty) {
+      headers['X-Firebase-AppCheck'] = _cachedAppCheckToken!;
+    }
+    return headers;
   }
 
-  bool _isMp3(Uint8List bytes) {
-    if (bytes.length < 4) return false;
-    // ID3 tag
-    if (bytes[0] == 0x49 && bytes[1] == 0x44 && bytes[2] == 0x33) return true;
-    // MPEG sync word
-    if (bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0) return true;
-    return false;
+  Future<Uint8List?> generateTranslation(
+    String text,
+    String targetLanguage, {
+    String? voiceName,
+  }) async {
+    final input = text.trim();
+    if (input.isEmpty || functionUrl.trim().isEmpty) {
+      return null;
+    }
+
+    try {
+      final headers = await _buildHeaders();
+      if (headers == null) {
+        return null;
+      }
+
+      final response = await _client.post(
+        Uri.parse(functionUrl),
+        headers: headers,
+        body: jsonEncode({
+          'text': input,
+          'targetLanguage': targetLanguage,
+          'skipTranslation': true,
+          'isMale': true,
+          'voiceName': voiceName,
+          'ttsProvider': 'narakeet',
+        }),
+      ).timeout(const Duration(seconds: 20));
+
+      if (response.statusCode != 200) {
+        debugPrint(
+            'TranslationService: Function error ${response.statusCode} ${response.body}');
+        return null;
+      }
+
+      final body = jsonDecode(response.body);
+      if (body is! Map<String, dynamic>) {
+        debugPrint('TranslationService: Unexpected response format');
+        return null;
+      }
+
+      final audioBase64 = body['audioContent'] as String?;
+      if (audioBase64 == null || audioBase64.isEmpty) {
+        debugPrint('TranslationService: No audioContent in response');
+        return null;
+      }
+
+      return base64Decode(audioBase64);
+    } catch (e) {
+      debugPrint('TranslationService: Exception $e');
+      return null;
+    }
   }
 }

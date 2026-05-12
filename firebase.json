@@ -20,7 +20,7 @@
       "android": {
         "default": {
           "projectId": "limpopo-voice-prod",
-          "appId": "1:587321848459:android:1fe7f5799cb9bf21895a8e",
+          "appId": "1:587321848459:android:0a07d4b151361a9c895a8e",
           "fileOutput": "android/app/google-services.json"
         }
       },
@@ -28,7 +28,7 @@
         "lib/firebase_options.dart": {
           "projectId": "limpopo-voice-prod",
           "configurations": {
-            "android": "1:587321848459:android:1fe7f5799cb9bf21895a8e"
+            "android": "1:587321848459:android:0a07d4b151361a9c895a8e"
           }
         }
       }

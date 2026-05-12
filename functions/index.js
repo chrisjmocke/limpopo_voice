@@ -1,6 +1,7 @@
 const { onRequest } = require("firebase-functions/v2/https");
 const { setGlobalOptions } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
+const crypto = require("crypto");
 const cors = require("cors")({ origin: true });
 
 setGlobalOptions({ region: "africa-south1" });
@@ -13,12 +14,19 @@ let ttsClient = null;
 let textToSpeech = null;
 let cachedVoices = null;
 let cachedVoicesAtMs = 0;
+const audioBase64MemoryCache = new Map();
 
 const VOICE_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_TEXT_LENGTH = Number(process.env.MAX_TEXT_LENGTH || 600);
 const MAX_CONTENT_LENGTH_BYTES = Number(process.env.MAX_CONTENT_LENGTH_BYTES || 32 * 1024);
+const AUDIO_MEMORY_CACHE_LIMIT = Number(process.env.AUDIO_MEMORY_CACHE_LIMIT || 400);
+const AUDIO_CACHE_MAX_TEXT_LENGTH = Number(process.env.AUDIO_CACHE_MAX_TEXT_LENGTH || 180);
+const AUDIO_CACHE_SIGNED_URL_TTL_HOURS = Number(process.env.AUDIO_CACHE_SIGNED_URL_TTL_HOURS || 24);
+const AUDIO_CACHE_OBJECT_PREFIX = String(process.env.AUDIO_CACHE_OBJECT_PREFIX || "tts-cache").trim();
+const PROCESS_SPEECH_MIN_INSTANCES = Number(process.env.PROCESS_SPEECH_MIN_INSTANCES || 1);
+const PROCESS_SPEECH_MAX_INSTANCES = Number(process.env.PROCESS_SPEECH_MAX_INSTANCES || 20);
 
-const KNOWN_TTS_PROVIDERS = ["google", "azure", "elevenlabs"];
+const KNOWN_TTS_PROVIDERS = ["narakeet", "google", "azure", "elevenlabs"];
 
 function getAllowedOrigins() {
     const raw = String(process.env.ALLOWED_ORIGINS || "").trim();
@@ -118,8 +126,277 @@ function buildGenderAttempts(requestedGender) {
 }
 
 function buildTtsProviderChain(requestedProvider) {
-    const preferred = String(requestedProvider || process.env.TTS_PROVIDER || "google").toLowerCase().trim();
+    const preferred = String(requestedProvider || process.env.TTS_PROVIDER || "narakeet").toLowerCase().trim();
+    // Strict Narakeet mode: when explicitly requested, do not silently switch voice providers.
+    if (preferred === "narakeet") {
+        return ["narakeet"];
+    }
     return [preferred, "google"].filter((v, i, arr) => KNOWN_TTS_PROVIDERS.includes(v) && arr.indexOf(v) === i);
+}
+
+function normalizeCacheText(text) {
+    return String(text || "")
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+function shouldCacheAudioText(text) {
+    const normalized = normalizeCacheText(text);
+    if (!normalized) return false;
+    if (normalized.length > AUDIO_CACHE_MAX_TEXT_LENGTH) return false;
+    // Phrase-style payloads cache better than long paragraphs.
+    const tokenCount = normalized.split(" ").filter(Boolean).length;
+    return tokenCount <= 40;
+}
+
+function buildAudioCacheKey({ text, targetLanguage, requestedVoiceName, provider }) {
+    const basis = [
+        String(provider || "narakeet").toLowerCase().trim(),
+        String(targetLanguage || "").toLowerCase().trim(),
+        String(requestedVoiceName || "").toLowerCase().trim(),
+        normalizeCacheText(text),
+    ].join("|");
+
+    const digest = crypto.createHash("sha1").update(basis).digest("hex");
+    return {
+        digest,
+        objectPath: `${AUDIO_CACHE_OBJECT_PREFIX}/narakeet/${digest}.mp3`,
+    };
+}
+
+function getMemoryCachedAudio(cacheKey) {
+    const hit = audioBase64MemoryCache.get(cacheKey);
+    if (!hit) return null;
+    // refresh LRU order
+    audioBase64MemoryCache.delete(cacheKey);
+    audioBase64MemoryCache.set(cacheKey, hit);
+    return hit;
+}
+
+function setMemoryCachedAudio(cacheKey, audioContent) {
+    if (!cacheKey || !audioContent) return;
+    audioBase64MemoryCache.delete(cacheKey);
+    audioBase64MemoryCache.set(cacheKey, {
+        audioContent,
+        cachedAtMs: Date.now(),
+    });
+
+    while (audioBase64MemoryCache.size > AUDIO_MEMORY_CACHE_LIMIT) {
+        const oldestKey = audioBase64MemoryCache.keys().next().value;
+        if (!oldestKey) break;
+        audioBase64MemoryCache.delete(oldestKey);
+    }
+}
+
+async function createSignedReadUrl(file) {
+    try {
+        const [url] = await file.getSignedUrl({
+            version: "v4",
+            action: "read",
+            expires: Date.now() + (AUDIO_CACHE_SIGNED_URL_TTL_HOURS * 60 * 60 * 1000),
+        });
+        return url;
+    } catch {
+        return null;
+    }
+}
+
+async function getCachedNarakeetAudio({ text, targetLanguage, requestedVoiceName }) {
+    if (!shouldCacheAudioText(text)) {
+        return null;
+    }
+
+    const { digest, objectPath } = buildAudioCacheKey({
+        text,
+        targetLanguage,
+        requestedVoiceName,
+        provider: "narakeet",
+    });
+
+    const memoryHit = getMemoryCachedAudio(digest);
+    if (memoryHit?.audioContent) {
+        return {
+            audioContent: memoryHit.audioContent,
+            cacheHit: true,
+            cacheLayer: "memory",
+            cacheKey: digest,
+            audioUrl: null,
+        };
+    }
+
+    try {
+        const bucket = admin.storage().bucket();
+        const file = bucket.file(objectPath);
+        const [exists] = await file.exists();
+        if (!exists) {
+            return null;
+        }
+
+        const [bytes] = await file.download();
+        if (!bytes?.length) {
+            return null;
+        }
+
+        const audioContent = Buffer.from(bytes).toString("base64");
+        setMemoryCachedAudio(digest, audioContent);
+
+        return {
+            audioContent,
+            cacheHit: true,
+            cacheLayer: "storage",
+            cacheKey: digest,
+            audioUrl: await createSignedReadUrl(file),
+        };
+    } catch (error) {
+        console.warn("Narakeet storage cache read failed:", error?.message || error);
+        return null;
+    }
+}
+
+async function putCachedNarakeetAudio({ text, targetLanguage, requestedVoiceName, audioContent }) {
+    if (!audioContent || !shouldCacheAudioText(text)) {
+        return { cacheKey: null, audioUrl: null };
+    }
+
+    const { digest, objectPath } = buildAudioCacheKey({
+        text,
+        targetLanguage,
+        requestedVoiceName,
+        provider: "narakeet",
+    });
+
+    setMemoryCachedAudio(digest, audioContent);
+
+    try {
+        const bucket = admin.storage().bucket();
+        const file = bucket.file(objectPath);
+        const [exists] = await file.exists();
+        if (!exists) {
+            const bytes = Buffer.from(audioContent, "base64");
+            await file.save(bytes, {
+                resumable: false,
+                metadata: {
+                    contentType: "audio/mpeg",
+                    cacheControl: "public,max-age=2592000",
+                    metadata: {
+                        cacheVersion: "v1",
+                    },
+                },
+            });
+        }
+
+        return {
+            cacheKey: digest,
+            audioUrl: await createSignedReadUrl(file),
+        };
+    } catch (error) {
+        console.warn("Narakeet storage cache write failed:", error?.message || error);
+        return { cacheKey: digest, audioUrl: null };
+    }
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function synthesizeWithNarakeet({ text, requestedVoiceName }) {
+    const narakeetApiKey = String(process.env.NARAKEET_API_KEY || "").trim();
+    const voice = String(requestedVoiceName || "Aletta").trim();
+
+    if (!narakeetApiKey) {
+        return {
+            audioContent: null,
+            voiceLanguageUsed: null,
+            voiceGenderUsed: null,
+            voiceNameUsed: voice,
+            ttsProviderUsed: "narakeet",
+        };
+    }
+
+    const submitUrl = `https://api.narakeet.com/text-to-speech/mp3?voice=${encodeURIComponent(voice)}`;
+    const submitResp = await fetch(submitUrl, {
+        method: "POST",
+        headers: {
+            "x-api-key": narakeetApiKey,
+            "Content-Type": "text/plain",
+        },
+        body: text,
+    });
+
+    if (!submitResp.ok) {
+        const details = await submitResp.text();
+        console.warn("Narakeet submit failed:", submitResp.status, details);
+        return {
+            audioContent: null,
+            voiceLanguageUsed: null,
+            voiceGenderUsed: null,
+            voiceNameUsed: voice,
+            ttsProviderUsed: "narakeet",
+        };
+    }
+
+    const submitJson = await submitResp.json();
+    const statusUrl = String(submitJson?.statusUrl || "").trim();
+    if (!statusUrl) {
+        return {
+            audioContent: null,
+            voiceLanguageUsed: null,
+            voiceGenderUsed: null,
+            voiceNameUsed: voice,
+            ttsProviderUsed: "narakeet",
+        };
+    }
+
+    for (let attempt = 0; attempt < 40; attempt++) {
+        await sleep(attempt < 8 ? 250 : 500);
+
+        const pollResp = await fetch(statusUrl, { method: "GET" });
+        if (!pollResp.ok) {
+            continue;
+        }
+
+        const pollJson = await pollResp.json();
+        const finished = pollJson?.finished === true;
+        const succeeded = pollJson?.succeeded === true;
+
+        if (finished && succeeded) {
+            const resultUrl = String(pollJson?.result || "").trim();
+            if (!resultUrl) {
+                break;
+            }
+
+            const audioResp = await fetch(resultUrl, { method: "GET" });
+            if (!audioResp.ok) {
+                break;
+            }
+
+            const audioBuffer = Buffer.from(await audioResp.arrayBuffer());
+            if (!audioBuffer.length) {
+                break;
+            }
+
+            return {
+                audioContent: audioBuffer.toString("base64"),
+                voiceLanguageUsed: null,
+                voiceGenderUsed: null,
+                voiceNameUsed: voice,
+                ttsProviderUsed: "narakeet",
+            };
+        }
+
+        if (finished && !succeeded) {
+            break;
+        }
+    }
+
+    return {
+        audioContent: null,
+        voiceLanguageUsed: null,
+        voiceGenderUsed: null,
+        voiceNameUsed: voice,
+        ttsProviderUsed: "narakeet",
+    };
 }
 
 // Geographic fallback for languages unsupported by Google Cloud TTS.
@@ -214,14 +491,69 @@ async function synthesizeBestSpeech({ text, requestedCode, requestedGender }) {
 
 async function synthesizeWithProviderChain({
     text,
+    targetLanguage,
     requestedCode,
     requestedGender,
     requestedProvider,
+    requestedVoiceName,
 }) {
     const providerChain = buildTtsProviderChain(requestedProvider);
     let lastResult = null;
 
     for (const provider of providerChain) {
+        if (provider === "narakeet") {
+            const cached = await getCachedNarakeetAudio({
+                text,
+                targetLanguage,
+                requestedVoiceName,
+            });
+
+            if (cached?.audioContent) {
+                return {
+                    audioContent: cached.audioContent,
+                    voiceLanguageUsed: null,
+                    voiceGenderUsed: null,
+                    voiceNameUsed: String(requestedVoiceName || "Aletta").trim(),
+                    ttsProviderUsed: "narakeet",
+                    ttsProviderChain: providerChain,
+                    cacheHit: true,
+                    cacheLayer: cached.cacheLayer,
+                    cacheKey: cached.cacheKey,
+                    audioUrl: cached.audioUrl,
+                };
+            }
+
+            const narakeetResult = await synthesizeWithNarakeet({
+                text,
+                requestedVoiceName,
+            });
+
+            const decorated = {
+                ...narakeetResult,
+                ttsProviderUsed: "narakeet",
+                ttsProviderChain: providerChain,
+                cacheHit: false,
+                cacheLayer: null,
+                cacheKey: null,
+                audioUrl: null,
+            };
+
+            if (decorated.audioContent) {
+                const stored = await putCachedNarakeetAudio({
+                    text,
+                    targetLanguage,
+                    requestedVoiceName,
+                    audioContent: decorated.audioContent,
+                });
+                decorated.cacheKey = stored.cacheKey;
+                decorated.audioUrl = stored.audioUrl;
+                return decorated;
+            }
+
+            lastResult = decorated;
+            continue;
+        }
+
         if (provider === "google") {
             const googleResult = await synthesizeBestSpeech({
                 text,
@@ -233,6 +565,10 @@ async function synthesizeWithProviderChain({
                 ...googleResult,
                 ttsProviderUsed: "google",
                 ttsProviderChain: providerChain,
+                cacheHit: false,
+                cacheLayer: null,
+                cacheKey: null,
+                audioUrl: null,
             };
 
             if (decorated.audioContent) {
@@ -418,7 +754,12 @@ Return ONLY the translated string.`;
     throw lastError || new Error("All Gemini models failed.");
 }
 
-exports.processSpeech = onRequest({ secrets: ["GEMINI_API_KEY"] }, (req, res) => {
+exports.processSpeech = onRequest({
+    secrets: ["GEMINI_API_KEY", "NARAKEET_API_KEY"],
+    minInstances: PROCESS_SPEECH_MIN_INSTANCES,
+    maxInstances: PROCESS_SPEECH_MAX_INSTANCES,
+    timeoutSeconds: 120,
+}, (req, res) => {
     cors(req, res, async () => {
         try {
             if (!enforceRequestGuardrails(req, res)) {
@@ -453,6 +794,8 @@ exports.processSpeech = onRequest({ secrets: ["GEMINI_API_KEY"] }, (req, res) =>
                 isMale,
                 model,
                 ttsProvider,
+                skipTranslation,
+                voiceName,
             } = req.body;
 
             const inputText = String(text || "").trim();
@@ -467,20 +810,30 @@ exports.processSpeech = onRequest({ secrets: ["GEMINI_API_KEY"] }, (req, res) =>
                 });
             }
 
-            const { translatedText, modelUsed } = await translateWithGemini(
-                inputText,
-                targetLanguage,
-                isRespectMode,
-                model,
-            );
+            const shouldSkipTranslation = skipTranslation === true;
+            let translatedText = inputText;
+            let modelUsed = null;
+
+            if (!shouldSkipTranslation) {
+                const translationResult = await translateWithGemini(
+                    inputText,
+                    targetLanguage,
+                    isRespectMode,
+                    model,
+                );
+                translatedText = translationResult.translatedText;
+                modelUsed = translationResult.modelUsed;
+            }
 
             const requestedCode = mapLanguageCode(targetLanguage);
             const requestedGender = mapGender(isMale !== false);
             const ttsResult = await synthesizeWithProviderChain({
                 text: translatedText,
+                targetLanguage,
                 requestedCode,
                 requestedGender,
                 requestedProvider: ttsProvider,
+                requestedVoiceName: voiceName,
             });
 
             res.status(200).send({
@@ -491,7 +844,12 @@ exports.processSpeech = onRequest({ secrets: ["GEMINI_API_KEY"] }, (req, res) =>
                 voiceNameUsed: ttsResult.voiceNameUsed,
                 ttsProviderUsed: ttsResult.ttsProviderUsed,
                 ttsProviderChain: ttsResult.ttsProviderChain,
+                cacheHit: ttsResult.cacheHit === true,
+                cacheLayer: ttsResult.cacheLayer || null,
+                cacheKey: ttsResult.cacheKey || null,
+                audioUrl: ttsResult.audioUrl || null,
                 modelUsed,
+                skipTranslation: shouldSkipTranslation,
                 status: "success",
             });
         } catch (error) {
@@ -631,6 +989,11 @@ exports.ttsProviderReadiness = onRequest((req, res) => {
                 google: {
                     configured: true,
                     notes: "Current production provider. Broad coverage but limited truly native African voices.",
+                },
+                narakeet: {
+                    configured: Boolean(String(process.env.NARAKEET_API_KEY || "").trim()),
+                    notes: "High quality named voices used by the mobile app.",
+                    requiredSecrets: ["NARAKEET_API_KEY"],
                 },
                 azure: {
                     configured: false,
