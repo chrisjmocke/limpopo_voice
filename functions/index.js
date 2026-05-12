@@ -995,16 +995,7 @@ exports.ttsProviderReadiness = onRequest((req, res) => {
                     notes: "High quality named voices used by the mobile app.",
                     requiredSecrets: ["NARAKEET_API_KEY"],
                 },
-                azure: {
-                    configured: false,
-                    notes: "Recommended first expansion target for wider native African neural voice coverage.",
-                    requiredSecrets: ["AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION"],
-                },
-                elevenlabs: {
-                    configured: false,
-                    notes: "Good quality for custom voices; evaluate language authenticity carefully.",
-                    requiredSecrets: ["ELEVENLABS_API_KEY"],
-                },
+
             },
             requestedProviderChainExample: buildTtsProviderChain(req.query.provider),
         });
