@@ -561,11 +561,12 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _consumeUsageAllowance() {
     if (_credits >= _usageCostSecs) {
       setState(() => _credits -= _usageCostSecs);
+      _showSnack('Used $_usageCostSecs sec | Balance: $_credits sec remaining');
       return true;
     }
     if (_freeTryTokens > 0) {
       setState(() => _freeTryTokens -= 1);
-      _showSnack('Used 30 sec free try ($_freeTryTokens left).');
+      _showSnack('Used 30 sec free try ($_freeTryTokens tries left).');
       return true;
     }
     _showCreditTiers();
@@ -676,19 +677,22 @@ class _HomeScreenState extends State<HomeScreen> {
     if (safeForSpeech.trim().isEmpty) return;
     try {
       final voiceName = _voiceNames[language] ?? 'Aletta';
+      debugPrint('Requesting audio: text="$safeForSpeech", language=$language, voice=$voiceName');
       final audioData = await _translationService.generateTranslation(
         safeForSpeech,
         language,
         voiceName: voiceName,
       );
       if (audioData != null && audioData.isNotEmpty) {
+        debugPrint('Audio received: ${audioData.length} bytes, playing...');
         await _audioPlayer.play(BytesSource(audioData));
       } else {
-        _showSnack('Narakeet audio unavailable. Please try again.');
+        debugPrint('Narakeet returned no audio data (null or empty)');
+        _showSnack('Narakeet unavailable. Check connection & try again.');
       }
     } catch (e) {
       debugPrint('Audio playback error: $e');
-      _showSnack('Narakeet audio error. Please try again.');
+      _showSnack('Audio error: $e');
     }
   }
 
@@ -711,14 +715,20 @@ class _HomeScreenState extends State<HomeScreen> {
 
       debugPrint(
           'Requesting chunked audio (${chunks.length} chunks) for language: $_selectedOutputLang, voice: $voiceName');
+      for (int i = 0; i < chunks.length; i++) {
+        debugPrint('  Chunk ${i + 1}: \"${chunks[i]}\"');
+      }
 
       // Kick off all chunk requests immediately so later chunks are ready sooner.
       final chunkRequests = chunks
-          .map((chunk) => _translationService.generateTranslation(
-                chunk,
-                _selectedOutputLang,
-                voiceName: voiceName,
-              ))
+          .map((chunk) {
+            debugPrint('Calling Narakeet for chunk: \"$chunk\"');
+            return _translationService.generateTranslation(
+              chunk,
+              _selectedOutputLang,
+              voiceName: voiceName,
+            );
+          })
           .toList(growable: false);
 
       bool playedAny = false;
@@ -727,11 +737,14 @@ class _HomeScreenState extends State<HomeScreen> {
       for (int i = 0; i < chunkRequests.length; i++) {
         final audioData = await chunkRequests[i].timeout(
           i == 0 ? _firstChunkFetchTimeout : _nextChunkFetchTimeout,
-          onTimeout: () => null,
+          onTimeout: () {
+            debugPrint('Chunk ${i + 1} request timed out');
+            return null;
+          },
         );
         if (audioData == null || audioData.isEmpty) {
           debugPrint(
-              'Chunk ${i + 1}/${chunkRequests.length} returned no audio');
+              'Chunk ${i + 1}/${chunkRequests.length} returned no audio (null/empty)');
           continue;
         }
 
@@ -750,8 +763,8 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       if (!playedAny) {
-        _showSnack('Narakeet audio unavailable. Please try again.');
-      }
+        debugPrint('ERROR: No chunks were successfully converted to audio. Check Narakeet API key and network.');
+        _showSnack('Narakeet unavailable. Check API key & network.');
     } catch (e) {
       debugPrint('Audio playback error: $e');
       _showSnack('Narakeet audio error. Please try again.');
