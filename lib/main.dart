@@ -765,6 +765,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!playedAny) {
         debugPrint('ERROR: No chunks were successfully converted to audio. Check Narakeet API key and network.');
         _showSnack('Narakeet unavailable. Check API key & network.');
+      }
     } catch (e) {
       debugPrint('Audio playback error: $e');
       _showSnack('Narakeet audio error. Please try again.');
