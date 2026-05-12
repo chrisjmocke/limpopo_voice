@@ -565,10 +565,10 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     if (_freeTryTokens > 0) {
       setState(() => _freeTryTokens -= 1);
-      _showSnack('Used 1 free try token ($_freeTryTokens left).');
+      _showSnack('Used 30 sec free try ($_freeTryTokens left).');
       return true;
     }
-    _showSnack('No balance left. Please top up to continue.');
+    _showCreditTiers();
     return false;
   }
 
@@ -928,7 +928,7 @@ class _HomeScreenState extends State<HomeScreen> {
               alignment: Alignment.centerRight,
               child: Chip(
                   label: Text(
-                      'Balance: $_credits sec | Free tries: $_freeTryTokens')),
+                      'Balance: $_credits sec | 30 sec free try')),
             ),
             const SizedBox(height: 16),
             ..._tiers.map((tier) => Padding(
@@ -998,7 +998,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: Icon(Icons.account_balance_wallet,
                     size: 16,
                     color: isDark ? Colors.white : const Color(0xFF1E3C72)),
-                label: Text('$_credits s | $_freeTryTokens tries',
+                label: Text('$_credits s | 30 sec free try',
                     style: TextStyle(
                         color: isDark ? Colors.white : const Color(0xFF1E3C72),
                         fontWeight: FontWeight.bold)),
