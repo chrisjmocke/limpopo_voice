@@ -1241,6 +1241,15 @@ class _HomeScreenState extends State<HomeScreen> {
                         onPressed: processPayment,
                         child: const Text('Pay Now'),
                       ),
+                      const SizedBox(height: 8),
+                      OutlinedButton(
+                        onPressed: () {
+                          if (Navigator.of(payContext).canPop()) {
+                            Navigator.of(payContext).pop(true);
+                          }
+                        },
+                        child: const Text('Sandbox: Add Credits Now'),
+                      ),
                     ],
                   ),
                 );
@@ -1284,7 +1293,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (paid == true) {
       setState(() => _credits += tier.secs);
-      _showSnack('Payment complete. Added ${tier.secs} sec (${tier.name}).');
+      _showSnack('Credits added: ${tier.secs} sec (${tier.name}) [Sandbox].');
       try {
         await FirebaseFirestore.instance.collection('payment_events').add({
           'tierName': tier.name,
