@@ -304,14 +304,17 @@ async function synthesizeWithNarakeet({ text, requestedVoiceName }) {
     const narakeetApiKey = String(process.env.NARAKEET_API_KEY || "").trim();
     const voice = String(requestedVoiceName || "Aletta").trim();
 
+    const failedResult = {
+        audioContent: null,
+        voiceLanguageUsed: null,
+        voiceGenderUsed: null,
+        voiceNameUsed: voice,
+        ttsProviderUsed: "narakeet",
+    };
+
     if (!narakeetApiKey) {
-        return {
-            audioContent: null,
-            voiceLanguageUsed: null,
-            voiceGenderUsed: null,
-            voiceNameUsed: voice,
-            ttsProviderUsed: "narakeet",
-        };
+        console.warn("Narakeet key missing: NARAKEET_API_KEY is empty in runtime secrets.");
+        return failedResult;
     }
 
     const submitUrl = `https://api.narakeet.com/text-to-speech/mp3?voice=${encodeURIComponent(voice)}`;
@@ -320,6 +323,7 @@ async function synthesizeWithNarakeet({ text, requestedVoiceName }) {
         headers: {
             "x-api-key": narakeetApiKey,
             "Content-Type": "text/plain",
+            "Accept": "application/json, audio/mpeg, audio/*",
         },
         body: text,
     });
@@ -327,52 +331,106 @@ async function synthesizeWithNarakeet({ text, requestedVoiceName }) {
     if (!submitResp.ok) {
         const details = await submitResp.text();
         console.warn("Narakeet submit failed:", submitResp.status, details);
-        return {
-            audioContent: null,
-            voiceLanguageUsed: null,
-            voiceGenderUsed: null,
-            voiceNameUsed: voice,
-            ttsProviderUsed: "narakeet",
-        };
+        return failedResult;
     }
 
-    const submitJson = await submitResp.json();
+    // Support synchronous Narakeet responses that return audio bytes directly.
+    const submitContentType = String(submitResp.headers.get("content-type") || "").toLowerCase();
+    if (submitContentType.includes("audio/")) {
+        const submitAudioBuffer = Buffer.from(await submitResp.arrayBuffer());
+        if (submitAudioBuffer.length) {
+            return {
+                audioContent: submitAudioBuffer.toString("base64"),
+                voiceLanguageUsed: null,
+                voiceGenderUsed: null,
+                voiceNameUsed: voice,
+                ttsProviderUsed: "narakeet",
+            };
+        }
+        console.warn("Narakeet submit returned audio content-type but empty body.");
+        return failedResult;
+    }
+
+    let submitJson = null;
+    try {
+        submitJson = await submitResp.json();
+    } catch (error) {
+        const raw = await submitResp.text().catch(() => "");
+        console.warn("Narakeet submit JSON parse failed:", error?.message || error, raw);
+        return failedResult;
+    }
+
     const statusUrl = String(submitJson?.statusUrl || "").trim();
     if (!statusUrl) {
-        return {
-            audioContent: null,
-            voiceLanguageUsed: null,
-            voiceGenderUsed: null,
-            voiceNameUsed: voice,
-            ttsProviderUsed: "narakeet",
-        };
+        console.warn("Narakeet submit response missing statusUrl.", submitJson);
+        return failedResult;
     }
 
     for (let attempt = 0; attempt < 40; attempt++) {
         await sleep(attempt < 8 ? 250 : 500);
 
-        const pollResp = await fetch(statusUrl, { method: "GET" });
+        const pollResp = await fetch(statusUrl, {
+            method: "GET",
+            headers: {
+                "x-api-key": narakeetApiKey,
+                "Accept": "application/json, audio/mpeg, audio/*",
+            },
+        });
         if (!pollResp.ok) {
+            console.warn(`Narakeet poll attempt ${attempt + 1} failed with status ${pollResp.status}.`);
             continue;
         }
 
-        const pollJson = await pollResp.json();
+        const pollContentType = String(pollResp.headers.get("content-type") || "").toLowerCase();
+        if (pollContentType.includes("audio/")) {
+            const directAudioBuffer = Buffer.from(await pollResp.arrayBuffer());
+            if (directAudioBuffer.length) {
+                return {
+                    audioContent: directAudioBuffer.toString("base64"),
+                    voiceLanguageUsed: null,
+                    voiceGenderUsed: null,
+                    voiceNameUsed: voice,
+                    ttsProviderUsed: "narakeet",
+                };
+            }
+            console.warn("Narakeet poll returned audio content-type but empty body.");
+            break;
+        }
+
+        let pollJson = null;
+        try {
+            pollJson = await pollResp.json();
+        } catch (error) {
+            const raw = await pollResp.text().catch(() => "");
+            console.warn("Narakeet poll JSON parse failed:", error?.message || error, raw);
+            continue;
+        }
+
         const finished = pollJson?.finished === true;
         const succeeded = pollJson?.succeeded === true;
 
         if (finished && succeeded) {
             const resultUrl = String(pollJson?.result || "").trim();
             if (!resultUrl) {
+                console.warn("Narakeet poll finished/succeeded but missing result URL.", pollJson);
                 break;
             }
 
-            const audioResp = await fetch(resultUrl, { method: "GET" });
+            const audioResp = await fetch(resultUrl, {
+                method: "GET",
+                headers: {
+                    "x-api-key": narakeetApiKey,
+                    "Accept": "audio/mpeg, audio/*",
+                },
+            });
             if (!audioResp.ok) {
+                console.warn("Narakeet audio download failed:", audioResp.status);
                 break;
             }
 
             const audioBuffer = Buffer.from(await audioResp.arrayBuffer());
             if (!audioBuffer.length) {
+                console.warn("Narakeet audio download returned empty payload.");
                 break;
             }
 
@@ -390,13 +448,7 @@ async function synthesizeWithNarakeet({ text, requestedVoiceName }) {
         }
     }
 
-    return {
-        audioContent: null,
-        voiceLanguageUsed: null,
-        voiceGenderUsed: null,
-        voiceNameUsed: voice,
-        ttsProviderUsed: "narakeet",
-    };
+    return failedResult;
 }
 
 // Geographic fallback for languages unsupported by Google Cloud TTS.

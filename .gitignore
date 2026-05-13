@@ -19,6 +19,9 @@ android/local.properties
 android/key.properties
 android/app/*.keystore
 android/app/*.jks
+*.apk
+*.aab
+distribution_packages/
 
 # --- iOS ---
 ios/Pods/

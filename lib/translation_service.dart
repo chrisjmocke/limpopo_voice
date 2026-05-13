@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
@@ -15,6 +14,18 @@ class TranslationService {
   DateTime _appCheckFetchedAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   TranslationService({required this.functionUrl});
+
+  Future<void> _refreshIdToken() async {
+    try {
+      User? user = FirebaseAuth.instance.currentUser;
+      user ??= (await FirebaseAuth.instance.signInAnonymously()).user;
+      if (user == null) return;
+      _cachedIdToken = await user.getIdToken(true);
+      _idTokenFetchedAt = DateTime.now();
+    } catch (e) {
+      debugPrint('TranslationService: Token refresh failed: $e');
+    }
+  }
 
   Future<void> primeSession() async {
     try {
@@ -89,7 +100,50 @@ class TranslationService {
           'voiceName': voiceName,
           'ttsProvider': 'narakeet',
         }),
-      ).timeout(const Duration(seconds: 20));
+      ).timeout(const Duration(seconds: 45));
+
+      if (response.statusCode == 401) {
+        // Token may be stale/invalid after app resume; refresh once and retry.
+        await _refreshIdToken();
+        final retryHeaders = await _buildHeaders();
+        if (retryHeaders == null) {
+          debugPrint('TranslationService: Unable to rebuild headers after 401');
+          return null;
+        }
+
+        final retryResponse = await _client.post(
+          Uri.parse(functionUrl),
+          headers: retryHeaders,
+          body: jsonEncode({
+            'text': input,
+            'targetLanguage': targetLanguage,
+            'skipTranslation': true,
+            'isMale': true,
+            'voiceName': voiceName,
+            'ttsProvider': 'narakeet',
+          }),
+        ).timeout(const Duration(seconds: 45));
+
+        if (retryResponse.statusCode != 200) {
+          debugPrint(
+              'TranslationService: Function error ${retryResponse.statusCode} ${retryResponse.body}');
+          return null;
+        }
+
+        final retryBody = jsonDecode(retryResponse.body);
+        if (retryBody is! Map<String, dynamic>) {
+          debugPrint('TranslationService: Unexpected retry response format');
+          return null;
+        }
+
+        final retryAudioBase64 = retryBody['audioContent'] as String?;
+        if (retryAudioBase64 == null || retryAudioBase64.isEmpty) {
+          debugPrint('TranslationService: No audioContent in retry response');
+          return null;
+        }
+
+        return base64Decode(retryAudioBase64);
+      }
 
       if (response.statusCode != 200) {
         debugPrint(

@@ -1,13 +1,16 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:http/http.dart' as http;
+import 'package:payfast/payfast.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
@@ -91,12 +94,19 @@ class _CreditTier {
 }
 
 const _tiers = [
-  _CreditTier('Micro', 30, 'R10.00'),
-  _CreditTier('Basic', 180, 'R50.00'),
-  _CreditTier('Pro', 600, 'R170.00'),
-  _CreditTier('Enterprise', 1500, 'R420.00')
+  _CreditTier('Micro', 30, 'R9.99'),
+  _CreditTier('Basic', 180, 'R49.99'),
+  _CreditTier('Pro', 600, 'R169.99'),
+  _CreditTier('Enterprise', 1500, 'R419.99')
 ];
 const int _usageCostSecs = 5;
+const int _freeTrySecs = 30;
+const bool _enableClientFirestoreCache = false;
+const String _payFastMerchantId = '10004002';
+const String _payFastMerchantKey = 'q1cd2rdny4a53';
+const String _payFastPassPhrase = 'payfast';
+const String _payFastSandboxScriptUrl =
+  'https://youngcet.github.io/sandbox_payfast_onsite_payments/';
 
 class HistoryItem {
   final String inputLang, outputLang, original, translated;
@@ -175,8 +185,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   static const int _firstSpeechChunkMaxChars = 42;
   static const int _speechChunkMaxChars = 90;
-  static const Duration _firstChunkFetchTimeout = Duration(seconds: 8);
-  static const Duration _nextChunkFetchTimeout = Duration(seconds: 20);
+  static const Duration _firstChunkFetchTimeout = Duration(seconds: 55);
+  static const Duration _nextChunkFetchTimeout = Duration(seconds: 55);
 
   static final RegExp _offensiveWordRegex = RegExp(
     '\\b(${_offensiveWords.map(RegExp.escape).join('|')})\\b',
@@ -283,7 +293,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String _spokenLang = '';
   String _translatedLang = '';
   final TextEditingController _tttController = TextEditingController();
-  int _credits = 0;
+  int _credits = 30;
   int _freeTryTokens = 2;
   final List<HistoryItem> _history = [];
   String _selectedLearnLang = 'Sepedi';
@@ -423,9 +433,161 @@ class _HomeScreenState extends State<HomeScreen> {
     _configureAudioPlayback();
     _initSpeech();
     _tttController.addListener(_onInputChanged);
+    _checkInstallIdAndFreeTrial();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showDisclaimerIfFirstInstall();
     });
+  }
+
+  String _generateUUID() {
+    const chars = 'abcdef0123456789';
+    final random = Random();
+    return List.generate(32, (_) => chars[random.nextInt(chars.length)]).join();
+  }
+
+  Future<void> _checkInstallIdAndFreeTrial() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      const installIdKey = 'limpopo_install_id_v1';
+      
+      String? installId = prefs.getString(installIdKey);
+      if (installId == null) {
+        installId = _generateUUID();
+        await prefs.setString(installIdKey, installId);
+        debugPrint('Generated new install ID: $installId');
+      } else {
+        debugPrint('Retrieved existing install ID: $installId');
+      }
+
+      // Check Firebase if this device has already used free trial
+      final db = FirebaseFirestore.instance;
+      final docRef = db.collection('device_installs').doc(installId);
+      final docSnapshot = await docRef.get();
+      
+      if (docSnapshot.exists && docSnapshot.data()?['used_free_trial'] == true) {
+        debugPrint('Install ID $installId already used free trial - disabling free tokens');
+        setState(() => _freeTryTokens = 0);
+      } else {
+        // First time - mark for future reinstalls
+        await docRef.set({
+          'used_free_trial': true,
+          'first_seen': FieldValue.serverTimestamp(),
+          'last_seen': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true)).catchError((e) {
+          debugPrint('Failed to record device install: $e');
+        });
+        debugPrint('Install ID $installId registered for first free trial use');
+      }
+    } catch (e) {
+      debugPrint('Error checking install ID: $e');
+      // On error, allow free trial to proceed (don't block user)
+    }
+  }
+
+  String _getCacheKey(String text, String language, String voice) {
+    final normalized = text.toLowerCase().trim();
+    return '${normalized}_${language}_$voice';
+  }
+
+  bool _isFirestorePermissionDenied(Object error) {
+    final msg = error.toString().toLowerCase();
+    return msg.contains('permission-denied') ||
+        msg.contains('missing or insufficient permissions');
+  }
+
+  Future<String?> _getCachedTranslation(String text, String language) async {
+    if (!_enableClientFirestoreCache) return null;
+    try {
+      final db = FirebaseFirestore.instance;
+      final cacheKey = _getCacheKey(text, language, '');
+      final docSnapshot = await db
+          .collection('cache_translations')
+          .doc(cacheKey)
+          .get();
+      
+      if (docSnapshot.exists) {
+        final translation = docSnapshot.data()?['translation'] as String?;
+        debugPrint('Cache HIT for translation: "$text" -> "$translation"');
+        return translation;
+      }
+      return null;
+    } catch (e) {
+      if (!_isFirestorePermissionDenied(e)) {
+        debugPrint('Error fetching cached translation: $e');
+      }
+      return null;
+    }
+  }
+
+  Future<void> _saveCacheTranslation(String text, String language, String translation) async {
+    if (!_enableClientFirestoreCache) return;
+    try {
+      final db = FirebaseFirestore.instance;
+      final cacheKey = _getCacheKey(text, language, '');
+      await db.collection('cache_translations').doc(cacheKey).set({
+        'original_text': text,
+        'language': language,
+        'translation': translation,
+        'cached_at': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true)).catchError((e) {
+        if (!_isFirestorePermissionDenied(e)) {
+          debugPrint('Failed to cache translation: $e');
+        }
+      });
+    } catch (e) {
+      if (!_isFirestorePermissionDenied(e)) {
+        debugPrint('Error saving cached translation: $e');
+      }
+    }
+  }
+
+  Future<String?> _getCachedAudio(String text, String language, String voice) async {
+    if (!_enableClientFirestoreCache) return null;
+    try {
+      final db = FirebaseFirestore.instance;
+      final cacheKey = _getCacheKey(text, language, voice);
+      final docSnapshot = await db
+          .collection('cache_audio')
+          .doc(cacheKey)
+          .get();
+      
+      if (docSnapshot.exists) {
+        final audioBase64 = docSnapshot.data()?['audio_base64'] as String?;
+        if (audioBase64 != null && audioBase64.isNotEmpty) {
+          debugPrint('Cache HIT for audio: "$text" (language=$language, voice=$voice)');
+          return audioBase64;
+        }
+      }
+      return null;
+    } catch (e) {
+      if (!_isFirestorePermissionDenied(e)) {
+        debugPrint('Error fetching cached audio: $e');
+      }
+      return null;
+    }
+  }
+
+  Future<void> _saveCacheAudio(String text, String language, String voice, String audioBase64) async {
+    if (!_enableClientFirestoreCache) return;
+    try {
+      final db = FirebaseFirestore.instance;
+      final cacheKey = _getCacheKey(text, language, voice);
+      await db.collection('cache_audio').doc(cacheKey).set({
+        'original_text': text,
+        'language': language,
+        'voice': voice,
+        'audio_base64': audioBase64,
+        'cached_at': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true)).catchError((e) {
+        if (!_isFirestorePermissionDenied(e)) {
+          debugPrint('Failed to cache audio: $e');
+        }
+      });
+    } catch (e) {
+      if (!_isFirestorePermissionDenied(e)) {
+        debugPrint('Error saving cached audio: $e');
+      }
+    }
   }
 
   Future<void> _configureAudioPlayback() async {
@@ -566,7 +728,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     if (_freeTryTokens > 0) {
       setState(() => _freeTryTokens -= 1);
-      _showSnack('Used 30 sec free try ($_freeTryTokens tries left).');
+      _showSnack('Used $_freeTrySecs sec free try ($_freeTryTokens tries left).');
       return true;
     }
     _showCreditTiers();
@@ -623,6 +785,14 @@ class _HomeScreenState extends State<HomeScreen> {
     final needsPhonetics = _selectedOutputLang == 'Hindi' ||
         _selectedOutputLang == 'Urdu' ||
         _selectedOutputLang == 'Mandarin';
+
+    // Check cache first
+    final cached = await _getCachedTranslation(input, _selectedOutputLang);
+    if (cached != null && cached.isNotEmpty) {
+      _phoneticText = '';
+      return cached;
+    }
+
     final uri = Uri.parse(
       'https://translate.googleapis.com/translate_a/single?client=gtx&sl=$source&tl=$target&dt=t${needsPhonetics ? '&dt=rm' : ''}&q=${Uri.encodeQueryComponent(input)}',
     );
@@ -662,7 +832,9 @@ class _HomeScreenState extends State<HomeScreen> {
           _phoneticText = '';
         }
 
-        return translated.trim().isEmpty ? input : translated.trim();
+        final result = translated.trim().isEmpty ? input : translated.trim();
+        await _saveCacheTranslation(input, _selectedOutputLang, result);
+        return result;
       }
       _phoneticText = '';
       return input;
@@ -678,11 +850,7 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final voiceName = _voiceNames[language] ?? 'Aletta';
       debugPrint('Requesting audio: text="$safeForSpeech", language=$language, voice=$voiceName');
-      final audioData = await _translationService.generateTranslation(
-        safeForSpeech,
-        language,
-        voiceName: voiceName,
-      );
+      final audioData = await _generateAudioWithCache(safeForSpeech, language, voiceName);
       if (audioData != null && audioData.isNotEmpty) {
         debugPrint('Audio received: ${audioData.length} bytes, playing...');
         await _audioPlayer.play(BytesSource(audioData));
@@ -694,6 +862,29 @@ class _HomeScreenState extends State<HomeScreen> {
       debugPrint('Audio playback error: $e');
       _showSnack('Audio error: $e');
     }
+  }
+
+  Future<Uint8List?> _generateAudioWithCache(String text, String language, String voice) async {
+    // Check cache first
+    final cachedBase64 = await _getCachedAudio(text, language, voice);
+    if (cachedBase64 != null) {
+      return base64Decode(cachedBase64);
+    }
+
+    // Not in cache, generate new audio
+    final audioData = await _translationService.generateTranslation(
+      text,
+      language,
+      voiceName: voice,
+    );
+
+    // Save to cache if successful
+    if (audioData != null && audioData.isNotEmpty) {
+      final audioBase64 = base64Encode(audioData);
+      await _saveCacheAudio(text, language, voice, audioBase64);
+    }
+
+    return audioData;
   }
 
   Future<void> _speakTranslatedText(String text) async {
@@ -716,18 +907,14 @@ class _HomeScreenState extends State<HomeScreen> {
       debugPrint(
           'Requesting chunked audio (${chunks.length} chunks) for language: $_selectedOutputLang, voice: $voiceName');
       for (int i = 0; i < chunks.length; i++) {
-        debugPrint('  Chunk ${i + 1}: \"${chunks[i]}\"');
+        debugPrint('  Chunk ${i + 1}: "${chunks[i]}"');
       }
 
       // Kick off all chunk requests immediately so later chunks are ready sooner.
       final chunkRequests = chunks
           .map((chunk) {
-            debugPrint('Calling Narakeet for chunk: \"$chunk\"');
-            return _translationService.generateTranslation(
-              chunk,
-              _selectedOutputLang,
-              voiceName: voiceName,
-            );
+            debugPrint('Calling Narakeet for chunk: "${chunk}"');
+            return _generateAudioWithCache(chunk, _selectedOutputLang, voiceName);
           })
           .toList(growable: false);
 
@@ -941,8 +1128,7 @@ class _HomeScreenState extends State<HomeScreen> {
             Align(
               alignment: Alignment.centerRight,
               child: Chip(
-                  label: Text(
-                      'Balance: $_credits sec | 30 sec free try')),
+                  label: Text('Balance: $_credits sec')),
             ),
             const SizedBox(height: 16),
             ..._tiers.map((tier) => Padding(
@@ -957,8 +1143,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     onPressed: () {
                       Navigator.pop(ctx);
-                      setState(() => _credits += tier.secs);
-                      _showSnack('Topped up ${tier.secs}sec (${tier.price})');
+                      _startSandboxTierPayment(tier);
                     },
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -972,7 +1157,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
                         const SizedBox(width: 8),
-                        Text('${tier.secs}sec'),
+                        Text('${tier.secs} sec'),
                         const SizedBox(width: 8),
                         Text(tier.price,
                             style: const TextStyle(
@@ -986,6 +1171,134 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
+  }
+
+  double _tierAmountFromPrice(String price) {
+    final cleaned = price.replaceAll(RegExp(r'[^0-9.]'), '');
+    return double.tryParse(cleaned) ?? 0;
+  }
+
+  Future<void> _startSandboxTierPayment(_CreditTier tier) async {
+    final amount = _tierAmountFromPrice(tier.price);
+    if (amount <= 0) {
+      _showSnack('Invalid tier amount.');
+      return;
+    }
+
+    final paymentId =
+        'LV-${tier.name}-${DateTime.now().millisecondsSinceEpoch}';
+
+    final paid = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (payContext) => Scaffold(
+          appBar: AppBar(title: Text('PayFast Sandbox - ${tier.name}')),
+          body: SafeArea(
+            child: PayFast(
+              useSandBox: true,
+              passPhrase: _payFastPassPhrase,
+              onsiteActivationScriptUrl: _payFastSandboxScriptUrl,
+              paymentSummaryBuilder: (context, data, processPayment) {
+                return Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(10),
+                            child: Image.asset(
+                              'assets/thumb.png',
+                              width: 48,
+                              height: 48,
+                              fit: BoxFit.cover,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Limpopo Voice - ${tier.name}',
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text('${tier.secs} sec top-up'),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Text('Amount: R${amount.toStringAsFixed(2)}'),
+                      const SizedBox(height: 14),
+                      ElevatedButton(
+                        onPressed: processPayment,
+                        child: const Text('Pay Now'),
+                      ),
+                    ],
+                  ),
+                );
+              },
+              data: {
+                'merchant_id': _payFastMerchantId,
+                'merchant_key': _payFastMerchantKey,
+                'name_first': 'Limpopo',
+                'name_last': 'Voice',
+                'email_address': 'sandbox@limpopovoice.app',
+                'm_payment_id': paymentId,
+                'amount': amount.toStringAsFixed(2),
+                'item_name': 'LV Studio: ${tier.name}',
+                'return_url': 'https://yoursite.com/success',
+                'cancel_url': 'https://yoursite.com/cancel',
+                'notify_url': 'https://yoursite.com/notify',
+              },
+              onPaymentCompleted: (_) {
+                if (Navigator.of(payContext).canPop()) {
+                  Navigator.of(payContext).pop(true);
+                }
+              },
+              onPaymentCancelled: () {
+                if (Navigator.of(payContext).canPop()) {
+                  Navigator.of(payContext).pop(false);
+                }
+              },
+              onError: (msg) {
+                debugPrint('PayFast error: $msg');
+                if (Navigator.of(payContext).canPop()) {
+                  Navigator.of(payContext).pop(false);
+                }
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+
+    if (paid == true) {
+      setState(() => _credits += tier.secs);
+      _showSnack('Payment complete. Added ${tier.secs} sec (${tier.name}).');
+      try {
+        await FirebaseFirestore.instance.collection('payment_events').add({
+          'tierName': tier.name,
+          'secondsAdded': tier.secs,
+          'amountPaid': amount,
+          'status': 'completed_sandbox',
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      } catch (_) {
+        // Do not block crediting if telemetry logging fails.
+      }
+    } else {
+      _showSnack('Payment cancelled. No credits added.');
+    }
   }
 
   @override
@@ -1012,7 +1325,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: Icon(Icons.account_balance_wallet,
                     size: 16,
                     color: isDark ? Colors.white : const Color(0xFF1E3C72)),
-                label: Text('$_credits s | 30 sec free try',
+                label: Text('$_credits sec',
                     style: TextStyle(
                         color: isDark ? Colors.white : const Color(0xFF1E3C72),
                         fontWeight: FontWeight.bold)),

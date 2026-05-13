@@ -29,8 +29,8 @@ android {
     defaultConfig {
         applicationId = "com.limpopovoice.translate"
 
-        // 🔥 IMPORTANT FIX
-        minSdk = flutter.minSdkVersion
+        // PayFast requires API 21+.
+        minSdk = maxOf(flutter.minSdkVersion, 21)
 
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
