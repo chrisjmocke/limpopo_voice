@@ -40,12 +40,11 @@ dev_dependencies:
 flutter_launcher_icons:
   android: true
   ios: false
-  image_path: assets/thumb.png
+  image_path: assets/letstalkmainblack.png
 
 flutter:
   uses-material-design: true
   assets:
-    - assets/lv.png
-    - assets/lv2.png
-    - assets/thumb.png
+    - assets/letstalkmainblack.png
+    - assets/letstalkmainwhite.png
     - .env

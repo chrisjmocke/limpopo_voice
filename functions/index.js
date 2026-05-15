@@ -27,6 +27,16 @@ const PROCESS_SPEECH_MIN_INSTANCES = Number(process.env.PROCESS_SPEECH_MIN_INSTA
 const PROCESS_SPEECH_MAX_INSTANCES = Number(process.env.PROCESS_SPEECH_MAX_INSTANCES || 20);
 
 const KNOWN_TTS_PROVIDERS = ["narakeet", "google", "azure", "elevenlabs"];
+const GOOGLE_NEURAL2_ROUTE_LANGUAGES = new Set([
+    "english",
+    "dutch",
+    "french",
+    "german",
+    "mandarin",
+    "hindi",
+    "urdu",
+    "portuguese",
+]);
 
 function getAllowedOrigins() {
     const raw = String(process.env.ALLOWED_ORIGINS || "").trim();
@@ -125,8 +135,28 @@ function buildGenderAttempts(requestedGender) {
     return attempts.filter((v, i, arr) => typeof v === "string" && arr.indexOf(v) === i);
 }
 
-function buildTtsProviderChain(requestedProvider) {
+function shouldRouteToGoogleNeural2(targetLanguage) {
+    return GOOGLE_NEURAL2_ROUTE_LANGUAGES.has(String(targetLanguage || "").toLowerCase().trim());
+}
+
+function mapGoogleNeural2LanguageCode(targetLanguage) {
+    const map = {
+        English: "en-GB",
+        French: "fr-FR",
+        German: "de-DE",
+        Mandarin: "cmn-CN",
+        Hindi: "hi-IN",
+        Urdu: "ur-IN",
+        Portuguese: "pt-PT",
+    };
+    return map[targetLanguage] || mapLanguageCode(targetLanguage);
+}
+
+function buildTtsProviderChain(requestedProvider, targetLanguage) {
     const preferred = String(requestedProvider || process.env.TTS_PROVIDER || "narakeet").toLowerCase().trim();
+    if (shouldRouteToGoogleNeural2(targetLanguage)) {
+        return ["google", "narakeet"];
+    }
     // Strict Narakeet mode: when explicitly requested, do not silently switch voice providers.
     if (preferred === "narakeet") {
         return ["narakeet"];
@@ -151,21 +181,20 @@ function shouldCacheAudioText(text) {
 }
 
 function buildAudioCacheKey({ text, targetLanguage, requestedVoiceName, provider }) {
-    const basis = [
-        String(provider || "narakeet").toLowerCase().trim(),
-        String(targetLanguage || "").toLowerCase().trim(),
-        String(requestedVoiceName || "").toLowerCase().trim(),
-        normalizeCacheText(text),
-    ].join("|");
-
-    const digest = crypto.createHash("sha1").update(basis).digest("hex");
-    return {
-        digest,
-        objectPath: `${AUDIO_CACHE_OBJECT_PREFIX}/narakeet/${digest}.mp3`,
+    const map = {
+        English: "en-ZA",
+        isiZulu: "zu-ZA",
+        Sepedi: "nso-ZA",
+        Xitsonga: "ts-ZA",
+        Tshivenda: "ve-ZA",
+        Afrikaans: "af-ZA",
+        Sesotho: "st-ZA",
+        Setswana: "tn-ZA",
+        Yoruba: "yo-NG",
+        Hausa: "ha-NE",
+        "Akan (Ghana)": "ak-GH",
+        "Wolof (Senegal)": "wo-SN",
     };
-}
-
-function getMemoryCachedAudio(cacheKey) {
     const hit = audioBase64MemoryCache.get(cacheKey);
     if (!hit) return null;
     // refresh LRU order
@@ -541,6 +570,55 @@ async function synthesizeBestSpeech({ text, requestedCode, requestedGender }) {
     };
 }
 
+async function synthesizeNeural2Speech({ text, requestedCode, requestedGender }) {
+    const voices = await getCachedVoices();
+    const genderAttempts = buildGenderAttempts(requestedGender);
+    const neural2Voices = sortVoicesByQuality(
+        voices.filter((voice) => {
+            const hasCode = (voice.languageCodes || []).includes(requestedCode);
+            const isNeural2 = String(voice?.name || "").toLowerCase().includes("neural2");
+            return hasCode && isNeural2;
+        }),
+    );
+
+    for (const voice of neural2Voices.slice(0, 8)) {
+        for (const gender of genderAttempts) {
+            try {
+                const [ttsResponse] = await getTtsClient().synthesizeSpeech({
+                    input: { text },
+                    voice: {
+                        languageCode: requestedCode,
+                        name: voice.name,
+                        ssmlGender: gender,
+                    },
+                    audioConfig: {
+                        audioEncoding: "MP3",
+                        speakingRate: 0.95,
+                    },
+                });
+
+                if (ttsResponse?.audioContent) {
+                    return {
+                        audioContent: ttsResponse.audioContent.toString("base64"),
+                        voiceLanguageUsed: requestedCode,
+                        voiceGenderUsed: gender,
+                        voiceNameUsed: voice.name,
+                    };
+                }
+            } catch (ttsError) {
+                console.warn(`Neural2 synthesis warning (${requestedCode}, ${voice?.name}, ${gender}):`, ttsError.message);
+            }
+        }
+    }
+
+    return {
+        audioContent: null,
+        voiceLanguageUsed: requestedCode,
+        voiceGenderUsed: requestedGender,
+        voiceNameUsed: null,
+    };
+}
+
 async function synthesizeWithProviderChain({
     text,
     targetLanguage,
@@ -549,7 +627,11 @@ async function synthesizeWithProviderChain({
     requestedProvider,
     requestedVoiceName,
 }) {
-    const providerChain = buildTtsProviderChain(requestedProvider);
+    const providerChain = buildTtsProviderChain(requestedProvider, targetLanguage);
+    const googleNeural2Route = shouldRouteToGoogleNeural2(targetLanguage);
+    const googleRequestedCode = googleNeural2Route
+        ? mapGoogleNeural2LanguageCode(targetLanguage)
+        : requestedCode;
     let lastResult = null;
 
     for (const provider of providerChain) {
@@ -607,11 +689,17 @@ async function synthesizeWithProviderChain({
         }
 
         if (provider === "google") {
-            const googleResult = await synthesizeBestSpeech({
-                text,
-                requestedCode,
-                requestedGender,
-            });
+            const googleResult = googleNeural2Route
+                ? await synthesizeNeural2Speech({
+                    text,
+                    requestedCode: googleRequestedCode,
+                    requestedGender,
+                })
+                : await synthesizeBestSpeech({
+                    text,
+                    requestedCode,
+                    requestedGender,
+                });
 
             const decorated = {
                 ...googleResult,
@@ -656,6 +744,7 @@ async function synthesizeWithProviderChain({
 function mapLanguageCode(targetLanguage) {
     const map = {
         English: "en-ZA",
+        Dutch: "nl-NL",
         isiZulu: "zu-ZA",
         Sepedi: "nso-ZA",
         Xitsonga: "ts-ZA",
@@ -678,32 +767,6 @@ function mapLanguageCode(targetLanguage) {
 
 function mapGender(isMale) {
     return isMale ? "MALE" : "FEMALE";
-}
-
-function appCheckEnforced() {
-    // Secure-by-default: enforce App Check unless explicitly turned off.
-    return String(process.env.ENFORCE_APP_CHECK || "true").toLowerCase() === "true";
-}
-
-async function verifyAppCheck(req) {
-    const token = String(req.headers["x-firebase-appcheck"] || "").trim();
-    if (!token) {
-        if (appCheckEnforced()) {
-            return { ok: false, reason: "Missing X-Firebase-AppCheck token." };
-        }
-        return { ok: true, skipped: true };
-    }
-
-    try {
-        await admin.appCheck().verifyToken(token);
-        return { ok: true, skipped: false };
-    } catch (error) {
-        if (appCheckEnforced()) {
-            return { ok: false, reason: "Invalid App Check token." };
-        }
-        console.warn("App Check token invalid but enforcement is off:", error?.message || error);
-        return { ok: true, skipped: true };
-    }
 }
 
 function extractTextFromGeminiStreamPayload(payload) {
@@ -818,11 +881,6 @@ exports.processSpeech = onRequest({
                 return;
             }
 
-            const appCheckResult = await verifyAppCheck(req);
-            if (!appCheckResult.ok) {
-                return res.status(401).send({ error: appCheckResult.reason });
-            }
-
             const authHeader = String(req.headers.authorization || "");
             if (!authHeader.startsWith("Bearer ")) {
                 return res.status(401).send({ error: "Missing Authorization bearer token." });
@@ -922,11 +980,6 @@ exports.liveHealthCheck = onRequest({ secrets: ["GEMINI_API_KEY"] }, (req, res) 
         try {
             if (!enforceRequestGuardrails(req, res)) {
                 return;
-            }
-
-            const appCheckResult = await verifyAppCheck(req);
-            if (!appCheckResult.ok) {
-                return res.status(401).send({ error: appCheckResult.reason });
             }
 
             const authHeader = String(req.headers.authorization || "");

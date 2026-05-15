@@ -1,4 +1,4 @@
-# Limpopo Voice - PowerShell Build Script
+# Let's Talk - PowerShell Build Script
 # Builds all APK variants for Android distribution
 # Usage: .\build_apks.ps1
 
@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Limpopo Voice - Building APK Packages" -ForegroundColor Cyan
+Write-Host "Let's Talk - Building APK Packages" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 

@@ -1,4 +1,4 @@
-# Limpopo Voice - Universal Android Installation Guide
+# Let's Talk - Universal Android Installation Guide
 
 ## 📱 Which APK Should You Use?
 
@@ -80,7 +80,7 @@ adb install -r "LimpopoVoice-UNIVERSAL-59MB.apk"
 
 ### "No audio / Translation fails"
 - **Check:** Your internet connection
-- **Check:** App has microphone permission (Settings → Apps → Limpopo Voice → Permissions)
+- **Check:** App has microphone permission (Settings → Apps → Let's Talk → Permissions)
 - **Restart:** App and try again
 
 ### "App too slow / Cold start slow"
@@ -135,5 +135,5 @@ If installation still fails after trying all steps:
 ---
 
 **Last Updated:** May 12, 2026  
-**App:** Limpopo Voice v1.0  
+**App:** Let's Talk v1.0  
 **Status:** Universal Android support (API 21+)

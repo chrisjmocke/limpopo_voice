@@ -1,4 +1,4 @@
-Limpopo Voice - Play Console Icon Pack
+Let's Talk - Play Console Icon Pack
 
 Files:
 - play_console_icon_512.png (primary upload file)

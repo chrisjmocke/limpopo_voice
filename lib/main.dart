@@ -2,12 +2,13 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:http/http.dart' as http;
 import 'package:payfast/payfast.dart';
@@ -16,6 +17,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'translation_service.dart';
 import 'firebase_options.dart';
 
@@ -26,16 +28,6 @@ void main() async {
         options: DefaultFirebaseOptions.currentPlatform);
   } catch (e) {
     debugPrint("Firebase init error: $e");
-  }
-
-  // Keep App Check isolated so older/unsupported devices do not block app startup.
-  try {
-    await FirebaseAppCheck.instance.activate(
-      androidProvider:
-          kDebugMode ? AndroidProvider.debug : AndroidProvider.playIntegrity,
-    );
-  } catch (e) {
-    debugPrint("Firebase App Check error: $e");
   }
 
   // Always load env vars even if Firebase/App Check fails.
@@ -61,26 +53,45 @@ class _LimpopoVoiceAppState extends State<LimpopoVoiceApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Limpopo Voice',
+      title: 'Let\'s Talk',
       debugShowCheckedModeBanner: false,
       themeMode: _themeMode,
       theme: ThemeData(
         brightness: Brightness.light,
+        fontFamily: 'Georgia',
         colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF1E3C72),
-            primary: const Color(0xFF1E3C72),
-            secondary: const Color(0xFF2A5298)),
+          seedColor: const Color(0xFF000000),
+          primary: const Color(0xFF000000),
+          secondary: const Color(0xFF000000),
+          brightness: Brightness.light,
+          background: const Color(0xFFFFFFFF),
+          surface: const Color(0xFFFFFFFF),
+        ),
+        scaffoldBackgroundColor: const Color(0xFFFFFFFF),
+        canvasColor: const Color(0xFFFFFFFF),
         useMaterial3: true,
       ),
       darkTheme: ThemeData(
         brightness: Brightness.dark,
+        fontFamily: 'Georgia',
         colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF1E3C72),
-            primary: const Color(0xFF3B6FD4),
-            secondary: const Color(0xFF5B8FEE),
-            brightness: Brightness.dark),
+          seedColor: const Color(0xFF000000),
+          primary: const Color(0xFF000000),
+          secondary: const Color(0xFF000000),
+          brightness: Brightness.dark,
+          background: const Color(0xFF000000),
+          surface: const Color(0xFF000000),
+        ),
+        scaffoldBackgroundColor: const Color(0xFF000000),
+        canvasColor: const Color(0xFF000000),
         useMaterial3: true,
       ),
+      builder: (context, child) {
+        return DefaultTextStyle.merge(
+          style: const TextStyle(fontFamily: 'Georgia'),
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
       home: HomeScreen(onToggleTheme: _toggleTheme),
     );
   }
@@ -100,7 +111,6 @@ const _tiers = [
   _CreditTier('Enterprise', 1500, 'R419.99')
 ];
 const int _usageCostSecs = 5;
-const int _freeTrySecs = 30;
 const bool _enableClientFirestoreCache = false;
 const String _payFastMerchantId = '10004002';
 const String _payFastMerchantKey = 'q1cd2rdny4a53';
@@ -193,6 +203,28 @@ class _HomeScreenState extends State<HomeScreen> {
     caseSensitive: false,
   );
 
+  static final RegExp _maskedProfanityRegex = RegExp(
+    r'([a-zA-Z]\*{2,}|@[*$]+)',
+    caseSensitive: false,
+  );
+
+  static final List<RegExp> _offensiveFlexibleRegexes = _offensiveWords
+      .map(_buildFlexibleOffensiveRegex)
+      .toList(growable: false);
+
+  static RegExp _buildFlexibleOffensiveRegex(String word) {
+    final compact = word.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    if (compact.isEmpty) {
+      return RegExp(r'$.');
+    }
+
+    final chars = compact.split('').map(RegExp.escape).join(r'[\W_]*');
+    return RegExp(
+      '(?<![A-Za-z0-9])$chars(?![A-Za-z0-9])',
+      caseSensitive: false,
+    );
+  }
+
   String _activeTab = 'translate';
   final stt.SpeechToText _speech = stt.SpeechToText();
   late final TranslationService _translationService;
@@ -203,87 +235,85 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isPlayingAudio = false;
   String _selectedInputLang = 'English';
   String _selectedOutputLang = 'Sepedi';
-  // Input: English, Afrikaans, Limpopo 3, Secondary African, International
+  // Full South African language set
   final _inputLangs = [
     'English',
     'Afrikaans',
-    'Sepedi',
-    'Xitsonga',
-    'Tshivenda',
-    'Shona',
-    'Sesotho',
     'isiNdebele',
-    'Portuguese',
-    'Mandarin',
-    'Hindi',
-    'Urdu',
-    'German',
-    'French'
+    'isiXhosa',
+    'isiZulu',
+    'Sepedi',
+    'Sesotho',
+    'Setswana',
+    'siSwati',
+    'Tshivenda',
+    'Xitsonga',
   ];
-  // Output: Limpopo 3, Secondary African, Afrikaans, English, International
+  // Full South African language set
   final _outputLangs = [
-    'Sepedi',
-    'Xitsonga',
-    'Tshivenda',
-    'Shona',
-    'Sesotho',
     'isiNdebele',
-    'Afrikaans',
+    'isiXhosa',
+    'isiZulu',
+    'Sepedi',
+    'Sesotho',
+    'Setswana',
+    'siSwati',
+    'Tshivenda',
+    'Xitsonga',
     'English',
-    'Portuguese',
-    'Mandarin',
-    'Hindi',
-    'Urdu',
-    'German',
-    'French'
+    'Afrikaans',
   ];
   final _locales = {
-    'English': 'en-ZA',
-    'Sesotho': 'st-ZA',
-    'Sepedi': 'nso-ZA',
-    'Tshivenda': 've-ZA',
-    'Shona': 'sn-ZW',
-    'Xitsonga': 'ts-ZA',
     'Afrikaans': 'af-ZA',
+    'English': 'en-ZA',
     'isiNdebele': 'nr-ZA',
-    'Portuguese': 'pt-PT',
-    'Mandarin': 'zh-CN',
-    'Hindi': 'hi-IN',
-    'Urdu': 'ur-PK',
-    'German': 'de-DE',
-    'French': 'fr-FR'
+    'isiXhosa': 'xh-ZA',
+    'isiZulu': 'zu-ZA',
+    'Sepedi': 'nso-ZA',
+    'Sesotho': 'st-ZA',
+    'Setswana': 'tn-ZA',
+    'siSwati': 'ss-ZA',
+    'Tshivenda': 've-ZA',
+    'Xitsonga': 'ts-ZA',
   };
   final _translateCodes = {
-    'English': 'en',
-    'Sesotho': 'st',
-    'Sepedi': 'nso',
-    'Tshivenda': 've',
-    'Shona': 'sn',
-    'Xitsonga': 'ts',
     'Afrikaans': 'af',
+    'English': 'en',
     'isiNdebele': 'nr',
-    'Portuguese': 'pt',
-    'Mandarin': 'zh-CN',
-    'Hindi': 'hi',
-    'Urdu': 'ur',
-    'German': 'de',
-    'French': 'fr',
+    'isiXhosa': 'xh',
+    'isiZulu': 'zu',
+    'Sepedi': 'nso',
+    'Sesotho': 'st',
+    'Setswana': 'tn',
+    'siSwati': 'ss',
+    'Tshivenda': 've',
+    'Xitsonga': 'ts',
   };
   static const _voiceNames = {
-    'Sesotho': 'Palesa',
+    'Afrikaans': 'Rolanda',
+    'English': 'Aletta',
+    'isiNdebele': 'Dumisani',
+    'isiXhosa': 'Aletta',
+    'isiZulu': 'Aletta',
     'Sepedi': 'Mpho',
+    'Sesotho': 'Palesa',
+    'Setswana': 'Basetsana',
+    'siSwati': 'Aletta',
     'Tshivenda': 'Mulalo',
     'Xitsonga': 'Basetsana',
-    'Shona': 'Nandi',
-    'Afrikaans': 'Rolanda',
-    'isiNdebele': 'Dumisani',
-    'Portuguese': 'Lurdes',
-    'Mandarin': 'Yifei',
-    'Hindi': 'Aditi',
-    'Urdu': 'Mawra',
-    'German': 'Martina',
-    'French': 'Marion',
-    'English': 'Aletta',
+  };
+  static const Set<String> _southAfricanLanguages = {
+    'Afrikaans',
+    'English',
+    'isiNdebele',
+    'isiXhosa',
+    'isiZulu',
+    'Sepedi',
+    'Sesotho',
+    'Setswana',
+    'siSwati',
+    'Tshivenda',
+    'Xitsonga',
   };
   String _spokenText = '';
   String _translatedText = '';
@@ -294,10 +324,13 @@ class _HomeScreenState extends State<HomeScreen> {
   String _translatedLang = '';
   final TextEditingController _tttController = TextEditingController();
   int _credits = 30;
-  int _freeTryTokens = 2;
   final List<HistoryItem> _history = [];
   String _selectedLearnLang = 'Sepedi';
+  final Map<String, String> _learnFocusTextByLang = {};
+  final Map<String, String> _learnFocusMeaningByLang = {};
+  final Map<String, String?> _learnFocusPhoneticByLang = {};
   bool _exportingHistory = false;
+  bool _sharingCurrentTranslation = false;
   Timer? _autocorrectTimer;
 
   static const Map<String, List<Map<String, String>>> _learnPhrasesByLang = {
@@ -348,6 +381,12 @@ class _HomeScreenState extends State<HomeScreen> {
       {'text': 'Baie dankie.', 'en': 'Thank you very much.'},
       {'text': 'Help my asseblief.', 'en': 'Please help me.'},
       {'text': 'Totsiens.', 'en': 'Goodbye.'},
+    ],
+    'Dutch': [
+      {'text': 'Hallo, hoe gaat het?', 'en': 'Hello, how are you?'},
+      {'text': 'Heel erg bedankt.', 'en': 'Thank you very much.'},
+      {'text': 'Help me alsjeblieft.', 'en': 'Please help me.'},
+      {'text': 'Tot ziens.', 'en': 'Goodbye.'},
     ],
     'Portuguese': [
       {'text': 'Ola, como esta?', 'en': 'Hello, how are you?'},
@@ -423,9 +462,47 @@ class _HomeScreenState extends State<HomeScreen> {
     ],
   };
 
+  String _normalizeLanguageLabel(String language) {
+    final cleaned = language
+        .replaceAll('(', '')
+        .replaceAll(')', '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (cleaned == 'English South African Accent') return 'English';
+    if (cleaned == 'Sepedi Northern Sotho') return 'Sepedi';
+    if (cleaned == 'Sesotho Southern Sotho') return 'Sesotho';
+    return cleaned;
+  }
+
+  String _ttsProviderForLanguage(String language) {
+    final normalized = _normalizeLanguageLabel(language);
+    return _southAfricanLanguages.contains(normalized) ? 'narakeet' : 'google';
+  }
+
+  String? _voiceNameForLanguage(String language) {
+    final normalized = _normalizeLanguageLabel(language);
+    final provider = _ttsProviderForLanguage(normalized);
+    if (provider == 'narakeet') {
+      return _voiceNames[normalized] ?? 'Aletta';
+    }
+    return null;
+  }
+
   @override
   void initState() {
     super.initState();
+    _selectedInputLang = _normalizeLanguageLabel(_selectedInputLang);
+    _selectedOutputLang = _normalizeLanguageLabel(_selectedOutputLang);
+    _selectedLearnLang = _normalizeLanguageLabel(_selectedLearnLang);
+    if (!_inputLangs.contains(_selectedInputLang)) {
+      _selectedInputLang = _inputLangs.first;
+    }
+    if (!_outputLangs.contains(_selectedOutputLang)) {
+      _selectedOutputLang = _outputLangs.first;
+    }
+    if (!_outputLangs.contains(_selectedLearnLang)) {
+      _selectedLearnLang = _outputLangs.first;
+    }
     _audioPlayer = AudioPlayer();
     final functionUrl = dotenv.env['TRANSLATE_FUNCTION_URL'] ?? '';
     _translationService = TranslationService(functionUrl: functionUrl);
@@ -465,8 +542,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final docSnapshot = await docRef.get();
       
       if (docSnapshot.exists && docSnapshot.data()?['used_free_trial'] == true) {
-        debugPrint('Install ID $installId already used free trial - disabling free tokens');
-        setState(() => _freeTryTokens = 0);
+        debugPrint('Install ID $installId already used free trial');
       } else {
         // First time - mark for future reinstalls
         await docRef.set({
@@ -609,6 +685,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       await _audioPlayer.setReleaseMode(ReleaseMode.stop);
+      await _audioPlayer.setVolume(1.0);
     } catch (e) {
       debugPrint('Audio release mode setup failed: $e');
     }
@@ -628,7 +705,7 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('Disclaimer'),
         content: const SingleChildScrollView(
           child: Text(
-            'Limpopo Voice uses advanced AI to provide translations. However, automated translation is not perfect. Limpopo Voice is not responsible for any inaccurate, misleading, or offensive translations generated by the system. By using this app, you agree to use these translations at your own risk.',
+            'Let\'s Talk uses advanced AI to provide translations. However, automated translation is not perfect. Let\'s Talk is not responsible for any inaccurate, misleading, or offensive translations generated by the system. By using this app, you agree to use these translations at your own risk.',
           ),
         ),
         actions: [
@@ -710,8 +787,9 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       },
       localeId: _locales[_selectedInputLang] ?? 'en-ZA',
-      listenFor: const Duration(seconds: 30),
-      pauseFor: const Duration(seconds: 3),
+      // Keep capture active while user is holding the Talk button.
+      listenFor: const Duration(seconds: 60),
+      pauseFor: const Duration(seconds: 20),
     );
   }
 
@@ -724,11 +802,6 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_credits >= _usageCostSecs) {
       setState(() => _credits -= _usageCostSecs);
       _showSnack('Used $_usageCostSecs sec | Balance: $_credits sec remaining');
-      return true;
-    }
-    if (_freeTryTokens > 0) {
-      setState(() => _freeTryTokens -= 1);
-      _showSnack('Used $_freeTrySecs sec free try ($_freeTryTokens tries left).');
       return true;
     }
     _showCreditTiers();
@@ -767,16 +840,29 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _maskProfanityForDisplay(String text) {
     if (text.trim().isEmpty) return text;
-    return text.replaceAllMapped(_offensiveWordRegex, (_) => '@*\$');
+    String masked = text.replaceAllMapped(_offensiveWordRegex, (_) => '@#\$');
+    masked = masked.replaceAllMapped(_maskedProfanityRegex, (_) => '@#\$');
+    for (final pattern in _offensiveFlexibleRegexes) {
+      masked = masked.replaceAllMapped(pattern, (_) => '@#\$');
+    }
+    return masked;
   }
 
   String _silenceProfanityForSpeech(String text) {
     if (text.trim().isEmpty) return text;
-    final silenced = text.replaceAllMapped(
-      _offensiveWordRegex,
-      (_) => ' ... ',
-    );
+    String silenced = text.replaceAllMapped(_offensiveWordRegex, (_) => '');
+    silenced = silenced.replaceAllMapped(_maskedProfanityRegex, (_) => '');
+    for (final pattern in _offensiveFlexibleRegexes) {
+      silenced = silenced.replaceAllMapped(pattern, (_) => '');
+    }
     return silenced.replaceAll(RegExp(r'\s+'), ' ').trim();
+  }
+
+  bool _containsProfanity(String text) {
+    if (text.trim().isEmpty) return false;
+    if (_offensiveWordRegex.hasMatch(text)) return true;
+    if (_maskedProfanityRegex.hasMatch(text)) return true;
+    return _offensiveFlexibleRegexes.any((pattern) => pattern.hasMatch(text));
   }
 
   Future<String> _translateText(String input) async {
@@ -845,18 +931,28 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _speakText(String text, String language) async {
+    if (_containsProfanity(text)) {
+      return;
+    }
+
     final safeForSpeech = _silenceProfanityForSpeech(text);
     if (safeForSpeech.trim().isEmpty) return;
     try {
-      final voiceName = _voiceNames[language] ?? 'Aletta';
-      debugPrint('Requesting audio: text="$safeForSpeech", language=$language, voice=$voiceName');
-      final audioData = await _generateAudioWithCache(safeForSpeech, language, voiceName);
+      final provider = _ttsProviderForLanguage(language);
+      final voiceName = _voiceNameForLanguage(language);
+      debugPrint('Requesting audio: text="$safeForSpeech", language=$language, provider=$provider, voice=${voiceName ?? 'auto'}');
+      final audioData = await _generateAudioWithCache(
+        safeForSpeech,
+        language,
+        voiceName,
+        provider: provider,
+      );
       if (audioData != null && audioData.isNotEmpty) {
         debugPrint('Audio received: ${audioData.length} bytes, playing...');
         await _audioPlayer.play(BytesSource(audioData));
       } else {
         debugPrint('Narakeet returned no audio data (null or empty)');
-        _showSnack('Narakeet unavailable. Check connection & try again.');
+        _showSnack(_narakeetUnavailableMessage());
       }
     } catch (e) {
       debugPrint('Audio playback error: $e');
@@ -864,9 +960,12 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<Uint8List?> _generateAudioWithCache(String text, String language, String voice) async {
+  Future<Uint8List?> _generateAudioWithCache(
+      String text, String language, String? voice,
+      {required String provider}) async {
+    final cacheVoiceKey = '$provider|${voice ?? ''}';
     // Check cache first
-    final cachedBase64 = await _getCachedAudio(text, language, voice);
+    final cachedBase64 = await _getCachedAudio(text, language, cacheVoiceKey);
     if (cachedBase64 != null) {
       return base64Decode(cachedBase64);
     }
@@ -876,18 +975,23 @@ class _HomeScreenState extends State<HomeScreen> {
       text,
       language,
       voiceName: voice,
+      ttsProvider: provider,
     );
 
     // Save to cache if successful
     if (audioData != null && audioData.isNotEmpty) {
       final audioBase64 = base64Encode(audioData);
-      await _saveCacheAudio(text, language, voice, audioBase64);
+      await _saveCacheAudio(text, language, cacheVoiceKey, audioBase64);
     }
 
     return audioData;
   }
 
   Future<void> _speakTranslatedText(String text) async {
+    if (_containsProfanity(text)) {
+      return;
+    }
+
     final safeForSpeech = _silenceProfanityForSpeech(text);
     if (safeForSpeech.trim().isEmpty) {
       return;
@@ -896,16 +1000,17 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       setState(() => _isPlayingAudio = true);
 
-      final voiceName = _voiceNames[_selectedOutputLang] ?? 'Aletta';
+      final provider = _ttsProviderForLanguage(_selectedOutputLang);
+      final voiceName = _voiceNameForLanguage(_selectedOutputLang);
       final chunks = _buildRealtimeSpeechChunks(safeForSpeech);
       if (chunks.isEmpty) {
         debugPrint('No audio data returned from API');
-        _showSnack('Narakeet audio unavailable. Please try again.');
+        _showSnack(_narakeetUnavailableMessage());
         return;
       }
 
       debugPrint(
-          'Requesting chunked audio (${chunks.length} chunks) for language: $_selectedOutputLang, voice: $voiceName');
+          'Requesting chunked audio (${chunks.length} chunks) for language: $_selectedOutputLang, provider: $provider, voice: ${voiceName ?? 'auto'}');
       for (int i = 0; i < chunks.length; i++) {
         debugPrint('  Chunk ${i + 1}: "${chunks[i]}"');
       }
@@ -913,8 +1018,13 @@ class _HomeScreenState extends State<HomeScreen> {
       // Kick off all chunk requests immediately so later chunks are ready sooner.
       final chunkRequests = chunks
           .map((chunk) {
-            debugPrint('Calling Narakeet for chunk: "${chunk}"');
-            return _generateAudioWithCache(chunk, _selectedOutputLang, voiceName);
+            debugPrint('Calling Narakeet for chunk: "$chunk"');
+            return _generateAudioWithCache(
+              chunk,
+              _selectedOutputLang,
+              voiceName,
+              provider: provider,
+            );
           })
           .toList(growable: false);
 
@@ -951,7 +1061,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
       if (!playedAny) {
         debugPrint('ERROR: No chunks were successfully converted to audio. Check Narakeet API key and network.');
-        _showSnack('Narakeet unavailable. Check API key & network.');
+        _showSnack(_narakeetUnavailableMessage());
       }
     } catch (e) {
       debugPrint('Audio playback error: $e');
@@ -1033,8 +1143,151 @@ class _HomeScreenState extends State<HomeScreen> {
         _translatedLang = '';
       });
 
+  Future<void> _shareCurrentTranslationPackage() async {
+    final inputDisplay = _spokenText.trim();
+    final outputDisplay = _translatedText.trim();
+    if (inputDisplay.isEmpty || outputDisplay.isEmpty) {
+      _showSnack('Translate first so input and output can be shared.');
+      return;
+    }
+
+    if (_sharingCurrentTranslation) return;
+    setState(() => _sharingCurrentTranslation = true);
+
+    try {
+      final inputRaw = _spokenRawText.trim().isNotEmpty ? _spokenRawText.trim() : inputDisplay;
+      final outputRaw =
+          _translatedRawText.trim().isNotEmpty ? _translatedRawText.trim() : outputDisplay;
+      final inputLang = _spokenLang.isNotEmpty ? _spokenLang : _selectedInputLang;
+      final outputLang = _translatedLang.isNotEmpty ? _translatedLang : _selectedOutputLang;
+      final dir = await getTemporaryDirectory();
+      final nowSuffix = DateTime.now().millisecondsSinceEpoch;
+
+      final payload = StringBuffer()
+        ..writeln('Let\'s Talk Translation')
+        ..writeln()
+        ..writeln('Input ($inputLang):')
+        ..writeln(inputDisplay)
+        ..writeln()
+        ..writeln('Output ($outputLang):')
+        ..writeln(outputDisplay);
+
+      if (_phoneticText.trim().isNotEmpty) {
+        payload
+          ..writeln()
+          ..writeln('Phonetics:')
+          ..writeln(_phoneticText.trim());
+      }
+
+      final files = <XFile>[];
+
+      final inputProvider = _ttsProviderForLanguage(inputLang);
+      final inputVoice = _voiceNameForLanguage(inputLang);
+      final safeInputForSpeech = _silenceProfanityForSpeech(inputRaw);
+      final inputSpeechText =
+          safeInputForSpeech.isNotEmpty ? safeInputForSpeech : inputRaw;
+      var hasInputMp3 = false;
+      if (inputSpeechText.isNotEmpty) {
+        var inputAudio = await _generateAudioWithCache(
+          inputSpeechText,
+          inputLang,
+          inputVoice,
+          provider: inputProvider,
+        );
+        inputAudio ??= await _translationService.generateTranslation(
+          inputSpeechText,
+          inputLang,
+          voiceName: inputVoice,
+          ttsProvider: inputProvider,
+        );
+        if (inputAudio != null && inputAudio.isNotEmpty) {
+          final inFile = File('${dir.path}/limpopo_input_$nowSuffix.mp3');
+          await inFile.writeAsBytes(inputAudio, flush: true);
+          files.add(XFile(inFile.path, mimeType: 'audio/mpeg'));
+          hasInputMp3 = true;
+        }
+      }
+
+      final outputProvider = _ttsProviderForLanguage(outputLang);
+      final outputVoice = _voiceNameForLanguage(outputLang);
+      final safeOutputForSpeech = _silenceProfanityForSpeech(outputRaw);
+      final outputSpeechText =
+          safeOutputForSpeech.isNotEmpty ? safeOutputForSpeech : outputRaw;
+      var hasOutputMp3 = false;
+      if (outputSpeechText.isNotEmpty) {
+        var outputAudio = await _generateAudioWithCache(
+          outputSpeechText,
+          outputLang,
+          outputVoice,
+          provider: outputProvider,
+        );
+        outputAudio ??= await _translationService.generateTranslation(
+          outputSpeechText,
+          outputLang,
+          voiceName: outputVoice,
+          ttsProvider: outputProvider,
+        );
+        if (outputAudio != null && outputAudio.isNotEmpty) {
+          final outFile = File('${dir.path}/limpopo_output_$nowSuffix.mp3');
+          await outFile.writeAsBytes(outputAudio, flush: true);
+          files.add(XFile(outFile.path, mimeType: 'audio/mpeg'));
+          hasOutputMp3 = true;
+        }
+      }
+
+      if (!hasInputMp3 || !hasOutputMp3) {
+        _showSnack('Could not generate both input and output MP3 files. Please try again.');
+        return;
+      }
+
+      // Add text files after audio files so share targets prioritise media attachments.
+      final inputTextFile = File('${dir.path}/limpopo_input_$nowSuffix.txt');
+      await inputTextFile.writeAsString(
+        'Input Language: $inputLang\n\n$inputDisplay\n',
+        flush: true,
+      );
+      files.add(XFile(inputTextFile.path, mimeType: 'text/plain'));
+
+      final outputTextFile = File('${dir.path}/limpopo_output_$nowSuffix.txt');
+      await outputTextFile.writeAsString(
+        'Output Language: $outputLang\n\n$outputDisplay\n',
+        flush: true,
+      );
+      files.add(XFile(outputTextFile.path, mimeType: 'text/plain'));
+
+      await Share.shareXFiles(
+        files,
+        subject: 'Let\'s Talk Translation',
+        text: payload.toString(),
+      );
+    } catch (e) {
+      debugPrint('Share translation package error: $e');
+      _showSnack('Could not prepare share package. Try again.');
+    } finally {
+      if (mounted) {
+        setState(() => _sharingCurrentTranslation = false);
+      }
+    }
+  }
+
   void _showSnack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+
+  void _sendHistoryToLearn(HistoryItem item) {
+    final phonetic = (item.phonetic ?? '').trim();
+    final normalizedOutputLang = _normalizeLanguageLabel(item.outputLang);
+    setState(() {
+      _selectedLearnLang = normalizedOutputLang;
+      _activeTab = 'learn';
+      _learnFocusTextByLang[normalizedOutputLang] = item.translated;
+      _learnFocusMeaningByLang[normalizedOutputLang] = item.original;
+      _learnFocusPhoneticByLang[normalizedOutputLang] = phonetic.isEmpty ? null : phonetic;
+    });
+    _showSnack('Sentence sent to Learn');
+  }
+
+  String _narakeetUnavailableMessage() =>
+      'Narakeet unavailable. Check connection & try again.';
 
   void _showQrShare() {
     const appUrl =
@@ -1049,9 +1302,7 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('Scan Here',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-              const Text('to share',
+              const Text('Share App',
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
               const SizedBox(height: 20),
               Container(
@@ -1073,21 +1324,30 @@ class _HomeScreenState extends State<HomeScreen> {
                   backgroundColor: Colors.white,
                   eyeStyle: const QrEyeStyle(
                     eyeShape: QrEyeShape.square,
-                    color: Color(0xFF1E3C72),
+                    color: Color(0xFF000000),
                   ),
                   dataModuleStyle: const QrDataModuleStyle(
                     dataModuleShape: QrDataModuleShape.square,
-                    color: Color(0xFF1E3C72),
+                    color: Color(0xFF000000),
                   ),
                 ),
               ),
               const SizedBox(height: 16),
-              Text('Limpopo Voice',
+              Text('Let\'s Talk',
                   style: TextStyle(
                       fontWeight: FontWeight.w600,
-                      color:
-                          isDark ? Colors.white70 : const Color(0xFF1E3C72))),
+                    color: isDark ? Colors.white70 : const Color(0xFF000000))),
               const SizedBox(height: 16),
+              TextButton(
+                onPressed: () async {
+                  if (await canLaunchUrl(Uri.parse(appUrl))) {
+                    await launchUrl(Uri.parse(appUrl), mode: LaunchMode.externalApplication);
+                  }
+                },
+                child: const Text('Get it on Google Play',
+                  style: TextStyle(color: Colors.black, decoration: TextDecoration.underline)),
+              ),
+              const SizedBox(height: 8),
               TextButton(
                 onPressed: () => Navigator.of(context).pop(),
                 child: const Text('Close'),
@@ -1113,7 +1373,7 @@ class _HomeScreenState extends State<HomeScreen> {
             Row(
               children: [
                 const Icon(Icons.account_balance_wallet,
-                    color: Color(0xFF2A5298)),
+                    color: Color(0xFF000000)),
                 const SizedBox(width: 8),
                 const Expanded(
                   child: Text(
@@ -1125,17 +1385,28 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
             const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerRight,
-              child: Chip(
-                  label: Text('Balance: $_credits sec')),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Translations capped at\n5 seconds',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).brightness == Brightness.dark
+                          ? Colors.white70
+                          : Colors.black54,
+                    ),
+                  ),
+                ),
+                Chip(label: Text('Balance: $_credits sec')),
+              ],
             ),
             const SizedBox(height: 16),
             ..._tiers.map((tier) => Padding(
                   padding: const EdgeInsets.only(bottom: 10),
                   child: ElevatedButton(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF1E3C72),
+                      backgroundColor: const Color(0xFF000000),
                       foregroundColor: Colors.white,
                       minimumSize: const Size(double.infinity, 52),
                       shape: RoundedRectangleBorder(
@@ -1161,7 +1432,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         const SizedBox(width: 8),
                         Text(tier.price,
                             style: const TextStyle(
-                                color: Colors.greenAccent,
+                            color: Color(0xFF000000),
                                 fontWeight: FontWeight.bold)),
                       ],
                     ),
@@ -1206,13 +1477,16 @@ class _HomeScreenState extends State<HomeScreen> {
                     children: [
                       Row(
                         children: [
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(10),
-                            child: Image.asset(
-                              'assets/thumb.png',
-                              width: 48,
-                              height: 48,
-                              fit: BoxFit.cover,
+                          SizedBox(
+                            width: 48,
+                            height: 48,
+                            child: Center(
+                              child: Image.asset(
+                                'assets/letstalkmainblack.png',
+                                width: 64,
+                                height: 64,
+                                fit: BoxFit.contain,
+                              ),
                             ),
                           ),
                           const SizedBox(width: 12),
@@ -1221,10 +1495,10 @@ class _HomeScreenState extends State<HomeScreen> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  'Limpopo Voice - ${tier.name}',
+                                  'Let\'s Talk - ${tier.name}',
                                   style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w700,
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w800,
                                   ),
                                 ),
                                 const SizedBox(height: 2),
@@ -1320,77 +1594,153 @@ class _HomeScreenState extends State<HomeScreen> {
           // Top bar
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            child: Row(children: [
-              IconButton(
-                  icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
-                  onPressed: widget.onToggleTheme),
-              IconButton(
-                icon: const Icon(Icons.qr_code_2),
-                tooltip: 'Share App',
-                onPressed: _showQrShare,
-              ),
-              const Spacer(),
-              OutlinedButton.icon(
-                icon: Icon(Icons.account_balance_wallet,
-                    size: 16,
-                    color: isDark ? Colors.white : const Color(0xFF1E3C72)),
-                label: Text('$_credits sec',
-                    style: TextStyle(
-                        color: isDark ? Colors.white : const Color(0xFF1E3C72),
-                        fontWeight: FontWeight.bold)),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor:
-                      isDark ? Colors.white : const Color(0xFF1E3C72),
-                  side: BorderSide(
-                      color: isDark ? Colors.white60 : const Color(0xFF1E3C72)),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20)),
-                ),
-                onPressed: _showCreditTiers,
-              ),
-            ]),
-          ),
-          // Header
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: Container(
-                width: double.infinity,
-                height: 112,
-                color: Colors.transparent,
+            child: SizedBox(
+              height: 44,
+              child: Stack(
                 alignment: Alignment.center,
-                child: Image.asset(
-                  isDark ? 'assets/lv2.png' : 'assets/lv.png',
-                  width: double.infinity,
-                  height: 112,
-                  fit: BoxFit.contain,
-                  filterQuality: FilterQuality.high,
-                  errorBuilder: (_, __, ___) => Container(
-                    width: double.infinity,
-                    height: 112,
-                    alignment: Alignment.center,
-                    child: const Icon(Icons.image_not_supported,
-                        color: Colors.white),
+                children: [
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: PopupMenuButton<String>(
+                      icon: const Icon(Icons.menu),
+                      tooltip: 'Menu',
+                      color: Colors.white,
+                      surfaceTintColor: Colors.white,
+                      itemBuilder: (context) => [
+                        PopupMenuItem(
+                          value: 'history',
+                          child: Row(
+                            children: [
+                              const Icon(Icons.history, size: 18, color: Colors.black),
+                              const SizedBox(width: 12),
+                              const Text('History', style: TextStyle(color: Colors.black)),
+                            ],
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'learn',
+                          child: Row(
+                            children: [
+                              const Icon(Icons.school, size: 18, color: Colors.black),
+                              const SizedBox(width: 12),
+                              const Text('Learn', style: TextStyle(color: Colors.black)),
+                            ],
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'theme',
+                          child: Row(
+                            children: [
+                              Icon(
+                                isDark ? Icons.light_mode : Icons.dark_mode,
+                                size: 18,
+                                color: Colors.black,
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                isDark ? 'Light Mode' : 'Dark Mode',
+                                style: const TextStyle(color: Colors.black),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                      onSelected: (value) {
+                        if (value == 'history') {
+                          setState(() => _activeTab = 'history');
+                        } else if (value == 'learn') {
+                          setState(() => _activeTab = 'learn');
+                        } else if (value == 'theme') {
+                          widget.onToggleTheme();
+                        }
+                      },
+                    ),
                   ),
-                ),
+                  Center(
+                    child: Image.asset(
+                      isDark
+                          ? 'assets/letstalkmainblack.png'
+                          : 'assets/letstalkmainwhite.png',
+                      height: 36,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: PopupMenuButton<int>(
+                      tooltip: 'User menu',
+                      offset: const Offset(0, 40),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      itemBuilder: (context) => [
+                        PopupMenuItem(
+                          value: 1,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  CircleAvatar(
+                                    radius: 20,
+                                    backgroundImage: null, // TODO: Replace with user image
+                                    child: Icon(Icons.person, size: 24, color: Colors.white),
+                                    backgroundColor: Colors.grey[400],
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text('User', style: TextStyle(fontWeight: FontWeight.bold)),
+                                      Text('user@example.com', style: TextStyle(fontSize: 12, color: Colors.grey)), // TODO: Replace with real email/ID
+                                    ],
+                                  ),
+                                ],
+                              ),
+                              const Divider(height: 18),
+                              ListTile(
+                                leading: const Icon(Icons.qr_code_2),
+                                title: const Text('Share App'),
+                                onTap: () {
+                                  Navigator.pop(context);
+                                  _showQrShare();
+                                },
+                              ),
+                              ListTile(
+                                leading: const Icon(Icons.account_balance_wallet),
+                                title: const Text('Credits'),
+                                onTap: () {
+                                  Navigator.pop(context);
+                                  _showCreditTiers();
+                                },
+                              ),
+                              // Add more user actions here if needed
+                            ],
+                          ),
+                        ),
+                      ],
+                      child: CircleAvatar(
+                        radius: 16,
+                        backgroundImage: null, // TODO: Replace with NetworkImage or AssetImage for user thumb
+                        child: Icon(Icons.person, size: 20, color: Colors.white), // Placeholder icon
+                        backgroundColor: Colors.grey[400],
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
-          // Tab switcher
+          // Tab switcher (only Translate visible, History/Learn accessible via hamburger menu)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Container(
               decoration: BoxDecoration(
                 color: isDark
                     ? Colors.white12
-                    : const Color(0xFF1E3C72).withOpacity(0.08),
+                    : const Color(0xFF000000).withOpacity(0.08),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Row(
-                children: ['translate', 'history', 'learn'].map((tab) {
+                children: ['translate'].map((tab) {
                   final active = _activeTab == tab;
                   final label = tab == 'translate'
                       ? 'Translate'
@@ -1403,8 +1753,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         margin: const EdgeInsets.all(4),
                         padding: const EdgeInsets.symmetric(vertical: 11),
                         decoration: BoxDecoration(
-                          color: active
-                              ? const Color(0xFF1E3C72)
+                            color: active
+                              ? const Color(0xFF000000)
                               : Colors.transparent,
                           borderRadius: BorderRadius.circular(9),
                         ),
@@ -1418,7 +1768,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ? Colors.white
                                 : (isDark
                                     ? Colors.white60
-                                    : const Color(0xFF1E3C72)),
+                                    : const Color(0xFF000000)),
                           ),
                         )),
                       ),
@@ -1442,8 +1792,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildLearnTab(bool isDark) {
-    final phrases = _learnPhrasesByLang[_selectedLearnLang] ??
+    final learnPhraseKey = _selectedLearnLang;
+    final phrases = _learnPhrasesByLang[learnPhraseKey] ??
         _learnPhrasesByLang['English']!;
+    final currentLearnText = _learnFocusTextByLang[_selectedLearnLang] ?? '';
+    final hasHistoryFocus = currentLearnText.trim().isNotEmpty;
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Column(
@@ -1454,7 +1807,7 @@ class _HomeScreenState extends State<HomeScreen> {
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w700,
-              color: isDark ? Colors.white : const Color(0xFF1E3C72),
+              color: isDark ? Colors.white : const Color(0xFF000000),
             ),
           ),
           const SizedBox(height: 10),
@@ -1464,6 +1817,93 @@ class _HomeScreenState extends State<HomeScreen> {
             (v) => setState(() => _selectedLearnLang = v!),
             isDark,
           ),
+          if (hasHistoryFocus) ...[
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: isDark
+                  ? Colors.white12
+                  : Colors.black12,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                    color: isDark
+                    ? Colors.white24
+                    : Colors.black26),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Sent from History',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: isDark ? Colors.white70 : const Color(0xFF000000),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          currentLearnText,
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: isDark ? Colors.white : const Color(0xFF000000),
+                          ),
+                        ),
+                        if (( _learnFocusPhoneticByLang[_selectedLearnLang] ?? '').isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            (_learnFocusPhoneticByLang[_selectedLearnLang] ?? ''),
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontStyle: FontStyle.italic,
+                              color: isDark ? Colors.white70 : const Color(0xFF000000),
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 3),
+                        Text(
+                          _learnFocusMeaningByLang[_selectedLearnLang] ?? '',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color:
+                                isDark ? Colors.white70 : Colors.grey.shade700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Column(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.volume_up),
+                        tooltip: 'Listen',
+                        onPressed: () =>
+                          _speakText(currentLearnText, _selectedLearnLang),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        tooltip: 'Clear',
+                        onPressed: () {
+                          setState(() {
+                            _learnFocusTextByLang[_selectedLearnLang] = '';
+                            _learnFocusMeaningByLang[_selectedLearnLang] = '';
+                            _learnFocusPhoneticByLang[_selectedLearnLang] = null;
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 14),
           ...phrases.map((phrase) => Container(
                 margin: const EdgeInsets.only(bottom: 10),
@@ -1486,7 +1926,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             style: TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w600,
-                              color: isDark ? Colors.white : Colors.black87,
+                              color: isDark ? Colors.white : const Color(0xFF000000),
                             ),
                           ),
                           if ((phrase['phonetic'] ?? '').isNotEmpty) ...[
@@ -1496,9 +1936,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               style: TextStyle(
                                 fontSize: 12,
                                 fontStyle: FontStyle.italic,
-                                color: isDark
-                                    ? Colors.orange.shade300
-                                    : Colors.orange.shade800,
+                                color: isDark ? Colors.white70 : const Color(0xFF000000),
                               ),
                             ),
                           ],
@@ -1530,14 +1968,32 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildTranslateTab(bool isDark) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight - 8),
+            child: IntrinsicHeight(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // Language dropdowns
         Row(children: [
           Expanded(
-              child: _langDrop(_selectedInputLang, _inputLangs,
-                  (v) => setState(() => _selectedInputLang = v!), isDark)),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.black12,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.black26),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 2),
+              child: _langDrop(
+                _selectedInputLang,
+                _inputLangs,
+                (v) => setState(() => _selectedInputLang = v!),
+                isDark,
+              ),
+            ),
+          ),
           Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4),
               child: IconButton(
@@ -1551,56 +2007,96 @@ class _HomeScreenState extends State<HomeScreen> {
                 tooltip: 'Swap languages',
               )),
           Expanded(
-              child: _langDrop(_selectedOutputLang, _outputLangs,
-                  (v) => setState(() => _selectedOutputLang = v!), isDark)),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.black12,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.black26),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 2),
+              child: _langDrop(
+                _selectedOutputLang,
+                _outputLangs,
+                (v) => setState(() => _selectedOutputLang = v!),
+                isDark,
+              ),
+            ),
+          ),
         ]),
         const SizedBox(height: 14),
         // TTT row
         Row(children: [
           Expanded(
-              child: TextField(
-            controller: _tttController,
-            decoration: InputDecoration(
-              hintText: 'Type text to translate...',
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              border:
-                  OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-              filled: true,
-              fillColor: isDark ? Colors.white10 : Colors.grey.shade50,
+              child: SizedBox(
+            height: 44,
+            child: TextField(
+              controller: _tttController,
+              style: const TextStyle(fontFamily: 'Georgia', fontSize: 14),
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: 'Type text to translate...',
+                hintStyle: const TextStyle(fontFamily: 'Georgia', fontSize: 13),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                filled: true,
+                fillColor: isDark ? Colors.white10 : Colors.grey.shade50,
+              ),
+              onSubmitted: (_) => _submitTTT(),
+              textInputAction: TextInputAction.send,
             ),
-            onSubmitted: (_) => _submitTTT(),
-            textInputAction: TextInputAction.send,
           )),
           const SizedBox(width: 8),
           IconButton.filled(
             onPressed: _submitTTT,
             icon: const Icon(Icons.send),
             style: IconButton.styleFrom(
-                backgroundColor: const Color(0xFF1E3C72),
+              backgroundColor: const Color(0xFF000000),
                 foregroundColor: Colors.white,
-                minimumSize: const Size(48, 48)),
+                minimumSize: const Size(42, 42),
+                maximumSize: const Size(42, 42),
+                padding: EdgeInsets.zero),
           ),
         ]),
         const SizedBox(height: 8),
         Row(mainAxisAlignment: MainAxisAlignment.start, children: [
           TextButton.icon(
-              onPressed: _spokenText.isNotEmpty
-                  ? () => Share.share(_spokenText)
+            onPressed: (_spokenText.isNotEmpty &&
+                _translatedText.isNotEmpty &&
+                !_sharingCurrentTranslation)
+              ? _shareCurrentTranslationPackage
                   : null,
-              icon: const Icon(Icons.share, size: 18),
-              label: const Text('Share')),
+            icon: const Icon(Icons.share, size: 18),
+            label: Text(_sharingCurrentTranslation ? 'Sharing...' : 'Share'),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white,
+              backgroundColor: Colors.black,
+              disabledForegroundColor: Colors.white70,
+              disabledBackgroundColor: Colors.black54,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            ),
+          ),
           const Spacer(),
           TextButton.icon(
               onPressed: _spokenText.isNotEmpty ? _resetOutput : null,
               icon: const Icon(Icons.refresh, size: 18),
-              label: const Text('Reset')),
+              label: const Text('New Translation'),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.white,
+                backgroundColor: Colors.black,
+                disabledForegroundColor: Colors.white70,
+                disabledBackgroundColor: Colors.black54,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              )),
         ]),
         if (_spokenText.isNotEmpty) ...[
           Row(children: [
             Expanded(
                 child: _outBox('You said $_spokenLang:', _spokenText,
-                    Colors.blue, isDark)),
+                    Color(0xFF000000), isDark)),
             const SizedBox(width: 8),
             IconButton(
               icon: const Icon(Icons.repeat),
@@ -1621,7 +2117,7 @@ class _HomeScreenState extends State<HomeScreen> {
           Row(children: [
             Expanded(
                 child: _outBox('Translation $_translatedLang:', _translatedText,
-                    Colors.green, isDark)),
+                    Color(0xFF000000), isDark)),
             const SizedBox(width: 8),
             IconButton(
               icon: const Icon(Icons.repeat),
@@ -1637,9 +2133,9 @@ class _HomeScreenState extends State<HomeScreen> {
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
-                color: Colors.orange.withOpacity(isDark ? 0.12 : 0.08),
+                color: isDark ? Colors.white12 : Colors.black12,
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.orange.withOpacity(0.4)),
+                border: Border.all(color: isDark ? Colors.white24 : Colors.black26),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1648,54 +2144,78 @@ class _HomeScreenState extends State<HomeScreen> {
                       style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.bold,
-                          color: isDark
-                              ? Colors.orange.shade300
-                              : Colors.orange.shade800)),
+                          color: isDark ? Colors.white70 : const Color(0xFF000000))),
                   const SizedBox(height: 3),
                   Text(_phoneticText,
                       style: TextStyle(
                           fontSize: 14,
-                          color: isDark ? Colors.white : Colors.black87,
+                          color: isDark ? Colors.white : const Color(0xFF000000),
                           fontStyle: FontStyle.italic)),
                 ],
               ),
             ),
           ],
           const SizedBox(height: 10),
+          Center(
+            child: TextButton.icon(
+              onPressed: () {
+                setState(() {
+                  _selectedLearnLang = _selectedOutputLang;
+                  _activeTab = 'learn';
+                  _learnFocusTextByLang[_selectedOutputLang] = _translatedText;
+                  _learnFocusMeaningByLang[_selectedOutputLang] = _spokenText;
+                  _learnFocusPhoneticByLang[_selectedOutputLang] = _phoneticText.isEmpty ? null : _phoneticText;
+                });
+                _showSnack('Sentence sent to Learn');
+              },
+              icon: const Icon(Icons.school, size: 18),
+              label: const Text('Send to Learn'),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.white,
+                backgroundColor: Colors.black,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
         ],
         if (_spokenText.isEmpty && _translatedText.isEmpty)
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(20),
-            margin: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            margin: const EdgeInsets.only(top: 6),
             decoration: BoxDecoration(
               color: isDark ? Colors.white10 : Colors.grey.shade100,
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(10),
               border: Border.all(
                   color: isDark ? Colors.white24 : Colors.grey.shade300),
             ),
-            child: Text('Hold TALK to speak, or type above to translate.',
+            child: Text('Hold TALK to speak',
                 textAlign: TextAlign.center,
                 style: TextStyle(
+                    fontSize: 13,
                     color: isDark ? Colors.white60 : Colors.grey.shade600)),
           ),
-        const SizedBox(height: 32),
+        const Spacer(),
+        const SizedBox(height: 12),
         // Talk button
         Center(
             child: GestureDetector(
           onTapDown: (_) => _startListening(),
           onTapUp: (_) => _stopListening(),
-          onTapCancel: _stopListening,
+          // Do not stop on cancel; only release when user lifts finger.
+          onTapCancel: () {},
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 150),
             width: _isTalking ? 130 : 120,
             height: _isTalking ? 130 : 120,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: _isTalking ? Colors.red : const Color(0xFF1E3C72),
+              color: _isTalking ? Colors.red : Colors.green,
               boxShadow: [
                 BoxShadow(
-                  color: (_isTalking ? Colors.red : const Color(0xFF1E3C72))
+                  color: (_isTalking ? Colors.red : Colors.green)
                       .withOpacity(0.4),
                   blurRadius: _isTalking ? 20 : 10,
                   spreadRadius: _isTalking ? 4 : 2,
@@ -1716,8 +2236,12 @@ class _HomeScreenState extends State<HomeScreen> {
             ]),
           ),
         )),
-        const SizedBox(height: 24),
+        const SizedBox(height: 8),
       ]),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -1726,10 +2250,8 @@ class _HomeScreenState extends State<HomeScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
       decoration: BoxDecoration(
-        border: Border.all(
-            color: isDark ? Colors.white38 : const Color(0xFF1E3C72)),
         borderRadius: BorderRadius.circular(10),
-        color: isDark ? Colors.white10 : Colors.white,
+        color: Colors.transparent,
       ),
       child: DropdownButtonHideUnderline(
           child: DropdownButton<String>(
@@ -1737,10 +2259,16 @@ class _HomeScreenState extends State<HomeScreen> {
         value: value,
         dropdownColor: isDark ? const Color(0xFF1B263B) : Colors.white,
         style: TextStyle(
-            color: isDark ? Colors.white : Colors.black87,
-            fontWeight: FontWeight.w600),
+            color: isDark ? Colors.white : const Color(0xFF000000),
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Georgia'),
         items: langs
-            .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+            .map((e) => DropdownMenuItem(
+                value: e,
+                child: Text(
+                  e,
+                  style: const TextStyle(fontFamily: 'Georgia'),
+                )))
             .toList(),
         onChanged: onChanged,
       )),
@@ -1759,11 +2287,16 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(label,
             style: TextStyle(
-                fontWeight: FontWeight.bold, color: color, fontSize: 12)),
+                fontWeight: FontWeight.bold,
+                color: color,
+                fontSize: 12,
+                fontFamily: 'Georgia')),
         const SizedBox(height: 6),
         Text(text,
             style: TextStyle(
-                fontSize: 16, color: isDark ? Colors.white : Colors.black87)),
+                fontSize: 16,
+                color: isDark ? Colors.white : const Color(0xFF000000),
+                fontFamily: 'Georgia')),
       ]),
     );
   }
@@ -1777,7 +2310,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // Build text summary file
       final buf = StringBuffer();
-      buf.writeln('Limpopo Voice — Translation History');
+      buf.writeln('Let\'s Talk — Translation History');
       buf.writeln('Exported: ${DateTime.now().toString().substring(0, 16)}');
       buf.writeln();
       for (int i = 0; i < _history.length; i++) {
@@ -1796,11 +2329,13 @@ class _HomeScreenState extends State<HomeScreen> {
       for (int i = 0; i < _history.length; i++) {
         final item = _history[i];
         try {
-          final inVoice = _voiceNames[item.inputLang] ?? 'Aletta';
+          final inProvider = _ttsProviderForLanguage(item.inputLang);
+          final inVoice = _voiceNameForLanguage(item.inputLang);
           final inAudio = await _translationService.generateTranslation(
             item.original,
             item.inputLang,
             voiceName: inVoice,
+            ttsProvider: inProvider,
           );
           if (inAudio != null && inAudio.isNotEmpty) {
             final mp3 = File(
@@ -1810,11 +2345,13 @@ class _HomeScreenState extends State<HomeScreen> {
           }
         } catch (_) {}
         try {
-          final outVoice = _voiceNames[item.outputLang] ?? 'Aletta';
+          final outProvider = _ttsProviderForLanguage(item.outputLang);
+          final outVoice = _voiceNameForLanguage(item.outputLang);
           final outAudio = await _translationService.generateTranslation(
             item.translated,
             item.outputLang,
             voiceName: outVoice,
+            ttsProvider: outProvider,
           );
           if (outAudio != null && outAudio.isNotEmpty) {
             final mp3 = File(
@@ -1827,7 +2364,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
       if (files.isNotEmpty) {
         await Share.shareXFiles(files,
-            subject: 'Limpopo Voice — Translation History');
+            subject: 'Let\'s Talk — Translation History');
       }
     } catch (e) {
       debugPrint('Export error: $e');
@@ -1887,7 +2424,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   icon: const Icon(Icons.email_outlined, size: 18),
                   label: const Text('Download All'),
                   style: TextButton.styleFrom(
-                      foregroundColor: const Color(0xFF2A5298)),
+                      foregroundColor: const Color(0xFF000000)),
                 ),
               TextButton.icon(
                 onPressed: () => setState(() => _history.clear()),
@@ -1917,7 +2454,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         Text('${item.inputLang} -> ${item.outputLang}',
                             style: const TextStyle(
                                 fontWeight: FontWeight.bold,
-                                color: Color(0xFF2A5298))),
+                                color: Color(0xFF000000))),
                         const Spacer(),
                         Text(
                             '${item.time.hour.toString().padLeft(2, "0")}:${item.time.minute.toString().padLeft(2, "0")}',
@@ -1962,6 +2499,50 @@ class _HomeScreenState extends State<HomeScreen> {
                               const BoxConstraints(minWidth: 36, minHeight: 36),
                         ),
                       ]),
+                      const SizedBox(height: 8),
+                      Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () => _sendHistoryToLearn(item),
+                          borderRadius: BorderRadius.circular(10),
+                          child: Ink(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: isDark
+                                  ? Colors.white12
+                                  : Colors.black12,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: isDark
+                                    ? Colors.white24
+                                    : Colors.black26,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(Icons.school,
+                                    size: 18,
+                                    color: isDark ? Colors.white70 : const Color(0xFF000000)),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'Send to Learn',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: isDark ? Colors.white70 : const Color(0xFF000000),
+                                  ),
+                                ),
+                                const Spacer(),
+                                Icon(Icons.arrow_forward_ios,
+                                    size: 13,
+                                    color: isDark ? Colors.white70 : const Color(0xFF000000)),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
                       if ((item.phonetic ?? '').isNotEmpty) ...[
                         const SizedBox(height: 6),
                         Container(
@@ -1969,11 +2550,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 10, vertical: 6),
                           decoration: BoxDecoration(
-                            color:
-                                Colors.orange.withOpacity(isDark ? 0.12 : 0.08),
+                            color: isDark ? Colors.white12 : Colors.black12,
                             borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                                color: Colors.orange.withOpacity(0.4)),
+                            border: Border.all(color: isDark ? Colors.white24 : Colors.black26),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1982,9 +2561,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   style: TextStyle(
                                       fontSize: 10,
                                       fontWeight: FontWeight.bold,
-                                      color: isDark
-                                          ? Colors.orange.shade300
-                                          : Colors.orange.shade800)),
+                                      color: isDark ? Colors.white70 : const Color(0xFF000000))),
                               const SizedBox(height: 2),
                               Text(item.phonetic ?? '',
                                   style: TextStyle(

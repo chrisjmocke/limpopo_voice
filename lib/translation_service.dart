@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -8,12 +7,26 @@ class TranslationService {
   final String functionUrl;
   final http.Client _client = http.Client();
 
+  String? _lastErrorCode;
+  String? _lastErrorDetails;
+
   String? _cachedIdToken;
   DateTime _idTokenFetchedAt = DateTime.fromMillisecondsSinceEpoch(0);
-  String? _cachedAppCheckToken;
-  DateTime _appCheckFetchedAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  String? get lastErrorCode => _lastErrorCode;
+  String? get lastErrorDetails => _lastErrorDetails;
 
   TranslationService({required this.functionUrl});
+
+  void _setLastError(String code, [String? details]) {
+    _lastErrorCode = code;
+    _lastErrorDetails = details;
+  }
+
+  void _clearLastError() {
+    _lastErrorCode = null;
+    _lastErrorDetails = null;
+  }
 
   Future<void> _refreshIdToken() async {
     try {
@@ -40,6 +53,7 @@ class TranslationService {
     user ??= (await FirebaseAuth.instance.signInAnonymously()).user;
     if (user == null) {
       debugPrint('TranslationService: No Firebase user available');
+      _setLastError('auth_unavailable', 'No Firebase user available');
       return null;
     }
 
@@ -50,26 +64,10 @@ class TranslationService {
       _idTokenFetchedAt = now;
     }
 
-    if (_cachedAppCheckToken == null ||
-        now.difference(_appCheckFetchedAt) > const Duration(minutes: 8)) {
-      try {
-        // Do not force refresh every call; this significantly reduces TTS latency.
-        _cachedAppCheckToken = await FirebaseAppCheck.instance.getToken(false);
-      } catch (e) {
-        // Some older/unsupported devices fail App Check token retrieval.
-        debugPrint('TranslationService: App Check token unavailable: $e');
-      } finally {
-        _appCheckFetchedAt = now;
-      }
-    }
-
     final headers = <String, String>{
       'Content-Type': 'application/json',
       'Authorization': 'Bearer ${_cachedIdToken ?? ''}',
     };
-    if (_cachedAppCheckToken != null && _cachedAppCheckToken!.isNotEmpty) {
-      headers['X-Firebase-AppCheck'] = _cachedAppCheckToken!;
-    }
     return headers;
   }
 
@@ -77,9 +75,12 @@ class TranslationService {
     String text,
     String targetLanguage, {
     String? voiceName,
+    String ttsProvider = 'narakeet',
   }) async {
+    _clearLastError();
     final input = text.trim();
     if (input.isEmpty || functionUrl.trim().isEmpty) {
+      _setLastError('invalid_input', 'Empty input or function URL');
       return null;
     }
 
@@ -98,12 +99,13 @@ class TranslationService {
           'skipTranslation': true,
           'isMale': true,
           'voiceName': voiceName,
-          'ttsProvider': 'narakeet',
+          'ttsProvider': ttsProvider,
         }),
       ).timeout(const Duration(seconds: 45));
 
       if (response.statusCode == 401) {
         // Token may be stale/invalid after app resume; refresh once and retry.
+        _setLastError('auth_unauthorized', response.body);
         await _refreshIdToken();
         final retryHeaders = await _buildHeaders();
         if (retryHeaders == null) {
@@ -120,52 +122,69 @@ class TranslationService {
             'skipTranslation': true,
             'isMale': true,
             'voiceName': voiceName,
-            'ttsProvider': 'narakeet',
+            'ttsProvider': ttsProvider,
           }),
         ).timeout(const Duration(seconds: 45));
 
         if (retryResponse.statusCode != 200) {
           debugPrint(
               'TranslationService: Function error ${retryResponse.statusCode} ${retryResponse.body}');
+          _setLastError('function_http_error',
+              '${retryResponse.statusCode}: ${retryResponse.body}');
           return null;
         }
 
         final retryBody = jsonDecode(retryResponse.body);
         if (retryBody is! Map<String, dynamic>) {
           debugPrint('TranslationService: Unexpected retry response format');
+          _setLastError('invalid_response', 'Unexpected retry response format');
           return null;
         }
 
         final retryAudioBase64 = retryBody['audioContent'] as String?;
         if (retryAudioBase64 == null || retryAudioBase64.isEmpty) {
           debugPrint('TranslationService: No audioContent in retry response');
+          _setLastError('missing_audio', 'No audioContent in retry response');
           return null;
         }
 
+        _clearLastError();
         return base64Decode(retryAudioBase64);
       }
 
       if (response.statusCode != 200) {
         debugPrint(
             'TranslationService: Function error ${response.statusCode} ${response.body}');
+        _setLastError(
+            'function_http_error', '${response.statusCode}: ${response.body}');
         return null;
       }
 
       final body = jsonDecode(response.body);
       if (body is! Map<String, dynamic>) {
         debugPrint('TranslationService: Unexpected response format');
+        _setLastError('invalid_response', 'Unexpected response format');
+        return null;
+      }
+
+      final offensiveContent = body['offensiveContent'] as bool? ?? false;
+      if (offensiveContent) {
+        _setLastError('offensive_filtered', 'Offensive content filtered');
         return null;
       }
 
       final audioBase64 = body['audioContent'] as String?;
       if (audioBase64 == null || audioBase64.isEmpty) {
         debugPrint('TranslationService: No audioContent in response');
+        _setLastError('missing_audio', 'No audioContent in response');
         return null;
       }
 
+      _clearLastError();
       return base64Decode(audioBase64);
     } catch (e) {
       debugPrint('TranslationService: Exception $e');
+      _setLastError('exception', e.toString());
       return null;
     }
   }

@@ -1,6 +1,6 @@
 @echo off
 REM =====================================================
-REM Limpopo Voice - Universal APK Build Script
+REM Let's Talk - Universal APK Build Script
 REM =====================================================
 REM This script builds all APK variants for Android distribution
 REM Usage: Run this from the project root directory
@@ -11,7 +11,7 @@ cd /d "%~dp0"
 
 echo.
 echo ========================================
-echo Limpopo Voice - Building APK Packages
+echo Let's Talk - Building APK Packages
 echo ========================================
 echo.
 
