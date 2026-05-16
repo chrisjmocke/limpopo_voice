@@ -10,8 +10,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:limpopo_voice/main.dart';
 
 void main() {
-  test('LingoLangaApp can be instantiated', () {
-    const app = LingoLangaApp();
-    expect(app, isA<LingoLangaApp>());
+  test('LimpopoVoiceApp can be instantiated', () {
+    const app = LimpopoVoiceApp();
+    expect(app, isA<LimpopoVoiceApp>());
   });
 }
