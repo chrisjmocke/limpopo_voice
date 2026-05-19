@@ -91,11 +91,12 @@ class _LimpopoVoiceAppState extends State<LimpopoVoiceApp> {
       builder: (context, child) {
         final media = MediaQuery.of(context);
         return MediaQuery(
-          data: media.copyWith(textScaler: const TextScaler.linear(0.90)),
+          data: media.copyWith(textScaler: const TextScaler.linear(1.0)),
           child: DefaultTextStyle.merge(
             style: const TextStyle(
               fontFamily: 'monospace',
               fontWeight: FontWeight.w900,
+              fontSize: 18,
               shadows: [
                 Shadow(
                   color: Color(0x66000000),
@@ -181,6 +182,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+          final FocusNode _inputFocusNode = FocusNode();
         // Track selection state for history items
         Set<int> _selectedHistoryIndexes = {};
         bool _showClearAll = false;
@@ -905,13 +907,19 @@ class _HomeScreenState extends State<HomeScreen> {
             style: TextStyle(color: Color(0xFF000000)),
           ),
         ),
+        actionsAlignment: MainAxisAlignment.end,
         actions: [
           Builder(
             builder: (ctx2) {
-              final isDark = Theme.of(ctx2).brightness == Brightness.dark;
               return TextButton(
+                style: TextButton.styleFrom(
+                  backgroundColor: Colors.black,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                ),
                 onPressed: () => Navigator.of(ctx).pop(),
-                child: Text('Close', style: TextStyle(color: isDark ? Colors.white : Color(0xFF000000))),
+                child: const Text('Accept and Close', style: TextStyle(color: Colors.white)),
               );
             },
           ),
@@ -2429,203 +2437,239 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ]),
         const SizedBox(height: 14),
-        // TTT row
-        Row(children: [
-          Expanded(
-              child: SizedBox(
-            height: 44,
-            child: TextField(
-              controller: _tttController,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 14),
-              decoration: InputDecoration(
-                isDense: true,
-                hintText: 'Type text to translate...',
-                hintStyle: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                filled: true,
-                fillColor: isDark ? Colors.white10 : Colors.white,
-              ),
-              onSubmitted: (_) => _submitTTT(),
-              textInputAction: TextInputAction.send,
-            ),
-          )),
-          const SizedBox(width: 8),
-          IconButton.filled(
-            onPressed: _submitTTT,
-            icon: const Icon(Icons.send),
-            style: IconButton.styleFrom(
-              backgroundColor: const Color(0xFF000000),
-                foregroundColor: Colors.white,
-                minimumSize: const Size(42, 42),
-                maximumSize: const Size(42, 42),
-                padding: EdgeInsets.zero),
-          ),
-        ]),
+        // ...removed 'type to text' box...
         const SizedBox(height: 8),
-        Row(
-          children: [
-            TextButton.icon(
-              onPressed: (_spokenText.isNotEmpty &&
-                      _translatedText.isNotEmpty &&
-                      !_sharingCurrentTranslation)
-                  ? _shareCurrentTranslationPackage
-                  : null,
-              icon: const Icon(Icons.share, size: 18),
-              label: Text(_sharingCurrentTranslation ? 'Sharing...' : 'Share'),
-              style: TextButton.styleFrom(
-                foregroundColor: isDark ? Colors.white : const Color(0xFF000000),
-                backgroundColor: isDark ? Colors.black : Colors.white,
-                disabledForegroundColor: isDark ? Colors.white70 : Colors.black45,
-                disabledBackgroundColor: isDark ? Colors.black54 : Colors.white70,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              ),
-            ),
-            const Spacer(),
-            TextButton.icon(
-              onPressed: _spokenText.isNotEmpty ? _resetOutput : null,
-              icon: const Icon(Icons.refresh, size: 18),
-              label: const Text('New Translation'),
-              style: TextButton.styleFrom(
-                foregroundColor: isDark ? Colors.white : const Color(0xFF000000),
-                backgroundColor: isDark ? Colors.black : Colors.white,
-                disabledForegroundColor: isDark ? Colors.white70 : Colors.black45,
-                disabledBackgroundColor: isDark ? Colors.black54 : Colors.white70,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              ),
-            ),
-          ],
-        ),
         const SizedBox(height: 12),
-        if (_spokenText.isNotEmpty) ...[
-          Row(children: [
-            Expanded(
-              child: _outBox('You said $_spokenLang:', _spokenText,
-                isDark ? Color(0xFF000000) : Color(0xFFE0F8D8), isDark)),
-            const SizedBox(width: 8),
-            IconButton(
-              icon: const Icon(Icons.repeat),
-              onPressed: () => _speakText(
-                  _spokenRawText.isNotEmpty ? _spokenRawText : _spokenText,
-                  _selectedInputLang),
-              tooltip: 'Repeat',
+        // Input box (slightly smaller)
+        GestureDetector(
+          onTap: () {
+            FocusScope.of(context).requestFocus(_inputFocusNode);
+          },
+          child: Container(
+            width: double.infinity,
+            height: (constraints.maxHeight - 260) * 0.42,
+            margin: const EdgeInsets.only(bottom: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: isDark ? Colors.white12 : const Color(0xFFE0F8D8),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: isDark ? Colors.white24 : Colors.black26),
             ),
-          ]),
-          const SizedBox(height: 10),
-        ],
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      _selectedInputLang,
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                        color: isDark ? Colors.white70 : Colors.black54,
+                      ),
+                    ),
+                    // Removed 'Type or Talk' text
+                  ],
+                ),
+                Expanded(
+                  child: Stack(
+                    children: [
+                      if (_spokenText.isNotEmpty && _tttController.text.isEmpty)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            _spokenText,
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 14,
+                              color: isDark ? Colors.white : Colors.black,
+                            ),
+                          ),
+                        ),
+                      TextField(
+                        controller: _tttController,
+                        focusNode: _inputFocusNode,
+                        autofocus: false,
+                        enableSuggestions: true,
+                        autocorrect: true,
+                        keyboardType: TextInputType.text,
+                        textCapitalization: TextCapitalization.sentences,
+                        cursorColor: isDark ? Colors.white : Colors.black,
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 14,
+                          color: isDark ? Colors.white : Colors.black,
+                        ),
+                        decoration: const InputDecoration(
+                          border: InputBorder.none,
+                          hintText: '',
+                          isDense: true,
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                        minLines: 1,
+                        maxLines: 3,
+                        readOnly: true,
+                        onChanged: (_) => setState(() {}),
+                        onSubmitted: (_) => _submitTTT(),
+                        textInputAction: TextInputAction.send,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        // Output box (slightly smaller)
+        Container(
+          width: double.infinity,
+          height: (constraints.maxHeight - 260) * 0.42,
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: isDark ? Colors.white12 : const Color(0xFFFFF3E0),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: isDark ? Colors.white24 : Colors.black26),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _selectedOutputLang,
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                  color: isDark ? Colors.white70 : Colors.black54,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    _translatedText.isNotEmpty ? _translatedText : '',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 14,
+                      color: isDark ? Colors.white : Colors.black,
+                    ),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        // Restore 'Send to Learn' button below output box
+        if (_translatedText.isNotEmpty && !_isTranslating)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8.0),
+            child: Center(
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: isDark ? Colors.white12 : const Color(0xFFE0F8D8),
+                  foregroundColor: isDark ? Colors.white : Colors.black,
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  elevation: 0,
+                ),
+                icon: const Icon(Icons.school, size: 20),
+                label: const Text('Send to Learn', style: TextStyle(fontWeight: FontWeight.bold)),
+                onPressed: () {
+                  _sendToLearnMultipleLangs(
+                    translated: _translatedText,
+                    original: _spokenText.isNotEmpty ? _spokenText : _tttController.text,
+                    phonetic: _phoneticText,
+                    langs: [_selectedOutputLang],
+                  );
+                },
+              ),
+            ),
+          ),
         if (_isTranslating)
           const Padding(
             padding: EdgeInsets.only(bottom: 10),
-            child: LinearProgressIndicator(),
-          ),
-        if (_translatedText.isNotEmpty) ...[
-          Row(children: [
-            Expanded(
-              child: _outBox('Translation $_translatedLang:', _translatedText,
-                isDark ? Color(0xFF000000) : Color(0xFFFFF3E0), isDark)),
-            const SizedBox(width: 8),
-            IconButton(
-              icon: const Icon(Icons.repeat),
-              onPressed: () => _speakTranslatedText(_translatedRawText.isNotEmpty
-                  ? _translatedRawText
-                  : _translatedText),
-              tooltip: 'Repeat',
-            ),
-          ]),
-          if (_phoneticText.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                color: isDark ? Colors.white12 : Colors.black12,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: isDark ? Colors.white24 : Colors.black26),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Phonetics (how to say it):',
-                      style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: isDark ? Colors.white70 : const Color(0xFF000000))),
-                  const SizedBox(height: 3),
-                  Text(_phoneticText,
-                      style: TextStyle(
-                          fontSize: 14,
-                          color: isDark ? Colors.white : const Color(0xFF000000),
-                          fontStyle: FontStyle.italic)),
-                ],
-              ),
-            ),
-          ],
-          const SizedBox(height: 10),
-          Center(
-            child: TextButton.icon(
-              icon: Icon(Icons.send, color: isDark ? Colors.white : Color(0xFF000000)),
-              label: Text('Send to Learn', style: TextStyle(color: isDark ? Colors.white : Color(0xFF000000))),
-              onPressed: () {
-                _sendToLearnMultipleLangs(
-                  translated: _translatedText,
-                  original: _spokenText,
-                  phonetic: _phoneticText,
-                  langs: [_selectedOutputLang],
-                );
-                setState(() {
-                  _selectedLearnLang = _selectedOutputLang;
-                  _activeTab = 'learn';
-                });
-              },
+            child: LinearProgressIndicator(
+              color: Colors.white,
+              backgroundColor: Colors.transparent,
             ),
           ),
-          const SizedBox(height: 10),
-        ],
         const Spacer(),
-        const SizedBox(height: 12),
-        // Talk button
-        Center(
-            child: GestureDetector(
-          onTapDown: (_) => _startListening(),
-          onTapUp: (_) => _stopListening(),
-          // Do not stop on cancel; only release when user lifts finger.
-          onTapCancel: () {},
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            width: _isTalking ? 130 : 120,
-            height: _isTalking ? 130 : 120,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: _isTalking ? Colors.red : Colors.green,
-              boxShadow: [
-                BoxShadow(
-                  color: (_isTalking ? Colors.red : Colors.green)
-                      .withOpacity(0.4),
-                  blurRadius: _isTalking ? 20 : 10,
-                  spreadRadius: _isTalking ? 4 : 2,
-                )
-              ],
-            ),
-            child:
-                Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(_isTalking ? Icons.mic : Icons.mic_none,
-                  color: Colors.white, size: 40),
-              const SizedBox(height: 4),
-              Text(_isTalking ? 'LISTENING' : 'HOLD TO TALK',
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 0.5)),
-            ]),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 16.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              IconButton(
+                onPressed: (_spokenText.isNotEmpty &&
+                        _translatedText.isNotEmpty &&
+                        !_sharingCurrentTranslation)
+                    ? _shareCurrentTranslationPackage
+                    : null,
+                icon: Icon(
+                  Icons.share,
+                  size: 28,
+                  color: isDark ? Colors.white : Colors.black,
+                ),
+                tooltip: 'Share',
+                padding: const EdgeInsets.all(8),
+              ),
+              GestureDetector(
+                onTapDown: (_) => _startListening(),
+                onTapUp: (_) => _stopListening(),
+                onTapCancel: () {},
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  width: _isTalking ? 130 : 120,
+                  height: _isTalking ? 130 : 120,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _isTalking ? Colors.red : Colors.green,
+                    boxShadow: [
+                      BoxShadow(
+                        color: (_isTalking ? Colors.red : Colors.green)
+                            .withOpacity(0.4),
+                        blurRadius: _isTalking ? 20 : 10,
+                        spreadRadius: _isTalking ? 4 : 2,
+                      )
+                    ],
+                  ),
+                  child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(_isTalking ? Icons.mic : Icons.mic_none,
+                            color: Colors.white, size: 40),
+                        const SizedBox(height: 4),
+                        Text(
+                          _isTalking ? 'LISTENING' : 'HOLD TO TALK',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.5),
+                        ),
+                      ]),
+                ),
+              ),
+              IconButton(
+                onPressed: _spokenText.isNotEmpty ? _resetOutput : null,
+                icon: Icon(
+                  Icons.refresh,
+                  size: 28,
+                  color: isDark ? Colors.white : Colors.black,
+                ),
+                tooltip: 'New Translation',
+                padding: const EdgeInsets.all(8),
+              ),
+            ],
           ),
-        )),
-        const SizedBox(height: 8),
+        ),
       ]),
             ),
           ),
@@ -2815,39 +2859,16 @@ class _HomeScreenState extends State<HomeScreen> {
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            mainAxisAlignment: MainAxisAlignment.end,
             children: [
               TextButton.icon(
                 onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Preparing audio & history...'),
-                      duration: Duration(seconds: 2),
-                    ),
-                  );
-                  _exportHistory();
-                },
-                icon: const Icon(Icons.email_outlined, size: 18),
-                label: const Text('Download All'),
-                style: TextButton.styleFrom(
-                  foregroundColor:
-                      isDark ? Colors.white : const Color(0xFF000000),
-                ),
-              ),
-              TextButton.icon(
-                onPressed: () {
                   setState(() {
-                    if (!_showClearAll) {
-                      _showClearAll = true;
-                    } else {
-                      _history.clear();
-                      _selectedHistoryIndexes.clear();
-                      _showClearAll = false;
-                    }
+                    _history.clear();
                   });
                 },
                 icon: const Icon(Icons.delete_sweep, size: 18),
-                label: Text(_showClearAll ? 'Clear All' : 'Clear History'),
+                label: const Text('Clear History'),
                 style: TextButton.styleFrom(
                   foregroundColor: isDark ? Colors.red : Colors.red,
                 ),
@@ -2865,83 +2886,64 @@ class _HomeScreenState extends State<HomeScreen> {
               return Card(
                 margin: const EdgeInsets.only(bottom: 12),
                 color: isDark ? Colors.white12 : const Color(0xFFFFEBEE), // pastel red
-                child: ListTile(
-                  leading: _showClearAll
-                      ? GestureDetector(
-                          onTap: () {
-                            setState(() {
-                              if (selected) {
-                                _selectedHistoryIndexes.remove(i);
-                              } else {
-                                _selectedHistoryIndexes.add(i);
-                              }
-                            });
-                          },
-                          child: Container(
-                            width: 28,
-                            height: 28,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: selected
-                                  ? (isDark ? Colors.red : Colors.red.shade100)
-                                  : Colors.transparent,
-                              border: Border.all(
-                                  color: selected
-                                      ? (isDark ? Colors.red : Colors.red)
-                                      : (isDark ? Colors.white54 : Colors.black26),
-                                  width: 2),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ListTile(
+                      title: Text(item.translated,
+                          style: TextStyle(
+                              color: isDark ? Colors.white : Colors.black,
+                              fontWeight: FontWeight.bold)),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('From: ${item.inputLang}'),
+                          Text('To: ${item.outputLang}'),
+                          if ((item.phonetic ?? '').isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4.0),
+                              child: Text('Phonetics: ${item.phonetic}',
+                                  style: TextStyle(
+                                      fontStyle: FontStyle.italic,
+                                      color: isDark ? Colors.white70 : Colors.black87)),
                             ),
-                            child: selected
-                                ? Icon(Icons.check, size: 18, color: isDark ? Colors.white : Colors.red)
-                                : null,
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4.0),
+                            child: Text('Original: ${item.original}'),
                           ),
-                        )
-                      : null,
-                  title: Text(item.translated,
-                      style: TextStyle(
-                          color: isDark ? Colors.white : Colors.black,
-                          fontWeight: FontWeight.bold)),
-                  subtitle: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('From: ${item.inputLang}'),
-                      Text('To: ${item.outputLang}'),
-                      if ((item.phonetic ?? '').isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4.0),
-                          child: Text('Phonetics: ${item.phonetic}',
-                              style: TextStyle(
-                                  fontStyle: FontStyle.italic,
-                                  color: isDark ? Colors.white70 : Colors.black87)),
-                        ),
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4.0),
-                        child: Text('Original: ${item.original}'),
+                        ],
                       ),
-                    ],
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.volume_up),
-                        tooltip: 'Repeat',
-                        onPressed: () => _speakText(item.translated, item.outputLang),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.volume_up),
+                            tooltip: 'Repeat',
+                            onPressed: () => _speakText(item.translated, item.outputLang),
+                          ),
+                        ],
                       ),
-                      if (_showClearAll)
-                        IconButton(
-                          icon: Icon(Icons.delete, color: isDark ? Colors.red : Colors.red),
-                          tooltip: 'Delete',
-                          onPressed: () {
-                            setState(() {
-                              _history.removeAt(i);
-                              _selectedHistoryIndexes.remove(i);
-                            });
-                          },
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: isDark ? Colors.white12 : const Color(0xFFE0F8D8),
+                          foregroundColor: isDark ? Colors.white : Colors.black,
+                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          elevation: 0,
                         ),
-                    ],
-                  ),
-                  onTap: () => _sendHistoryToLearn(item),
+                        icon: const Icon(Icons.school, size: 20),
+                        label: const Text('Send to Learn', style: TextStyle(fontWeight: FontWeight.bold)),
+                        onPressed: () {
+                          _sendHistoryToLearn(item);
+                        },
+                      ),
+                    ),
+                  ],
                 ),
               );
             },
