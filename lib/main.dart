@@ -2251,25 +2251,13 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-              decoration: BoxDecoration(
-                color: isDark ? Colors.black : Colors.white,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: isDark ? Colors.white : Colors.black,
-                  width: 1.6,
-                ),
-              ),
-              child: Text(
-                pageName,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w900,
-                  color: isDark ? Colors.white : const Color(0xFF000000),
-                ),
+            child: Text(
+              pageName,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+                color: isDark ? Colors.white : const Color(0xFF000000),
               ),
             ),
           ),
@@ -2335,12 +2323,14 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Learn Everyday Phrases',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-              color: isDark ? Colors.white : const Color(0xFF000000),
+          Center(
+            child: Text(
+              'Learn Everyday Phrases',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: isDark ? Colors.white : const Color(0xFF000000),
+              ),
             ),
           ),
           const SizedBox(height: 10),
