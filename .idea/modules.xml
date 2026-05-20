@@ -2,8 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/limpopo_voice.iml" filepath="$PROJECT_DIR$/limpopo_voice.iml" />
-      <module fileurl="file://$PROJECT_DIR$/android/limpopo_voice_android.iml" filepath="$PROJECT_DIR$/android/limpopo_voice_android.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/limpopo_voice.iml" filepath="$PROJECT_DIR$/.idea/limpopo_voice.iml" />
     </modules>
   </component>
 </project>

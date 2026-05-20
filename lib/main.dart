@@ -1564,34 +1564,17 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _sendHistoryToLearn(HistoryItem item) async {
     final phonetic = (item.phonetic ?? '').trim();
     final normalizedOutputLang = _normalizeLanguageLabel(item.outputLang);
-    final phraseList = (_userLearnPhrasesByLang[normalizedOutputLang] ?? []);
-    if (phraseList.any((p) => p['text'] == item.translated)) {
-      final isDark = Theme.of(context).brightness == Brightness.dark;
-      await showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Duplicate'),
-          content: const Text('This phrase already exists in Learn.'),
-          backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-          surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: Text('Cancel', style: TextStyle(color: isDark ? Colors.white : Color(0xFF000000))),
-            ),
-          ],
-        ),
-      );
-      return;
-    }
+    // Use the same logic as the translation page
+    await _sendToLearnMultipleLangs(
+      translated: item.translated,
+      original: item.original,
+      phonetic: phonetic,
+      langs: [normalizedOutputLang],
+    );
     setState(() {
       _selectedLearnLang = normalizedOutputLang;
       _activeTab = 'learn';
-      _learnFocusTextByLang[normalizedOutputLang] = item.translated;
-      _learnFocusMeaningByLang[normalizedOutputLang] = item.original;
-      _learnFocusPhoneticByLang[normalizedOutputLang] = phonetic.isEmpty ? null : phonetic;
     });
-    _showSnack('Sentence sent to Learn');
   }
 
   String _narakeetUnavailableMessage() =>
@@ -2441,66 +2424,83 @@ class _HomeScreenState extends State<HomeScreen> {
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(color: isDark ? Colors.white24 : Colors.black26),
                       ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                      child: Stack(
                         children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Expanded(
-                                child: _langDrop(
-                                  _selectedInputLang,
-                                  _inputLangs,
-                                  (v) => setState(() => _selectedInputLang = v!),
-                                  isDark,
-                                ),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(
+                                    child: _langDrop(
+                                      _selectedInputLang,
+                                      _inputLangs,
+                                      (v) => setState(() => _selectedInputLang = v!),
+                                      isDark,
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          Expanded(
-                            child: Stack(
-                              children: [
-                                if (_spokenText.isNotEmpty && _tttController.text.isEmpty)
-                                  Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: Text(
-                                      _spokenText,
+                              const SizedBox(height: 6),
+                              Expanded(
+                                child: Stack(
+                                  children: [
+                                    if (_spokenText.isNotEmpty && _tttController.text.isEmpty)
+                                      Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: Text(
+                                          _spokenText,
+                                          style: TextStyle(
+                                            fontFamily: 'monospace',
+                                            fontSize: 14,
+                                            color: isDark ? Colors.white : Colors.black,
+                                          ),
+                                        ),
+                                      ),
+                                    TextField(
+                                      controller: _tttController,
+                                      focusNode: _inputFocusNode,
+                                      autofocus: false,
+                                      enableSuggestions: true,
+                                      autocorrect: true,
+                                      keyboardType: TextInputType.text,
+                                      textCapitalization: TextCapitalization.sentences,
+                                      cursorColor: isDark ? Colors.white : Colors.black,
                                       style: TextStyle(
                                         fontFamily: 'monospace',
                                         fontSize: 14,
                                         color: isDark ? Colors.white : Colors.black,
                                       ),
+                                      decoration: const InputDecoration(
+                                        border: InputBorder.none,
+                                        hintText: '',
+                                        isDense: true,
+                                        contentPadding: EdgeInsets.zero,
+                                      ),
+                                      minLines: 1,
+                                      maxLines: 3,
+                                      readOnly: true,
+                                      onChanged: (_) => setState(() {}),
+                                      onSubmitted: (_) => _submitTTT(),
+                                      textInputAction: TextInputAction.send,
                                     ),
-                                  ),
-                                TextField(
-                                  controller: _tttController,
-                                  focusNode: _inputFocusNode,
-                                  autofocus: false,
-                                  enableSuggestions: true,
-                                  autocorrect: true,
-                                  keyboardType: TextInputType.text,
-                                  textCapitalization: TextCapitalization.sentences,
-                                  cursorColor: isDark ? Colors.white : Colors.black,
-                                  style: TextStyle(
-                                    fontFamily: 'monospace',
-                                    fontSize: 14,
-                                    color: isDark ? Colors.white : Colors.black,
-                                  ),
-                                  decoration: const InputDecoration(
-                                    border: InputBorder.none,
-                                    hintText: '',
-                                    isDense: true,
-                                    contentPadding: EdgeInsets.zero,
-                                  ),
-                                  minLines: 1,
-                                  maxLines: 3,
-                                  readOnly: true,
-                                  onChanged: (_) => setState(() {}),
-                                  onSubmitted: (_) => _submitTTT(),
-                                  textInputAction: TextInputAction.send,
+                                  ],
                                 ),
-                              ],
+                              ),
+                            ],
+                          ),
+                          // Replay icon (bottom right)
+                          Positioned(
+                            bottom: 0,
+                            right: 0,
+                            child: IconButton(
+                              icon: const Icon(Icons.replay, size: 26),
+                              tooltip: 'Replay Input',
+                              color: isDark ? Colors.white : Colors.black,
+                              onPressed: _spokenText.isNotEmpty
+                                  ? () => _speakText(_spokenText, _selectedInputLang)
+                                  : null,
                             ),
                           ),
                         ],
@@ -2547,36 +2547,53 @@ class _HomeScreenState extends State<HomeScreen> {
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(color: isDark ? Colors.white24 : Colors.black26),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    child: Stack(
                       children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Expanded(
+                                  child: _langDrop(
+                                    _selectedOutputLang,
+                                    _outputLangs,
+                                    (v) => setState(() => _selectedOutputLang = v!),
+                                    isDark,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
                             Expanded(
-                              child: _langDrop(
-                                _selectedOutputLang,
-                                _outputLangs,
-                                (v) => setState(() => _selectedOutputLang = v!),
-                                isDark,
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  _translatedText.isNotEmpty ? _translatedText : '',
+                                  style: TextStyle(
+                                    fontFamily: 'monospace',
+                                    fontSize: 14,
+                                    color: isDark ? Colors.white : Colors.black,
+                                  ),
+                                  maxLines: 3,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 6),
-                        Expanded(
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: Text(
-                              _translatedText.isNotEmpty ? _translatedText : '',
-                              style: TextStyle(
-                                fontFamily: 'monospace',
-                                fontSize: 14,
-                                color: isDark ? Colors.white : Colors.black,
-                              ),
-                              maxLines: 3,
-                              overflow: TextOverflow.ellipsis,
-                            ),
+                        // Replay icon (bottom right)
+                        Positioned(
+                          bottom: 0,
+                          right: 0,
+                          child: IconButton(
+                            icon: const Icon(Icons.replay, size: 26),
+                            tooltip: 'Replay Output',
+                            color: isDark ? Colors.white : Colors.black,
+                            onPressed: _translatedText.isNotEmpty
+                                ? () => _speakText(_translatedText, _selectedOutputLang)
+                                : null,
                           ),
                         ),
                       ],
@@ -2607,6 +2624,10 @@ class _HomeScreenState extends State<HomeScreen> {
                               phonetic: _phoneticText,
                               langs: [_selectedOutputLang],
                             );
+                            setState(() {
+                              _selectedLearnLang = _selectedOutputLang;
+                              _activeTab = 'learn';
+                            });
                           },
                         ),
                       ),
