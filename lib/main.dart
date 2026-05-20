@@ -2661,16 +2661,15 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Center(
                         child: ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: isDark ? Colors.white12 : const Color(0xFFE3F0FF),
+                            backgroundColor: Colors.transparent,
                             foregroundColor: isDark ? Colors.white : Colors.black,
-                            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
-                            ),
+                            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                            minimumSize: const Size(0, 24),
+                            shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide.none),
                             elevation: 0,
                           ),
-                          icon: const Icon(Icons.school, size: 20),
-                          label: const Text('Send to Learn', style: TextStyle(fontWeight: FontWeight.bold)),
+                          icon: const Icon(Icons.school, size: 10),
+                          label: const Text('Send to Learn', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
                           onPressed: () async {
                             await _sendToLearnMultipleLangs(
                               translated: _translatedText,
@@ -3130,16 +3129,15 @@ class _HomeScreenState extends State<HomeScreen> {
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                       child: ElevatedButton.icon(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: isDark ? Colors.white12 : const Color(0xFFE3F0FF),
+                          backgroundColor: Colors.transparent,
                           foregroundColor: isDark ? Colors.white : Colors.black,
-                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                          minimumSize: const Size(0, 24),
+                          shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide.none),
                           elevation: 0,
                         ),
-                        icon: const Icon(Icons.school, size: 20),
-                        label: const Text('Send to Learn', style: TextStyle(fontWeight: FontWeight.bold)),
+                        icon: const Icon(Icons.school, size: 10),
+                        label: const Text('Send to Learn', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
                         onPressed: () async {
                           await _sendHistoryToLearn(item);
                         },
