@@ -2947,12 +2947,16 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               // Share History Icon Button (far left)
               Material(
-                color: Colors.white,
+                color: isDark ? Colors.black : Colors.white,
                 shape: const CircleBorder(),
                 elevation: 2,
                 child: IconButton(
                   onPressed: _history.isEmpty ? null : _exportHistory,
-                  icon: const Icon(Icons.share, size: 24, color: Colors.black),
+                  icon: Icon(
+                    Icons.share,
+                    size: 24,
+                    color: isDark ? Colors.white : Colors.black,
+                  ),
                   tooltip: 'Share History',
                   padding: const EdgeInsets.all(12),
                 ),
@@ -2960,7 +2964,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const Spacer(),
               // Clear History Icon Button (far right)
               Material(
-                color: Colors.white,
+                color: isDark ? Colors.black : Colors.white,
                 shape: const CircleBorder(),
                 elevation: 2,
                 child: IconButton(
@@ -2997,7 +3001,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       });
                     }
                   },
-                  icon: const Icon(Icons.delete_sweep, size: 24, color: Colors.black),
+                  icon: const Icon(
+                    Icons.delete_sweep,
+                    size: 24,
+                    color: Colors.red,
+                  ),
                   tooltip: 'Clear History',
                   padding: const EdgeInsets.all(12),
                 ),
