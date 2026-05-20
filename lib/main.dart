@@ -233,12 +233,42 @@ class _HomeScreenState extends State<HomeScreen> {
     // User-added phrases for Learn tab (mutable)
     final Map<String, List<Map<String, String>>> _userLearnPhrasesByLang = {};
 
-    void _sendToLearnMultipleLangs({
+    Future<void> _sendToLearnMultipleLangs({
       required String translated,
       required String original,
       required String phonetic,
       required List<String> langs,
-    }) {
+    }) async {
+      bool duplicateFound = false;
+      for (final lang in langs) {
+        final key = lang;
+        final phraseList = (_userLearnPhrasesByLang[key] ?? []);
+        if (phraseList.any((p) => p['text'] == translated)) {
+          duplicateFound = true;
+          break;
+        }
+      }
+      if (duplicateFound) {
+        await showDialog(
+          context: context,
+          builder: (ctx) {
+            final isDark = Theme.of(ctx).brightness == Brightness.dark;
+            return AlertDialog(
+              title: const Text('Duplicate'),
+              content: const Text('This phrase already exists in Learn.'),
+              backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+              surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: Text('Cancel', style: TextStyle(color: isDark ? Colors.white : Color(0xFF000000))),
+                ),
+              ],
+            );
+          },
+        );
+        return;
+      }
       setState(() {
         for (final lang in langs) {
           final key = lang;
@@ -1531,9 +1561,29 @@ class _HomeScreenState extends State<HomeScreen> {
   void _showSnack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
-  void _sendHistoryToLearn(HistoryItem item) {
+  Future<void> _sendHistoryToLearn(HistoryItem item) async {
     final phonetic = (item.phonetic ?? '').trim();
     final normalizedOutputLang = _normalizeLanguageLabel(item.outputLang);
+    final phraseList = (_userLearnPhrasesByLang[normalizedOutputLang] ?? []);
+    if (phraseList.any((p) => p['text'] == item.translated)) {
+      final isDark = Theme.of(context).brightness == Brightness.dark;
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Duplicate'),
+          content: const Text('This phrase already exists in Learn.'),
+          backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+          surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text('Cancel', style: TextStyle(color: isDark ? Colors.white : Color(0xFF000000))),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
     setState(() {
       _selectedLearnLang = normalizedOutputLang;
       _activeTab = 'learn';
@@ -2560,8 +2610,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                           icon: const Icon(Icons.school, size: 20),
                           label: const Text('Send to Learn', style: TextStyle(fontWeight: FontWeight.bold)),
-                          onPressed: () {
-                            _sendToLearnMultipleLangs(
+                          onPressed: () async {
+                            await _sendToLearnMultipleLangs(
                               translated: _translatedText,
                               original: _spokenText.isNotEmpty ? _spokenText : _tttController.text,
                               phonetic: _phoneticText,
@@ -3017,8 +3067,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         icon: const Icon(Icons.school, size: 20),
                         label: const Text('Send to Learn', style: TextStyle(fontWeight: FontWeight.bold)),
-                        onPressed: () {
-                          _sendHistoryToLearn(item);
+                        onPressed: () async {
+                          await _sendHistoryToLearn(item);
                         },
                       ),
                     ),
