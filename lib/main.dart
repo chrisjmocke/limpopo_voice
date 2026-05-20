@@ -2291,15 +2291,64 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
-            child: Text(
-              pageName,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w900,
-                color: isDark ? Colors.white : const Color(0xFF000000),
-              ),
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() => _activeTab = 'translate'),
+                    child: Container(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Translate',
+                        style: TextStyle(
+                          fontSize: _activeTab == 'translate' ? 14 : 11,
+                          fontWeight: FontWeight.w700,
+                          color: _activeTab == 'translate'
+                              ? (isDark ? Colors.white : Colors.black)
+                              : (isDark ? Colors.white54 : Colors.black54),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() => _activeTab = 'history'),
+                    child: Container(
+                      alignment: Alignment.center,
+                      child: Text(
+                        'History',
+                        style: TextStyle(
+                          fontSize: _activeTab == 'history' ? 14 : 11,
+                          fontWeight: FontWeight.w700,
+                          color: _activeTab == 'history'
+                              ? (isDark ? Colors.white : Colors.black)
+                              : (isDark ? Colors.white54 : Colors.black54),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() => _activeTab = 'learn'),
+                    child: Container(
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        'Learn',
+                        style: TextStyle(
+                          fontSize: _activeTab == 'learn' ? 14 : 11,
+                          fontWeight: FontWeight.w700,
+                          color: _activeTab == 'learn'
+                              ? (isDark ? Colors.white : Colors.black)
+                              : (isDark ? Colors.white54 : Colors.black54),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
           // Content
