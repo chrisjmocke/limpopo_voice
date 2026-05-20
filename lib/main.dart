@@ -1285,6 +1285,9 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    // Start timing
+    final Stopwatch ttsStopwatch = Stopwatch()..start();
+
     try {
       setState(() => _isPlayingAudio = true);
 
@@ -1345,6 +1348,17 @@ class _HomeScreenState extends State<HomeScreen> {
         } catch (_) {
           // Continue even if completion signal times out.
         }
+      }
+
+      // Stop timing after all playback is done
+      ttsStopwatch.stop();
+      final ttsMillis = ttsStopwatch.elapsedMilliseconds;
+      final ttsSeconds = (ttsMillis / 1000).toStringAsFixed(2);
+      final timingMsg = 'TTS time: $ttsSeconds seconds';
+      debugPrint(timingMsg);
+      // Show in UI
+      if (playedAny) {
+        _showSnack(timingMsg);
       }
 
       if (!playedAny) {
