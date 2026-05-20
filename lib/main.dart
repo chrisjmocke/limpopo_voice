@@ -2061,9 +2061,17 @@ class _HomeScreenState extends State<HomeScreen> {
       body: SafeArea(
         child: GestureDetector(
           onHorizontalDragEnd: (details) {
-            // Swipe left/right navigation between tabs
+            // Improved swipe logic:
+            // - If on Translate and swipe left: go to History if not empty, else go to Learn
+            // - If on History and swipe left: go to Learn
+            // - If on History and swipe right: go to Translate
+            // - If on Learn and swipe right: go to History if not empty, else go to Translate
             if (_activeTab == 'translate' && details.primaryVelocity != null && details.primaryVelocity! < -200) {
-              setState(() => _activeTab = 'history');
+              if (_history.isNotEmpty) {
+                setState(() => _activeTab = 'history');
+              } else {
+                setState(() => _activeTab = 'learn');
+              }
             } else if (_activeTab == 'history' && details.primaryVelocity != null) {
               if (details.primaryVelocity! < -200) {
                 setState(() => _activeTab = 'learn');
@@ -2071,7 +2079,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 setState(() => _activeTab = 'translate');
               }
             } else if (_activeTab == 'learn' && details.primaryVelocity != null && details.primaryVelocity! > 200) {
-              setState(() => _activeTab = 'history');
+              if (_history.isNotEmpty) {
+                setState(() => _activeTab = 'history');
+              } else {
+                setState(() => _activeTab = 'translate');
+              }
             }
           },
           child: AnimatedSwitcher(
@@ -3065,6 +3077,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildHistoryTab(bool isDark) {
     if (_history.isEmpty) {
+      // If history is empty and tab is history, auto-switch to Translate
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _activeTab == 'history') {
+          setState(() => _activeTab = 'translate');
+        }
+      });
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
