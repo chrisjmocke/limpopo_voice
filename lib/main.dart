@@ -2436,7 +2436,17 @@ class _HomeScreenState extends State<HomeScreen> {
                                     child: _langDrop(
                                       _selectedInputLang,
                                       _inputLangs,
-                                      (v) => setState(() => _selectedInputLang = v!),
+                                      (v) {
+                                        setState(() {
+                                          _selectedInputLang = v!;
+                                          _spokenText = '';
+                                          _spokenRawText = '';
+                                          _translatedText = '';
+                                          _translatedRawText = '';
+                                          _phoneticText = '';
+                                          _tttController.clear();
+                                        });
+                                      },
                                       isDark,
                                     ),
                                   ),
@@ -2559,7 +2569,17 @@ class _HomeScreenState extends State<HomeScreen> {
                                   child: _langDrop(
                                     _selectedOutputLang,
                                     _outputLangs,
-                                    (v) => setState(() => _selectedOutputLang = v!),
+                                    (v) {
+                                      setState(() {
+                                        _selectedOutputLang = v!;
+                                        _spokenText = '';
+                                        _spokenRawText = '';
+                                        _translatedText = '';
+                                        _translatedRawText = '';
+                                        _phoneticText = '';
+                                        _tttController.clear();
+                                      });
+                                    },
                                     isDark,
                                   ),
                                 ),
