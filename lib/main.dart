@@ -2032,7 +2032,38 @@ class _HomeScreenState extends State<HomeScreen> {
         : (_activeTab == 'learn' ? 'Learn' : 'Translate');
     return Scaffold(
       body: SafeArea(
-        child: Column(children: [
+        child: GestureDetector(
+          onHorizontalDragEnd: (details) {
+            // Swipe left/right navigation between tabs
+            if (_activeTab == 'translate' && details.primaryVelocity != null && details.primaryVelocity! < -200) {
+              setState(() => _activeTab = 'history');
+            } else if (_activeTab == 'history' && details.primaryVelocity != null) {
+              if (details.primaryVelocity! < -200) {
+                setState(() => _activeTab = 'learn');
+              } else if (details.primaryVelocity! > 200) {
+                setState(() => _activeTab = 'translate');
+              }
+            } else if (_activeTab == 'learn' && details.primaryVelocity != null && details.primaryVelocity! > 200) {
+              setState(() => _activeTab = 'history');
+            }
+          },
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 350),
+            transitionBuilder: (Widget child, Animation<double> animation) {
+              return FadeTransition(
+                opacity: animation,
+                child: child,
+              );
+            },
+            layoutBuilder: (currentChild, previousChildren) => Stack(
+              children: [
+                ...previousChildren,
+                if (currentChild != null) currentChild,
+              ],
+            ),
+            child: KeyedSubtree(
+              key: ValueKey(_activeTab),
+              child: Column(children: [
           // Top bar
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -2253,6 +2284,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     : _buildLearnTab(isDark)),
           ),
         ]),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -2985,7 +3019,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   onPressed: _history.isEmpty ? null : _exportHistory,
                   icon: Icon(
                     Icons.share,
-                    size: 24,
+                    size: 20,
                     color: isDark ? Colors.white : Colors.black,
                   ),
                   tooltip: 'Share History',
