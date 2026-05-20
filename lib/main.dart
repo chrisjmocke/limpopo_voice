@@ -2675,7 +2675,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 : null,
                             icon: Icon(
                               Icons.share,
-                              size: 28,
+                              size: 24,
                               color: Colors.white,
                             ),
                             tooltip: 'Share',
@@ -2702,7 +2702,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   : null,
                               icon: const Icon(
                                 Icons.share,
-                                size: 28,
+                                size: 24,
                                 color: Colors.black,
                               ),
                               tooltip: 'Share',
@@ -2751,7 +2751,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             onPressed: _spokenText.isNotEmpty ? _resetOutput : null,
                             icon: Icon(
                               Icons.refresh,
-                              size: 28,
+                              size: 24,
                               color: Colors.white,
                             ),
                             tooltip: 'New Translation',
@@ -2774,7 +2774,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               onPressed: _spokenText.isNotEmpty ? _resetOutput : null,
                               icon: const Icon(
                                 Icons.refresh,
-                                size: 28,
+                                size: 24,
                                 color: Colors.black,
                               ),
                               tooltip: 'New Translation',
