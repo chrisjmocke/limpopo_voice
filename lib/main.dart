@@ -233,7 +233,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // User-added phrases for Learn tab (mutable)
     final Map<String, List<Map<String, String>>> _userLearnPhrasesByLang = {};
 
-    Future<void> _sendToLearnMultipleLangs({
+    Future<bool> _sendToLearnMultipleLangs({
       required String translated,
       required String original,
       required String phonetic,
@@ -267,7 +267,7 @@ class _HomeScreenState extends State<HomeScreen> {
             );
           },
         );
-        return;
+        return false;
       }
       setState(() {
         for (final lang in langs) {
@@ -286,12 +286,9 @@ class _HomeScreenState extends State<HomeScreen> {
           _learnFocusMeaningByLang[lang] = original;
           _learnFocusPhoneticByLang[lang] = phonetic.isEmpty ? null : phonetic;
         }
-        if (langs.isNotEmpty) {
-          _selectedLearnLang = langs.first;
-          _activeTab = 'learn';
-        }
       });
       _showSnack('Sentence sent to selected languages (max 5 per language)');
+      return true;
     }
   static const List<String> _offensiveWords = [
     // English profanity/slurs/blasphemy
@@ -1579,16 +1576,18 @@ class _HomeScreenState extends State<HomeScreen> {
     final phonetic = (item.phonetic ?? '').trim();
     final normalizedOutputLang = _normalizeLanguageLabel(item.outputLang);
     // Use the same logic as the translation page
-    await _sendToLearnMultipleLangs(
+    final sent = await _sendToLearnMultipleLangs(
       translated: item.translated,
       original: item.original,
       phonetic: phonetic,
       langs: [normalizedOutputLang],
     );
-    setState(() {
-      _selectedLearnLang = normalizedOutputLang;
-      _activeTab = 'learn';
-    });
+    if (sent) {
+      setState(() {
+        _selectedLearnLang = normalizedOutputLang;
+        _activeTab = 'learn';
+      });
+    }
   }
 
   String _narakeetUnavailableMessage() =>
@@ -2685,16 +2684,18 @@ class _HomeScreenState extends State<HomeScreen> {
                           icon: const Icon(Icons.school, size: 10),
                           label: const Text('Send to Learn', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
                           onPressed: () async {
-                            await _sendToLearnMultipleLangs(
+                            final sent = await _sendToLearnMultipleLangs(
                               translated: _translatedText,
                               original: _spokenText.isNotEmpty ? _spokenText : _tttController.text,
                               phonetic: _phoneticText,
                               langs: [_selectedOutputLang],
                             );
-                            setState(() {
-                              _selectedLearnLang = _selectedOutputLang;
-                              _activeTab = 'learn';
-                            });
+                            if (sent) {
+                              setState(() {
+                                _selectedLearnLang = _selectedOutputLang;
+                                _activeTab = 'learn';
+                              });
+                            }
                           },
                         ),
                       ),
