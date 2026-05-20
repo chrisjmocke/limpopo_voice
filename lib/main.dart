@@ -903,8 +903,8 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFFFFFFFF),
-        surfaceTintColor: const Color(0xFFFFFFFF),
+        backgroundColor: const Color(0xFF000000),
+        surfaceTintColor: const Color(0xFF000000),
         title: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.center,
@@ -915,7 +915,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 return Center(
                   child: SizedBox(
                     width: wordmarkWidth,
-                    child: _buildHeaderWordmark(true),
+                    child: _buildHeaderWordmark(true), // Always dark mode
                   ),
                 );
               },
@@ -924,14 +924,14 @@ class _HomeScreenState extends State<HomeScreen> {
             const Text(
               'Disclaimer',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Color(0xFF000000)),
+              style: TextStyle(color: Colors.white),
             ),
           ],
         ),
         content: const SingleChildScrollView(
           child: Text(
             _disclaimerText,
-            style: TextStyle(color: Color(0xFF000000)),
+            style: TextStyle(color: Colors.white),
           ),
         ),
         actionsAlignment: MainAxisAlignment.end,
@@ -940,13 +940,13 @@ class _HomeScreenState extends State<HomeScreen> {
             builder: (ctx2) {
               return TextButton(
                 style: TextButton.styleFrom(
-                  backgroundColor: Colors.black,
-                  foregroundColor: Colors.white,
+                  backgroundColor: Colors.white,
+                  foregroundColor: Colors.black,
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
                 ),
                 onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text('Accept and Close', style: TextStyle(color: Colors.white)),
+                child: const Text('Accept and Close', style: TextStyle(color: Colors.black)),
               );
             },
           ),
@@ -1351,8 +1351,8 @@ class _HomeScreenState extends State<HomeScreen> {
       ttsStopwatch.stop();
       final ttsMillis = ttsStopwatch.elapsedMilliseconds;
       final ttsSeconds = (ttsMillis / 1000).toStringAsFixed(2);
-      final timingMsg = 'TTS time: $ttsSeconds seconds';
-      debugPrint(timingMsg);
+      final timingMsg = '$ttsSeconds seconds';
+      debugPrint('TTS time: ' + timingMsg);
       // Show in UI
       if (playedAny) {
         _showSnack(timingMsg);
@@ -1570,7 +1570,21 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _showSnack(String m) =>
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Text(
+                  m,
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
 
   Future<void> _sendHistoryToLearn(HistoryItem item) async {
     final phonetic = (item.phonetic ?? '').trim();
