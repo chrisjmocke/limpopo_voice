@@ -2540,7 +2540,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       width: double.infinity,
                       height: boxHeight,
                       margin: const EdgeInsets.only(bottom: 12),
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                       decoration: BoxDecoration(
                         color: isDark ? Colors.white12 : const Color(0xFFE0F8D8),
                         borderRadius: BorderRadius.circular(16),
@@ -2585,7 +2585,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                         children: [
                                           if (_spokenText.isNotEmpty && _tttController.text.isEmpty)
                                             Align(
-                                              alignment: Alignment.centerLeft,
+                                              alignment: Alignment.topLeft,
                                               child: Text(
                                                 _spokenText,
                                                 style: TextStyle(
@@ -2595,32 +2595,35 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 ),
                                               ),
                                             ),
-                                          TextField(
-                                            controller: _tttController,
-                                            focusNode: _inputFocusNode,
-                                            autofocus: false,
-                                            enableSuggestions: true,
-                                            autocorrect: true,
-                                            keyboardType: TextInputType.text,
-                                            textCapitalization: TextCapitalization.sentences,
-                                            cursorColor: isDark ? Colors.white : Colors.black,
-                                            style: TextStyle(
-                                              fontFamily: 'monospace',
-                                              fontSize: 14,
-                                              color: isDark ? Colors.white : Colors.black,
+                                          Align(
+                                            alignment: Alignment.topLeft,
+                                            child: TextField(
+                                              controller: _tttController,
+                                              focusNode: _inputFocusNode,
+                                              autofocus: false,
+                                              enableSuggestions: true,
+                                              autocorrect: true,
+                                              keyboardType: TextInputType.multiline,
+                                              textCapitalization: TextCapitalization.sentences,
+                                              cursorColor: isDark ? Colors.white : Colors.black,
+                                              style: TextStyle(
+                                                fontFamily: 'monospace',
+                                                fontSize: 14,
+                                                color: isDark ? Colors.white : Colors.black,
+                                              ),
+                                              decoration: const InputDecoration(
+                                                border: InputBorder.none,
+                                                hintText: '',
+                                                isDense: true,
+                                                contentPadding: EdgeInsets.zero,
+                                              ),
+                                              minLines: 1,
+                                              maxLines: 3,
+                                              readOnly: true,
+                                              onChanged: (_) => setState(() {}),
+                                              onSubmitted: (_) => _submitTTT(),
+                                              textInputAction: TextInputAction.newline,
                                             ),
-                                            decoration: const InputDecoration(
-                                              border: InputBorder.none,
-                                              hintText: '',
-                                              isDense: true,
-                                              contentPadding: EdgeInsets.zero,
-                                            ),
-                                            minLines: 1,
-                                            maxLines: 3,
-                                            readOnly: true,
-                                            onChanged: (_) => setState(() {}),
-                                            onSubmitted: (_) => _submitTTT(),
-                                            textInputAction: TextInputAction.send,
                                           ),
                                         ],
                                       ),
@@ -2686,7 +2689,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     width: double.infinity,
                     height: boxHeight,
                     margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                     decoration: BoxDecoration(
                       color: isDark ? Colors.white12 : const Color(0xFFFFF3E0),
                       borderRadius: BorderRadius.circular(16),
@@ -2728,7 +2731,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   // Text area (with padding to avoid wall)
                                   Expanded(
                                     child: Align(
-                                      alignment: Alignment.centerLeft,
+                                      alignment: Alignment.topLeft,
                                       child: Text(
                                         _translatedText.isNotEmpty ? _translatedText : '',
                                         style: TextStyle(
@@ -2775,7 +2778,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Center(
                         child: ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.transparent,
+                            backgroundColor: isDark ? Colors.transparent : const Color(0xFFE3F0FF),
                             foregroundColor: isDark ? Colors.white : Colors.black,
                             padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
                             minimumSize: const Size(0, 24),
@@ -3248,23 +3251,23 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                      child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.transparent,
-                          foregroundColor: isDark ? Colors.white : Colors.black,
-                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-                          minimumSize: const Size(0, 24),
-                          shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide.none),
-                          elevation: 0,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                        child: ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: isDark ? Colors.transparent : const Color(0xFFE3F0FF),
+                            foregroundColor: isDark ? Colors.white : Colors.black,
+                            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                            minimumSize: const Size(0, 24),
+                            shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide.none),
+                            elevation: 0,
+                          ),
+                          icon: const Icon(Icons.school, size: 10),
+                          label: const Text('Send to Learn', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
+                          onPressed: () async {
+                            await _sendHistoryToLearn(item);
+                          },
                         ),
-                        icon: const Icon(Icons.school, size: 10),
-                        label: const Text('Send to Learn', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
-                        onPressed: () async {
-                          await _sendHistoryToLearn(item);
-                        },
                       ),
-                    ),
                   ],
                 ),
               );
