@@ -66,11 +66,11 @@ class _LetsTalkAppState extends State<LetsTalkApp> {
           primary: const Color(0xFF000000),
           secondary: const Color(0xFF000000),
           brightness: Brightness.light,
-          background: const Color(0xFFFFFFFF),
-          surface: const Color(0xFFFFFFFF),
+          background: const Color(0xFFF7F7F7),
+          surface: const Color(0xFFF7F7F7),
         ),
-        scaffoldBackgroundColor: const Color(0xFFFFFFFF),
-        canvasColor: const Color(0xFFFFFFFF),
+        scaffoldBackgroundColor: const Color(0xFFF7F7F7),
+        canvasColor: const Color(0xFFF7F7F7),
         useMaterial3: true,
       ),
       darkTheme: ThemeData(
@@ -726,7 +726,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _checkInstallIdAndFreeTrial() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      const installIdKey = 'limpopo_install_id_v1';
+      const installIdKey = 'lets_talk_install_id_v1';
       
       String? installId = prefs.getString(installIdKey);
       if (installId == null) {
@@ -1500,7 +1500,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ttsProvider: inputProvider,
         );
         if (inputAudio != null && inputAudio.isNotEmpty) {
-          final inFile = File('${dir.path}/limpopo_input_$nowSuffix.mp3');
+          final inFile = File('${dir.path}/lets_talk_input_$nowSuffix.mp3');
           await inFile.writeAsBytes(inputAudio, flush: true);
           files.add(XFile(inFile.path, mimeType: 'audio/mpeg'));
           hasInputMp3 = true;
@@ -1527,7 +1527,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ttsProvider: outputProvider,
         );
         if (outputAudio != null && outputAudio.isNotEmpty) {
-          final outFile = File('${dir.path}/limpopo_output_$nowSuffix.mp3');
+          final outFile = File('${dir.path}/lets_talk_output_$nowSuffix.mp3');
           await outFile.writeAsBytes(outputAudio, flush: true);
           files.add(XFile(outFile.path, mimeType: 'audio/mpeg'));
           hasOutputMp3 = true;
@@ -1540,14 +1540,14 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       // Add text files after audio files so share targets prioritise media attachments.
-      final inputTextFile = File('${dir.path}/limpopo_input_$nowSuffix.txt');
+      final inputTextFile = File('${dir.path}/lets_talk_input_$nowSuffix.txt');
       await inputTextFile.writeAsString(
         'Input Language: $inputLang\n\n$inputDisplay\n',
         flush: true,
       );
       files.add(XFile(inputTextFile.path, mimeType: 'text/plain'));
 
-      final outputTextFile = File('${dir.path}/limpopo_output_$nowSuffix.txt');
+      final outputTextFile = File('${dir.path}/lets_talk_output_$nowSuffix.txt');
       await outputTextFile.writeAsString(
         'Output Language: $outputLang\n\n$outputDisplay\n',
         flush: true,
@@ -1719,11 +1719,26 @@ class _HomeScreenState extends State<HomeScreen> {
               Row(
                 children: [
                   Expanded(
-                    child: Text(
-                      'Translations capped at\n5 seconds',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isDark ? Colors.white70 : Colors.black54,
+                    child: Center(
+                      child: Column(
+                        children: [
+                          Text(
+                            'Translations capped',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: isDark ? Colors.white70 : Colors.black54,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          Text(
+                            'at 5 seconds',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: isDark ? Colors.white70 : Colors.black54,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
                       ),
                     ),
                   ),
