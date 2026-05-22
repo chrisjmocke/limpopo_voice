@@ -905,6 +905,10 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF000000),
         surfaceTintColor: const Color(0xFF000000),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: const BorderSide(color: Color(0xFFF7F7F7), width: 2.5),
+        ),
         title: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.center,
@@ -964,6 +968,7 @@ class _HomeScreenState extends State<HomeScreen> {
       barrierDismissible: false,
       builder: (ctx) {
         introVisible = true;
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
         return AlertDialog(
           backgroundColor: const Color(0xFF000000),
           surfaceTintColor: const Color(0xFF000000),
@@ -975,7 +980,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   SizedBox(
                     width: wordmarkWidth,
-                    child: _buildHeaderWordmark(true),
+                    child: _buildHeaderWordmark(true), // Always dark gradient + white text
                   ),
                   const SizedBox(height: 10),
                   const Text(
@@ -2199,7 +2204,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             builder: (ctx) => AlertDialog(
                               title: const Text('About'),
                               content: const Text(
-                                "'Let's Talk' lets you instantly translate, speak, and learn phrases across all South African languages. It features fast voice/text translation, a learn tab for practice, a history tab for review and deletion, and a clean, modern interface with light/dark modes. Everything is designed for quick, easy, and accessible multilingual communication."
+                                "'Let’s Talk' helps you instantly translate South African languages out loud. Just speak slowly and clearly while pressing the 'Talk' button, then instantly share translations with friends, save phrases to your Learn tab for practice, and easily manage your translation history."
                               ),
                               actions: [
                                 Builder(
@@ -2438,11 +2443,13 @@ class _HomeScreenState extends State<HomeScreen> {
     ]; // Avoid duplicate default if user added same
     final currentLearnText = _learnFocusTextByLang[_selectedLearnLang] ?? '';
     final hasHistoryFocus = currentLearnText.trim().isNotEmpty;
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+    return Stack(
+      children: [
+        SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
           Center(
             child: Text(
               'Learn Everyday Phrases',
@@ -2531,7 +2538,24 @@ class _HomeScreenState extends State<HomeScreen> {
           }),
         ],
       ),
-    );
+    ),
+    // Bottom left home icon
+    Positioned(
+      bottom: 18,
+      right: 18,
+      child: FloatingActionButton(
+        heroTag: 'learn_home',
+        mini: true,
+        backgroundColor: isDark ? Colors.white12 : Colors.white,
+        foregroundColor: isDark ? Colors.white : Colors.black,
+        elevation: 2,
+        onPressed: () => setState(() => _activeTab = 'translate'),
+        child: const Icon(Icons.home),
+        tooltip: 'Home',
+      ),
+    ),
+  ],
+);
   }
 
   Widget _buildTranslateTab(bool isDark) {
@@ -3142,151 +3166,170 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
     }
-    return Column(
+    return Stack(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              // Share History Icon Button (far left)
-              Material(
-                color: isDark ? Colors.black : Colors.white,
-                shape: const CircleBorder(),
-                elevation: 2,
-                child: IconButton(
-                  onPressed: _history.isEmpty ? null : _exportHistory,
-                  icon: Icon(
-                    Icons.share,
-                    size: 20,
-                    color: isDark ? Colors.white : Colors.black,
-                  ),
-                  tooltip: 'Share History',
-                  padding: const EdgeInsets.all(12),
-                ),
-              ),
-              const Spacer(),
-              // Clear History Icon Button (far right)
-              Material(
-                color: isDark ? Colors.black : Colors.white,
-                shape: const CircleBorder(),
-                elevation: 2,
-                child: IconButton(
-                  onPressed: () async {
-                    final sure = await showDialog<bool>(
-                      context: context,
-                      builder: (ctx) {
-                        final isDark = Theme.of(ctx).brightness == Brightness.dark;
-                        return AlertDialog(
-                          title: const Text('Are you sure?'),
-                          content: const Text('Clear all History?'),
-                          backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-                          surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.of(ctx).pop(false),
-                              child: Text('Cancel', style: TextStyle(color: isDark ? Colors.white : Color(0xFF000000))),
-                            ),
-                            TextButton(
-                              style: TextButton.styleFrom(
-                                backgroundColor: const Color(0xFF000000),
-                                foregroundColor: Colors.white,
-                              ),
-                              onPressed: () => Navigator.of(ctx).pop(true),
-                              child: const Text('Clear', style: TextStyle(color: Colors.white)),
-                            ),
-                          ],
-                        );
-                      },
-                    );
-                    if (sure == true) {
-                      setState(() {
-                        _history.clear();
-                      });
-                    }
-                  },
-                  icon: const Icon(
-                    Icons.delete_sweep,
-                    size: 24,
-                    color: Colors.red,
-                  ),
-                  tooltip: 'Clear History',
-                  padding: const EdgeInsets.all(12),
-                ),
-              ),
-            ],
-          ),
-        ),
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            itemCount: _history.length,
-            itemBuilder: (context, i) {
-              final item = _history[i];
-              final selected = _selectedHistoryIndexes.contains(i);
-              return Card(
-                margin: const EdgeInsets.only(bottom: 12),
-                color: isDark ? Colors.white12 : const Color(0xFFFFEBEE), // pastel red
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    ListTile(
-                      title: Text(item.translated,
-                          style: TextStyle(
-                              color: isDark ? Colors.white : Colors.black,
-                              fontWeight: FontWeight.bold)),
-                      subtitle: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('From: ${item.inputLang}'),
-                          Text('To: ${item.outputLang}'),
-                          if ((item.phonetic ?? '').isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 4.0),
-                              child: Text('Phonetics: ${item.phonetic}',
-                                  style: TextStyle(
-                                      fontStyle: FontStyle.italic,
-                                      color: isDark ? Colors.white70 : Colors.black87)),
-                            ),
-                          Padding(
-                            padding: const EdgeInsets.only(top: 4.0),
-                            child: Text('Original: ${item.original}'),
-                          ),
-                        ],
+        Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  // Share History Icon Button (far left)
+                  Material(
+                    color: isDark ? Colors.black : Colors.white,
+                    shape: const CircleBorder(),
+                    elevation: 2,
+                    child: IconButton(
+                      onPressed: _history.isEmpty ? null : _exportHistory,
+                      icon: Icon(
+                        Icons.share,
+                        size: 20,
+                        color: isDark ? Colors.white : Colors.black,
                       ),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.volume_up),
-                            tooltip: 'Repeat',
-                            onPressed: () => _speakText(item.translated, item.outputLang),
-                          ),
-                        ],
-                      ),
+                      tooltip: 'Share History',
+                      padding: const EdgeInsets.all(12),
                     ),
-                    Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                        child: ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: isDark ? Colors.transparent : const Color(0xFFE3F0FF),
-                            foregroundColor: isDark ? Colors.white : Colors.black,
-                            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-                            minimumSize: const Size(0, 24),
-                            shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide.none),
-                            elevation: 0,
-                          ),
-                          icon: const Icon(Icons.school, size: 10),
-                          label: const Text('Send to Learn', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
-                          onPressed: () async {
-                            await _sendHistoryToLearn(item);
+                  ),
+                  const Spacer(),
+                  // Clear History Icon Button (far right)
+                  Material(
+                    color: isDark ? Colors.black : Colors.white,
+                    shape: const CircleBorder(),
+                    elevation: 2,
+                    child: IconButton(
+                      onPressed: () async {
+                        final sure = await showDialog<bool>(
+                          context: context,
+                          builder: (ctx) {
+                            final isDark = Theme.of(ctx).brightness == Brightness.dark;
+                            return AlertDialog(
+                              title: const Text('Are you sure?'),
+                              content: const Text('Clear all History?'),
+                              backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+                              surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.of(ctx).pop(false),
+                                  child: Text('Cancel', style: TextStyle(color: isDark ? Colors.white : Color(0xFF000000))),
+                                ),
+                                TextButton(
+                                  style: TextButton.styleFrom(
+                                    backgroundColor: const Color(0xFF000000),
+                                    foregroundColor: Colors.white,
+                                  ),
+                                  onPressed: () => Navigator.of(ctx).pop(true),
+                                  child: const Text('Clear', style: TextStyle(color: Colors.white)),
+                                ),
+                              ],
+                            );
                           },
-                        ),
+                        );
+                        if (sure == true) {
+                          setState(() {
+                            _history.clear();
+                          });
+                        }
+                      },
+                      icon: const Icon(
+                        Icons.delete_sweep,
+                        size: 24,
+                        color: Colors.red,
                       ),
-                  ],
-                ),
-              );
-            },
+                      tooltip: 'Clear History',
+                      padding: const EdgeInsets.all(12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                itemCount: _history.length,
+                itemBuilder: (context, i) {
+                  final item = _history[i];
+                  final selected = _selectedHistoryIndexes.contains(i);
+                  return Card(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    color: isDark ? Colors.white12 : const Color(0xFFFFEBEE), // pastel red
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        ListTile(
+                          title: Text(item.translated,
+                              style: TextStyle(
+                                  color: isDark ? Colors.white : Colors.black,
+                                  fontWeight: FontWeight.bold)),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('From: ${item.inputLang}'),
+                              Text('To: ${item.outputLang}'),
+                              if ((item.phonetic ?? '').isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4.0),
+                                  child: Text('Phonetics: ${item.phonetic}',
+                                      style: TextStyle(
+                                          fontStyle: FontStyle.italic,
+                                          color: isDark ? Colors.white70 : Colors.black87)),
+                                ),
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4.0),
+                                child: Text('Original: ${item.original}'),
+                              ),
+                            ],
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.volume_up),
+                                tooltip: 'Repeat',
+                                onPressed: () => _speakText(item.translated, item.outputLang),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: isDark ? Colors.transparent : const Color(0xFFE3F0FF),
+                                foregroundColor: isDark ? Colors.white : Colors.black,
+                                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                                minimumSize: const Size(0, 24),
+                                shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide.none),
+                                elevation: 0,
+                              ),
+                              icon: const Icon(Icons.school, size: 10),
+                              label: const Text('Send to Learn', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
+                              onPressed: () async {
+                                await _sendHistoryToLearn(item);
+                              },
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+        // Bottom right home icon
+        Positioned(
+          bottom: 18,
+          right: 18,
+          child: FloatingActionButton(
+            heroTag: 'history_home',
+            mini: true,
+            backgroundColor: isDark ? Colors.white12 : Colors.white,
+            foregroundColor: isDark ? Colors.white : Colors.black,
+            elevation: 2,
+            onPressed: () => setState(() => _activeTab = 'translate'),
+            child: const Icon(Icons.home),
+            tooltip: 'Home',
           ),
         ),
       ],
