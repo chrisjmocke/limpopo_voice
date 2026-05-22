@@ -47,10 +47,10 @@ if (!(Test-Path $distPath)) {
 }
 
 Write-Host "[*] Copying distribution files..." -ForegroundColor Yellow
-Copy-Item -Path "build\app\outputs\flutter-apk\app-release.apk" -Destination "$distPath\LimpopoVoice-UNIVERSAL-59MB.apk" -Force
-Copy-Item -Path "build\app\outputs\flutter-apk\app-armeabi-v7a-release.apk" -Destination "$distPath\LimpopoVoice-32bit-OlderPhones-25MB.apk" -Force
-Copy-Item -Path "build\app\outputs\flutter-apk\app-arm64-v8a-release.apk" -Destination "$distPath\LimpopoVoice-64bit-NewerPhones-27MB.apk" -Force
-Copy-Item -Path "build\app\outputs\bundle\release\app-release.aab" -Destination "$distPath\LimpopoVoice-PlayStore-47MB.aab" -Force
+Copy-Item -Path "build\app\outputs\flutter-apk\app-release.apk" -Destination "$distPath\LetsTalk-UNIVERSAL-59MB.apk" -Force
+Copy-Item -Path "build\app\outputs\flutter-apk\app-armeabi-v7a-release.apk" -Destination "$distPath\LetsTalk-32bit-OlderPhones-25MB.apk" -Force
+Copy-Item -Path "build\app\outputs\flutter-apk\app-arm64-v8a-release.apk" -Destination "$distPath\LetsTalk-64bit-NewerPhones-27MB.apk" -Force
+Copy-Item -Path "build\app\outputs\bundle\release\app-release.aab" -Destination "$distPath\LetsTalk-PlayStore-47MB.aab" -Force
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
@@ -60,7 +60,7 @@ Write-Host ""
 
 Write-Host "Distribution packages ready:" -ForegroundColor Cyan
 Write-Host ""
-Get-ChildItem "$distPath\LimpopoVoice-*.apk", "$distPath\LimpopoVoice-*.aab" -ErrorAction SilentlyContinue | ForEach-Object {
+Get-ChildItem "$distPath\LetsTalk-*.apk", "$distPath\LetsTalk-*.aab" -ErrorAction SilentlyContinue | ForEach-Object {
     $sizeMB = [math]::Round($_.Length / 1MB, 1)
     Write-Host "  OK: $($_.Name) ($sizeMB MB)" -ForegroundColor Green
 }

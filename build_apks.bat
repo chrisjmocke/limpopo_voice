@@ -63,13 +63,13 @@ echo [4/4] Organizing distribution packages...
 if not exist "distribution_packages" mkdir distribution_packages
 
 REM Clear old packages
-del /q distribution_packages\LimpopoVoice-*.apk 2>nul
+del /q distribution_packages\LetsTalk-*.apk 2>nul
 
 REM Copy new packages with clear naming
-copy /Y "build\app\outputs\flutter-apk\app-release.apk" "distribution_packages\LimpopoVoice-UNIVERSAL-59MB.apk" >nul
-copy /Y "build\app\outputs\flutter-apk\app-armeabi-v7a-release.apk" "distribution_packages\LimpopoVoice-32bit-OlderPhones-25MB.apk" >nul
-copy /Y "build\app\outputs\flutter-apk\app-arm64-v8a-release.apk" "distribution_packages\LimpopoVoice-64bit-NewerPhones-27MB.apk" >nul
-copy /Y "build\app\outputs\bundle\release\app-release.aab" "distribution_packages\LimpopoVoice-PlayStore-47MB.aab" >nul
+copy /Y "build\app\outputs\flutter-apk\app-release.apk" "distribution_packages\LetsTalk-UNIVERSAL-59MB.apk" >nul
+copy /Y "build\app\outputs\flutter-apk\app-armeabi-v7a-release.apk" "distribution_packages\LetsTalk-32bit-OlderPhones-25MB.apk" >nul
+copy /Y "build\app\outputs\flutter-apk\app-arm64-v8a-release.apk" "distribution_packages\LetsTalk-64bit-NewerPhones-27MB.apk" >nul
+copy /Y "build\app\outputs\bundle\release\app-release.aab" "distribution_packages\LetsTalk-PlayStore-47MB.aab" >nul
 
 echo.
 echo ========================================
@@ -80,7 +80,7 @@ echo.
 REM Show file sizes
 echo Distribution packages ready:
 echo.
-for %%f in ("distribution_packages\LimpopoVoice-*.apk", "distribution_packages\LimpopoVoice-*.aab") do (
+for %%f in ("distribution_packages\LetsTalk-*.apk", "distribution_packages\LetsTalk-*.aab") do (
     for /F "usebackq" %%A in ('%%~zf') do (
         set /a size=%%A / 1048576
         echo   ✓ %%~nf (!size! MB^)

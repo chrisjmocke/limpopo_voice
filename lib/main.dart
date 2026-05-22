@@ -38,16 +38,16 @@ void main() async {
   } catch (e) {
     debugPrint("Env load error: $e");
   }
-  runApp(const LimpopoVoiceApp());
+  runApp(const LetsTalkApp());
 }
 
-class LimpopoVoiceApp extends StatefulWidget {
-  const LimpopoVoiceApp({super.key});
+class LetsTalkApp extends StatefulWidget {
+  const LetsTalkApp({super.key});
   @override
-  State<LimpopoVoiceApp> createState() => _LimpopoVoiceAppState();
+  State<LetsTalkApp> createState() => _LetsTalkAppState();
 }
 
-class _LimpopoVoiceAppState extends State<LimpopoVoiceApp> {
+class _LetsTalkAppState extends State<LetsTalkApp> {
   ThemeMode _themeMode = ThemeMode.dark;
   void _toggleTheme() => setState(() => _themeMode =
       _themeMode == ThemeMode.light ? ThemeMode.dark : ThemeMode.light);
@@ -1352,7 +1352,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final ttsMillis = ttsStopwatch.elapsedMilliseconds;
       final ttsSeconds = (ttsMillis / 1000).toStringAsFixed(2);
       final timingMsg = '$ttsSeconds seconds';
-      debugPrint('TTS time: ' + timingMsg);
+      debugPrint('TTS time: $timingMsg');
       // Show in UI
       if (playedAny) {
         _showSnack(timingMsg);
@@ -1609,7 +1609,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _showQrShare() {
     const appUrl =
-      'https://dummy.link/limpopovoice';
+      'https://dummy.link/letstalk';
     final isDark = Theme.of(context).brightness == Brightness.dark;
     showDialog(
       context: context,
@@ -1894,9 +1894,9 @@ class _HomeScreenState extends State<HomeScreen> {
               data: {
                 'merchant_id': _payFastMerchantId,
                 'merchant_key': _payFastMerchantKey,
-                'name_first': 'Limpopo',
-                'name_last': 'Voice',
-                'email_address': 'sandbox@limpopovoice.app',
+                'name_first': 'Let',
+                'name_last': "'s Talk", // or just 'Talk' if you prefer
+                'email_address': 'sandbox@letstalk.app',
                 'm_payment_id': paymentId,
                 'amount': amount.toStringAsFixed(2),
                 'item_name': 'LV Studio: ${tier.name}',
@@ -2576,46 +2576,59 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                               const SizedBox(height: 6),
                               Expanded(
-                                child: Stack(
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
                                   children: [
-                                    if (_spokenText.isNotEmpty && _tttController.text.isEmpty)
-                                      Align(
-                                        alignment: Alignment.centerLeft,
-                                        child: Text(
-                                          _spokenText,
-                                          style: TextStyle(
-                                            fontFamily: 'monospace',
-                                            fontSize: 14,
-                                            color: isDark ? Colors.white : Colors.black,
+                                    // Text area (with padding to avoid wall)
+                                    Expanded(
+                                      child: Stack(
+                                        children: [
+                                          if (_spokenText.isNotEmpty && _tttController.text.isEmpty)
+                                            Align(
+                                              alignment: Alignment.centerLeft,
+                                              child: Text(
+                                                _spokenText,
+                                                style: TextStyle(
+                                                  fontFamily: 'monospace',
+                                                  fontSize: 14,
+                                                  color: isDark ? Colors.white : Colors.black,
+                                                ),
+                                              ),
+                                            ),
+                                          TextField(
+                                            controller: _tttController,
+                                            focusNode: _inputFocusNode,
+                                            autofocus: false,
+                                            enableSuggestions: true,
+                                            autocorrect: true,
+                                            keyboardType: TextInputType.text,
+                                            textCapitalization: TextCapitalization.sentences,
+                                            cursorColor: isDark ? Colors.white : Colors.black,
+                                            style: TextStyle(
+                                              fontFamily: 'monospace',
+                                              fontSize: 14,
+                                              color: isDark ? Colors.white : Colors.black,
+                                            ),
+                                            decoration: const InputDecoration(
+                                              border: InputBorder.none,
+                                              hintText: '',
+                                              isDense: true,
+                                              contentPadding: EdgeInsets.zero,
+                                            ),
+                                            minLines: 1,
+                                            maxLines: 3,
+                                            readOnly: true,
+                                            onChanged: (_) => setState(() {}),
+                                            onSubmitted: (_) => _submitTTT(),
+                                            textInputAction: TextInputAction.send,
                                           ),
-                                        ),
+                                        ],
                                       ),
-                                    TextField(
-                                      controller: _tttController,
-                                      focusNode: _inputFocusNode,
-                                      autofocus: false,
-                                      enableSuggestions: true,
-                                      autocorrect: true,
-                                      keyboardType: TextInputType.text,
-                                      textCapitalization: TextCapitalization.sentences,
-                                      cursorColor: isDark ? Colors.white : Colors.black,
-                                      style: TextStyle(
-                                        fontFamily: 'monospace',
-                                        fontSize: 14,
-                                        color: isDark ? Colors.white : Colors.black,
-                                      ),
-                                      decoration: const InputDecoration(
-                                        border: InputBorder.none,
-                                        hintText: '',
-                                        isDense: true,
-                                        contentPadding: EdgeInsets.zero,
-                                      ),
-                                      minLines: 1,
-                                      maxLines: 3,
-                                      readOnly: true,
-                                      onChanged: (_) => setState(() {}),
-                                      onSubmitted: (_) => _submitTTT(),
-                                      textInputAction: TextInputAction.send,
+                                    ),
+                                    // Wall to the right
+                                    Container(
+                                      width: 32,
+                                      color: Colors.transparent,
                                     ),
                                   ],
                                 ),
@@ -2709,18 +2722,31 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                             const SizedBox(height: 6),
                             Expanded(
-                              child: Align(
-                                alignment: Alignment.centerLeft,
-                                child: Text(
-                                  _translatedText.isNotEmpty ? _translatedText : '',
-                                  style: TextStyle(
-                                    fontFamily: 'monospace',
-                                    fontSize: 14,
-                                    color: isDark ? Colors.white : Colors.black,
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  // Text area (with padding to avoid wall)
+                                  Expanded(
+                                    child: Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: Text(
+                                        _translatedText.isNotEmpty ? _translatedText : '',
+                                        style: TextStyle(
+                                          fontFamily: 'monospace',
+                                          fontSize: 14,
+                                          color: isDark ? Colors.white : Colors.black,
+                                        ),
+                                        maxLines: 3,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
                                   ),
-                                  maxLines: 3,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
+                                  // Wall to the right
+                                  Container(
+                                    width: 32,
+                                    color: Colors.transparent,
+                                  ),
+                                ],
                               ),
                             ),
                           ],
@@ -3022,7 +3048,7 @@ class _HomeScreenState extends State<HomeScreen> {
         buf.writeln('Translation: ${item.translated}');
         buf.writeln();
       }
-      final txtFile = File('${dir.path}/limpopo_voice_history.txt');
+      final txtFile = File('${dir.path}/letstalk_voice_history.txt');
       await txtFile.writeAsString(buf.toString());
       files.add(XFile(txtFile.path, mimeType: 'text/plain'));
 
