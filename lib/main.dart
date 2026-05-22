@@ -2134,18 +2134,18 @@ class _HomeScreenState extends State<HomeScreen> {
                   Align(
                     alignment: Alignment.centerLeft,
                     child: PopupMenuButton<String>(
-                      icon: const Icon(Icons.menu),
+                      icon: Icon(Icons.menu, color: isDark ? Colors.white : Colors.black),
                       tooltip: 'Menu',
-                      color: Colors.white,
-                      surfaceTintColor: Colors.white,
+                      color: isDark ? const Color(0xFF222222) : Colors.white,
+                      surfaceTintColor: isDark ? const Color(0xFF222222) : Colors.white,
                       itemBuilder: (context) => [
                         PopupMenuItem(
                           value: 'about',
                           child: Row(
                             children: [
-                              const Icon(Icons.info_outline, size: 18, color: Colors.black),
+                              Icon(Icons.info_outline, size: 18, color: isDark ? Colors.white : Colors.black),
                               const SizedBox(width: 12),
-                              const Text('About', style: TextStyle(color: Colors.black)),
+                              Text('About', style: TextStyle(color: isDark ? Colors.white : Colors.black)),
                             ],
                           ),
                         ),
@@ -2153,9 +2153,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           value: 'translate',
                           child: Row(
                             children: [
-                              const Icon(Icons.translate, size: 18, color: Colors.black),
+                              Icon(Icons.translate, size: 18, color: isDark ? Colors.white : Colors.black),
                               const SizedBox(width: 12),
-                              const Text('Translate', style: TextStyle(color: Colors.black)),
+                              Text('Translate', style: TextStyle(color: isDark ? Colors.white : Colors.black)),
                             ],
                           ),
                         ),
@@ -2163,9 +2163,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           value: 'history',
                           child: Row(
                             children: [
-                              const Icon(Icons.history, size: 18, color: Colors.black),
+                              Icon(Icons.history, size: 18, color: isDark ? Colors.white : Colors.black),
                               const SizedBox(width: 12),
-                              const Text('History', style: TextStyle(color: Colors.black)),
+                              Text('History', style: TextStyle(color: isDark ? Colors.white : Colors.black)),
                             ],
                           ),
                         ),
@@ -2173,9 +2173,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           value: 'learn',
                           child: Row(
                             children: [
-                              const Icon(Icons.school, size: 18, color: Colors.black),
+                              Icon(Icons.school, size: 18, color: isDark ? Colors.white : Colors.black),
                               const SizedBox(width: 12),
-                              const Text('Learn', style: TextStyle(color: Colors.black)),
+                              Text('Learn', style: TextStyle(color: isDark ? Colors.white : Colors.black)),
                             ],
                           ),
                         ),
@@ -2186,12 +2186,12 @@ class _HomeScreenState extends State<HomeScreen> {
                               Icon(
                                 isDark ? Icons.light_mode : Icons.dark_mode,
                                 size: 18,
-                                color: Colors.black,
+                                color: isDark ? Colors.white : Colors.black,
                               ),
                               const SizedBox(width: 12),
                               Text(
                                 isDark ? 'Light Mode' : 'Dark Mode',
-                                style: const TextStyle(color: Colors.black),
+                                style: TextStyle(color: isDark ? Colors.white : Colors.black),
                               ),
                             ],
                           ),
@@ -2942,11 +2942,11 @@ class _HomeScreenState extends State<HomeScreen> {
                             onPressed: _spokenText.isNotEmpty ? _resetOutput : null,
                             icon: Icon(
                               Icons.refresh,
-                              size: 24,
+                              size: 28,
                               color: Colors.white,
                             ),
                             tooltip: 'New Translation',
-                            padding: const EdgeInsets.all(8),
+                            padding: const EdgeInsets.all(12),
                           )
                         else
                           Container(
@@ -2965,11 +2965,11 @@ class _HomeScreenState extends State<HomeScreen> {
                               onPressed: _spokenText.isNotEmpty ? _resetOutput : null,
                               icon: const Icon(
                                 Icons.refresh,
-                                size: 24,
+                                size: 28,
                                 color: Colors.black,
                               ),
                               tooltip: 'New Translation',
-                              padding: const EdgeInsets.all(8),
+                              padding: const EdgeInsets.all(12),
                             ),
                           ),
                       ],
