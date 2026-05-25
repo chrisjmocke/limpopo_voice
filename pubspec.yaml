@@ -36,11 +36,12 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.3
+  flutter_native_splash: ^2.3.10
 
 flutter_launcher_icons:
   android: true
   ios: false
-  image_path: assets/thumb.png
+  image_path: assets/letstalkmainblack.png
 
 flutter:
   uses-material-design: true

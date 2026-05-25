@@ -327,7 +327,6 @@ class _HomeScreenState extends State<HomeScreen> {
     'nigga',
     'slut',
     'whore',
-    'hoe',
     'idiot',
     'moron',
     'stupid',
@@ -1845,12 +1844,16 @@ class _HomeScreenState extends State<HomeScreen> {
                           SizedBox(
                             width: 48,
                             height: 48,
-                            child: Center(
-                              child: Image.asset(
-                                'assets/letstalkmainblack.png',
-                                width: 64,
-                                height: 64,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: FittedBox(
                                 fit: BoxFit.contain,
+                                child: Image.asset(
+                                  'assets/letstalkmainblack.png',
+                                  width: 48,
+                                  height: 48,
+                                  fit: BoxFit.contain,
+                                ),
                               ),
                             ),
                           ),
