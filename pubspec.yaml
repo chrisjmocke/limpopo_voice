@@ -14,7 +14,7 @@ dependencies:
   speech_to_text: ^7.0.0
   vibration: ^3.1.8
   # Backend & AI
-  firebase_core: ^4.5.0
+  firebase_core: ^4.6.0
   firebase_auth: ^6.2.0
   firebase_app_check: ^0.4.1+1
   cloud_firestore: ^6.1.3
