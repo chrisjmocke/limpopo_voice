@@ -1,3 +1,12 @@
+function getMemoryCachedAudio(cacheKey) {
+    if (!cacheKey) return null;
+    const hit = audioBase64MemoryCache.get(cacheKey);
+    if (!hit) return null;
+    // refresh LRU order
+    audioBase64MemoryCache.delete(cacheKey);
+    audioBase64MemoryCache.set(cacheKey, hit);
+    return hit;
+}
 const { onRequest } = require("firebase-functions/v2/https");
 const { setGlobalOptions } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
@@ -181,26 +190,17 @@ function shouldCacheAudioText(text) {
 }
 
 function buildAudioCacheKey({ text, targetLanguage, requestedVoiceName, provider }) {
-    const map = {
-        English: "en-ZA",
-        isiZulu: "zu-ZA",
-        Sepedi: "nso-ZA",
-        Xitsonga: "ts-ZA",
-        Tshivenda: "ve-ZA",
-        Afrikaans: "af-ZA",
-        Sesotho: "st-ZA",
-        Setswana: "tn-ZA",
-        Yoruba: "yo-NG",
-        Hausa: "ha-NE",
-        "Akan (Ghana)": "ak-GH",
-        "Wolof (Senegal)": "wo-SN",
-    };
-    const hit = audioBase64MemoryCache.get(cacheKey);
-    if (!hit) return null;
-    // refresh LRU order
-    audioBase64MemoryCache.delete(cacheKey);
-    audioBase64MemoryCache.set(cacheKey, hit);
-    return hit;
+    // Build a unique digest for the cache key
+    const normalizedText = normalizeCacheText(text);
+    const voice = String(requestedVoiceName || "").trim();
+    const lang = String(targetLanguage || "").trim();
+    const prov = String(provider || "").trim();
+    const digest = crypto.createHash("sha256")
+        .update([normalizedText, lang, voice, prov].join("|"))
+        .digest("hex");
+    const ext = "mp3";
+    const objectPath = `${AUDIO_CACHE_OBJECT_PREFIX}/${prov}/${lang}/${voice}/${digest}.${ext}`;
+    return { digest, objectPath };
 }
 
 function setMemoryCachedAudio(cacheKey, audioContent) {
