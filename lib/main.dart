@@ -334,6 +334,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // SA/Afrikaans slang profanity
     'kak',
     'k@k',
+    'kaffir',
     'poes',
     'p0es',
     'naai',
@@ -343,7 +344,6 @@ class _HomeScreenState extends State<HomeScreen> {
     'fokken',
     'domkop',
     // Mild blasphemy variants
-    'jesus christ',
     'god damn',
   ];
 
@@ -479,7 +479,7 @@ class _HomeScreenState extends State<HomeScreen> {
     'isiZulu': 'Nandi',
     'Sepedi': 'Mpho',
     'Sesotho': 'Palesa',
-    'Setswana': 'Basetsana',
+    'Setswana': 'Bokang',
     'siSwati': 'Nomcebo',
     'Tshivenda': 'Mulalo',
     'Xitsonga': 'Basetsana',
@@ -581,84 +581,6 @@ class _HomeScreenState extends State<HomeScreen> {
       {'text': 'Baie dankie.', 'en': 'Thank you very much.'},
       {'text': 'Help my asseblief.', 'en': 'Please help me.'},
       {'text': 'Totsiens.', 'en': 'Goodbye.'},
-    ],
-    'Dutch': [
-      {'text': 'Hallo, hoe gaat het?', 'en': 'Hello, how are you?'},
-      {'text': 'Heel erg bedankt.', 'en': 'Thank you very much.'},
-      {'text': 'Help me alsjeblieft.', 'en': 'Please help me.'},
-      {'text': 'Tot ziens.', 'en': 'Goodbye.'},
-    ],
-    'Portuguese': [
-      {'text': 'Ola, como esta?', 'en': 'Hello, how are you?'},
-      {'text': 'Muito obrigado.', 'en': 'Thank you very much.'},
-      {'text': 'Por favor, ajude-me.', 'en': 'Please help me.'},
-      {'text': 'Ate logo.', 'en': 'Goodbye.'},
-    ],
-    'Mandarin': [
-      {
-        'text': '你好，你怎么样？',
-        'en': 'Hello, how are you?',
-        'phonetic': 'Nǐ hǎo, nǐ zěnme yàng?'
-      },
-      {
-        'text': '非常感谢。',
-        'en': 'Thank you very much.',
-        'phonetic': 'Fēicháng gǎnxiè.'
-      },
-      {
-        'text': '请帮帮我。',
-        'en': 'Please help me.',
-        'phonetic': 'Qǐng bāng bāng wǒ.'
-      },
-      {'text': '再见。', 'en': 'Goodbye.', 'phonetic': 'Zàijiàn.'},
-    ],
-    'Hindi': [
-      {
-        'text': 'नमस्ते, आप कैसे हैं?',
-        'en': 'Hello, how are you?',
-        'phonetic': 'Namaste, aap kaise hain?'
-      },
-      {
-        'text': 'बहुत धन्यवाद।',
-        'en': 'Thank you very much.',
-        'phonetic': 'Bahut dhanyavaad.'
-      },
-      {
-        'text': 'कृपया मेरी मदद कीजिए।',
-        'en': 'Please help me.',
-        'phonetic': 'Kripya meri madad kijiye.'
-      },
-      {'text': 'अलविदा।', 'en': 'Goodbye.', 'phonetic': 'Alvida.'},
-    ],
-    'Urdu': [
-      {
-        'text': 'السلام علیکم، آپ کیسے ہیں؟',
-        'en': 'Hello, how are you?',
-        'phonetic': 'As-salaam-alaikum, aap kaise hain?'
-      },
-      {
-        'text': 'بہت شکریہ۔',
-        'en': 'Thank you very much.',
-        'phonetic': 'Bohat shukriya.'
-      },
-      {
-        'text': 'مہربانی کرکے میری مدد کریں۔',
-        'en': 'Please help me.',
-        'phonetic': 'Meherbani karke meri madad karein.'
-      },
-      {'text': 'خدا حافظ۔', 'en': 'Goodbye.', 'phonetic': 'Khuda hafiz.'},
-    ],
-    'German': [
-      {'text': 'Hallo, wie geht es dir?', 'en': 'Hello, how are you?'},
-      {'text': 'Vielen Dank.', 'en': 'Thank you very much.'},
-      {'text': 'Bitte hilf mir.', 'en': 'Please help me.'},
-      {'text': 'Tschuss, bis spater.', 'en': 'Goodbye, see you later.'},
-    ],
-    'French': [
-      {'text': 'Bonjour, comment ca va?', 'en': 'Hello, how are you?'},
-      {'text': 'Merci beaucoup.', 'en': 'Thank you very much.'},
-      {'text': 'S il vous plait, aidez-moi.', 'en': 'Please help me.'},
-      {'text': 'Au revoir, a bientot.', 'en': 'Goodbye, see you soon.'},
     ],
   };
 
