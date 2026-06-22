@@ -9,19 +9,19 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:http/http.dart' as http;
-import 'package:payfast/payfast.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:webview_flutter/webview_flutter.dart';
+import 'package:paystack_flutter_sdk/paystack_flutter_sdk.dart';
 import 'translation_service.dart';
 import 'firebase_options.dart';
-
-// Removed duplicate _sendToLearnMultipleLangs. Only defined inside _HomeScreenState.
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -32,7 +32,6 @@ void main() async {
     debugPrint("Firebase init error: $e");
   }
 
-  // Always load env vars even if Firebase/App Check fails.
   try {
     await dotenv.load(fileName: ".env");
   } catch (e) {
@@ -155,15 +154,13 @@ const _tiers = [
   _CreditTier('Micro', 30, 'R9.99'),
   _CreditTier('Basic', 180, 'R49.99'),
   _CreditTier('Pro', 600, 'R169.99'),
-  _CreditTier('Enterprise', 1500, 'R419.99')
+  _CreditTier('Enterprise', 1500, 'R419.99'),
+  _CreditTier('Organisation', 5000, 'R899.99')
 ];
 const int _usageCostSecs = 5;
 const bool _enableClientFirestoreCache = false;
-const String _payFastMerchantId = '10004002';
-const String _payFastMerchantKey = 'q1cd2rdny4a53';
-const String _payFastPassPhrase = 'payfast';
-const String _payFastSandboxScriptUrl =
-  'https://youngcet.github.io/sandbox_payfast_onsite_payments/';
+const String _organizationTierName = 'Organisation';
+const int _organizationUsageCost = 1;
 
 class HistoryItem {
   final String inputLang, outputLang, original, translated;
@@ -183,10 +180,9 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
           final FocusNode _inputFocusNode = FocusNode();
-        // Track selection state for history items
         final Set<int> _selectedHistoryIndexes = {};
         final bool _showClearAll = false;
-      // --- Helper for deleting user phrase in Learn tab ---
+      String? _userEmail;
       Future<void> _deleteUserPhrase(int idx) async {
         final sure = await _confirmDeleteLearnPhrase();
         if (sure) {
@@ -230,7 +226,6 @@ class _HomeScreenState extends State<HomeScreen> {
         );
         return result == true;
       }
-    // User-added phrases for Learn tab (mutable)
     final Map<String, List<Map<String, String>>> _userLearnPhrasesByLang = {};
 
     Future<bool> _sendToLearnMultipleLangs({
@@ -291,7 +286,6 @@ class _HomeScreenState extends State<HomeScreen> {
       return true;
     }
   static const List<String> _offensiveWords = [
-    // English profanity/slurs/blasphemy
     'fuck',
     'fucking',
     'fucker',
@@ -331,7 +325,6 @@ class _HomeScreenState extends State<HomeScreen> {
     'moron',
     'stupid',
     'retard',
-    // SA/Afrikaans slang profanity
     'kak',
     'k@k',
     'kaffir',
@@ -343,7 +336,6 @@ class _HomeScreenState extends State<HomeScreen> {
     'fok',
     'fokken',
     'domkop',
-    // Mild blasphemy variants
     'god damn',
   ];
 
@@ -417,7 +409,6 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isPlayingAudio = false;
   String _selectedInputLang = 'English';
   String _selectedOutputLang = 'Sepedi';
-  // Full South African language set
   final _inputLangs = [
     'English',
     'Afrikaans',
@@ -431,7 +422,6 @@ class _HomeScreenState extends State<HomeScreen> {
     'Tshivenda',
     'Xitsonga',
   ];
-  // Full South African language set
   final _outputLangs = [
     'isiNdebele',
     'isiXhosa',
@@ -506,6 +496,14 @@ class _HomeScreenState extends State<HomeScreen> {
   String _translatedLang = '';
   final TextEditingController _tttController = TextEditingController();
   int _credits = 30;
+  String? _authUid;
+  String? _authEmail;
+  String? _installId;
+  String? _organizationId;
+  String? _organizationName;
+  String? _organizationInviteCode;
+  String _organizationRole = 'personal';
+  int? _organizationSharedCredits;
   final List<HistoryItem> _history = [];
   String _selectedLearnLang = 'Sepedi';
   final Map<String, String> _learnFocusTextByLang = {};
@@ -578,9 +576,9 @@ class _HomeScreenState extends State<HomeScreen> {
     ],
     'Afrikaans': [
       {'text': 'Hallo, hoe gaan dit?', 'en': 'Hello, how are you?'},
-      {'text': 'Baie dankie.', 'en': 'Thank you very much.'},
-      {'text': 'Help my asseblief.', 'en': 'Please help me.'},
-      {'text': 'Totsiens.', 'en': 'Goodbye.'},
+      {'text': 'Baie dankie.', 'en': 'Baie dankie.'},
+      {'text': 'Help my asseblief.', 'en': 'Help my asseblief.'},
+      {'text': 'Totsiens.', 'en': 'Totsiens.'},
     ],
   };
 
@@ -631,6 +629,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _translationService.primeSession();
     _configureAudioPlayback();
     _initSpeech();
+    unawaited(Paystack().initialize('pk_test_d8de1c368577b34a06507f38cf0bf989b47522a5', true));
     _tttController.addListener(_onInputChanged);
     _startupInitFuture = _checkInstallIdAndFreeTrial();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -644,8 +643,766 @@ class _HomeScreenState extends State<HomeScreen> {
     return List.generate(32, (_) => chars[random.nextInt(chars.length)]).join();
   }
 
+  Future<void> _ensureSignedIn() async {
+    try {
+      final auth = FirebaseAuth.instance;
+      var user = auth.currentUser;
+      if (user == null) {
+        final credential = await auth.signInAnonymously();
+        user = credential.user;
+      }
+
+      if (!mounted) {
+        _authUid = user?.uid;
+        _authEmail = user?.email;
+        return;
+      }
+
+      setState(() {
+        _authUid = user?.uid;
+        _authEmail = user?.email;
+      });
+    } catch (e) {
+      debugPrint('Firebase Auth sign-in failed: $e');
+      if (mounted) {
+        _showSnack('Sign-in failed. Please check your connection.');
+      }
+    }
+  }
+
+  String _displayUserIdentity() {
+    final email = _authEmail;
+    if (email != null && email.trim().isNotEmpty) {
+      return email;
+    }
+
+    final uid = _authUid;
+    if (uid != null && uid.isNotEmpty) {
+      final short = uid.length > 8 ? uid.substring(0, 8) : uid;
+      return 'ID: $short';
+    }
+
+    return 'Not signed in';
+  }
+
+  String _paystackInitUrl() {
+    final configured = (dotenv.env['PAYSTACK_INIT_URL'] ?? '').trim();
+    if (configured.isNotEmpty) {
+      return configured;
+    }
+    return 'https://africa-south1-limpopo-voice-prod.cloudfunctions.net/createPaystackTransactionHttp';
+  }
+
+  Future<Map<String, String>?> _buildAuthorizedJsonHeaders({bool forceRefresh = false}) async {
+    try {
+      User? user = FirebaseAuth.instance.currentUser;
+      user ??= (await FirebaseAuth.instance.signInAnonymously()).user;
+      if (user == null) return null;
+
+      final idToken = await user.getIdToken(forceRefresh);
+      return {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $idToken',
+      };
+    } catch (e) {
+      debugPrint('Auth header build failed: $e');
+      return null;
+    }
+  }
+
+  Future<String?> _requestPaystackAccessCode(_CreditTier tier, double amount) async {
+    final headers = await _buildAuthorizedJsonHeaders();
+    if (headers == null) {
+      _showSnack('Could not authenticate payment request.');
+      return null;
+    }
+
+    final payload = {
+      'amountCents': (amount * 100).round(),
+      'email': _authEmail ?? '',
+      'orgId': tier.name == _organizationTierName ? _organizationId : null,
+    };
+
+    final uri = Uri.parse(_paystackInitUrl());
+    http.Response response;
+
+    try {
+      response = await http
+          .post(uri, headers: headers, body: jsonEncode(payload))
+          .timeout(const Duration(seconds: 30));
+    } catch (e) {
+      debugPrint('Paystack init request failed: $e');
+      return null;
+    }
+
+    if (response.statusCode == 401) {
+      final refreshedHeaders = await _buildAuthorizedJsonHeaders(forceRefresh: true);
+      if (refreshedHeaders == null) return null;
+      try {
+        response = await http
+            .post(uri, headers: refreshedHeaders, body: jsonEncode(payload))
+            .timeout(const Duration(seconds: 30));
+      } catch (e) {
+        debugPrint('Paystack init retry failed: $e');
+        return null;
+      }
+    }
+
+    if (response.statusCode != 200) {
+      debugPrint('Paystack init HTTP ${response.statusCode}: ${response.body}');
+      return null;
+    }
+
+    try {
+      final body = jsonDecode(response.body);
+      if (body is! Map<String, dynamic>) return null;
+      final accessCode = body['access_code'] as String?;
+      return (accessCode != null && accessCode.trim().isNotEmpty) ? accessCode.trim() : null;
+    } catch (e) {
+      debugPrint('Paystack init response parse failed: $e');
+      return null;
+    }
+  }
+
+  DocumentReference<Map<String, dynamic>>? _userDocRef() {
+    final id = _authUid;
+    if (id == null || id.isEmpty) return null;
+    return FirebaseFirestore.instance.collection('users').doc(id);
+  }
+
+  String _newInviteCode() {
+    final random = Random();
+    final suffix = (1000 + random.nextInt(9000)).toString();
+    return 'LT-ORG-$suffix';
+  }
+
+  Future<void> _ensureUserProfileDocument() async {
+    final ref = _userDocRef();
+    if (ref == null) return;
+    await ref.set({
+      'userId': _authUid,
+      'authUid': _authUid,
+      'email': _authEmail,
+      'installId': _installId,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> _refreshOrganizationDetails() async {
+    final orgId = _organizationId;
+    if (orgId == null || orgId.isEmpty) {
+      if (!mounted) return;
+      setState(() => _organizationSharedCredits = null);
+      return;
+    }
+
+    try {
+      final orgSnap = await FirebaseFirestore.instance
+          .collection('organizations')
+          .doc(orgId)
+          .get();
+      if (!orgSnap.exists) return;
+
+      final data = orgSnap.data() ?? <String, dynamic>{};
+      if (!mounted) return;
+      setState(() {
+        _organizationName = (data['name'] as String?) ?? _organizationName;
+        _organizationInviteCode =
+            (data['inviteCode'] as String?) ?? _organizationInviteCode;
+        _organizationSharedCredits = (data['sharedCredits'] as num?)?.toInt();
+      });
+    } catch (e) {
+      debugPrint('Organization refresh failed: $e');
+    }
+  }
+
+  Future<void> _loadOrganizationMembership() async {
+    final ref = _userDocRef();
+    if (ref == null) return;
+
+    try {
+      final snap = await ref.get();
+      final data = snap.data();
+      if (!mounted) return;
+
+      setState(() {
+        _organizationId = data?['organizationId'] as String?;
+        _organizationRole = (data?['organizationRole'] as String?) ?? 'personal';
+        _organizationName = data?['organizationName'] as String?;
+        _organizationInviteCode = data?['organizationInviteCode'] as String?;
+      });
+      await _refreshOrganizationDetails();
+    } catch (e) {
+      debugPrint('Organization membership load failed: $e');
+    }
+  }
+
+  Future<void> _joinOrganizationByCode(String codeInput) async {
+    final code = codeInput.trim().toUpperCase();
+    if (code.isEmpty) {
+      _showSnack('Enter an invite code first.');
+      return;
+    }
+
+    final userRef = _userDocRef();
+    if (userRef == null) {
+      _showSnack('Profile not ready yet. Try again in a moment.');
+      return;
+    }
+
+    try {
+      final query = await FirebaseFirestore.instance
+          .collection('organizations')
+          .where('inviteCode', isEqualTo: code)
+          .limit(1)
+          .get();
+
+      if (query.docs.isEmpty) {
+        _showSnack('Invite code not found.');
+        return;
+      }
+
+      final orgDoc = query.docs.first;
+      final orgData = orgDoc.data();
+      await userRef.set({
+        'organizationId': orgDoc.id,
+        'organizationRole': 'member',
+        'organizationInviteCode': orgData['inviteCode'],
+        'organizationName': orgData['name'],
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      if (!mounted) return;
+      setState(() {
+        _organizationId = orgDoc.id;
+        _organizationRole = 'member';
+        _organizationInviteCode = orgData['inviteCode'] as String?;
+        _organizationName = orgData['name'] as String?;
+      });
+      await _refreshOrganizationDetails();
+      _showSnack('Joined ${_organizationName ?? 'organization'} successfully.');
+    } catch (e) {
+      debugPrint('Join organization failed: $e');
+      _showSnack('Could not join organization right now.');
+    }
+  }
+
+  Future<void> _showJoinOrganizationDialog() async {
+    final codeController = TextEditingController();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+        surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+        title: Text(
+          'Join Organisation',
+          style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: codeController,
+              textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(
+                labelText: 'Invite code',
+                hintText: 'LT-ORG-1234',
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Enter the code shared by your principal, doctor, or manager.',
+              style: TextStyle(
+                fontSize: 12,
+                color: isDark ? Colors.white70 : Colors.black54,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('Cancel', style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000))),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(
+              backgroundColor: const Color(0xFF000000),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () async {
+              final code = codeController.text;
+              Navigator.of(ctx).pop();
+              await _joinOrganizationByCode(code);
+            },
+            child: const Text('Join'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool> _createOrTopUpOrganizationPool(_CreditTier tier) async {
+    final userRef = _userDocRef();
+    final uid = _authUid;
+    if (uid == null || uid.isEmpty || userRef == null) {
+      _showSnack('Organisation setup unavailable. Please wait for sign-in and try again.');
+      return false;
+    }
+
+    final db = FirebaseFirestore.instance;
+    var orgId = _organizationId;
+    final creatingNewOrg = orgId == null || orgId.isEmpty;
+    final inviteCode = (_organizationInviteCode != null && _organizationInviteCode!.isNotEmpty)
+        ? _organizationInviteCode!
+        : _newInviteCode();
+    final orgName = (_organizationName != null && _organizationName!.isNotEmpty)
+        ? _organizationName!
+        : 'My Organisation';
+
+    if (orgId == null || orgId.isEmpty) {
+      orgId = db.collection('organizations').doc().id;
+    }
+
+    final orgRef = db.collection('organizations').doc(orgId);
+
+    try {
+      final updatedCredits = await db.runTransaction<int>((tx) async {
+        final orgSnap = await tx.get(orgRef);
+        final now = FieldValue.serverTimestamp();
+
+        if (!orgSnap.exists) {
+          tx.set(orgRef, {
+            'name': orgName,
+            'ownerUid': uid,
+            'inviteCode': inviteCode,
+            'sharedCredits': tier.secs,
+            'tierType': 'organization',
+            'createdAt': now,
+            'updatedAt': now,
+          });
+          tx.set(userRef, {
+            'organizationId': orgId,
+            'organizationRole': 'owner',
+            'organizationInviteCode': inviteCode,
+            'organizationName': orgName,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+          return tier.secs;
+        } else {
+          final data = orgSnap.data() ?? <String, dynamic>{};
+          final currentCredits = (data['sharedCredits'] as num?)?.toInt() ?? 0;
+          final nextCredits = currentCredits + tier.secs;
+          tx.update(orgRef, {
+            'sharedCredits': nextCredits,
+            'updatedAt': now,
+            'tierType': 'organization',
+          });
+          tx.set(userRef, {
+            'organizationId': orgId,
+            'organizationRole': 'owner',
+            'organizationInviteCode': inviteCode,
+            'organizationName': orgName,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+          return nextCredits;
+        }
+      });
+
+      if (!mounted) return false;
+      setState(() {
+        _organizationId = orgId;
+        _organizationRole = 'owner';
+        _organizationInviteCode = inviteCode;
+        _organizationName = orgName;
+        _organizationSharedCredits = updatedCredits;
+      });
+      await _refreshOrganizationDetails();
+      await _logOrganizationActivity(
+        organizationId: orgId,
+        action: creatingNewOrg ? 'pool_created' : 'pool_topped_up',
+        creditsDelta: tier.secs,
+        creditsAfter: updatedCredits,
+        tierName: tier.name,
+      );
+      await _showOrganizationOwnerInfo();
+      return true;
+    } catch (e) {
+      debugPrint('Organisation top-up failed: $e');
+      _showSnack('Could not top up organisation pool right now.');
+      return false;
+    }
+  }
+
+  Future<void> _showOrganizationOwnerInfo() async {
+    if (!mounted) return;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final code = _organizationInviteCode ?? '-';
+    final name = _organizationName ?? 'My Organisation';
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+        surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+        title: Text(
+          'Organisation Ready',
+          style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              name,
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                color: isDark ? Colors.white : const Color(0xFF000000),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Invite code: $code',
+              style: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Share this code with co-workers or students so they can join your pool.',
+              style: TextStyle(
+                fontSize: 12,
+                color: isDark ? Colors.white70 : Colors.black54,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: code));
+              if (!mounted) return;
+              _showSnack('Invite code copied.');
+            },
+            child: Text('Copy code', style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000))),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(
+              backgroundColor: const Color(0xFF000000),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _logOrganizationActivity({
+    required String organizationId,
+    required String action,
+    required int creditsDelta,
+    int? creditsAfter,
+    String? tierName,
+    double? amount,
+    String? note,
+  }) async {
+    final uid = _authUid;
+    if (uid == null || uid.isEmpty || organizationId.isEmpty) return;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('organizations')
+          .doc(organizationId)
+          .collection('activity')
+          .add({
+        'action': action,
+        'creditsDelta': creditsDelta,
+        'creditsAfter': creditsAfter,
+        'tierName': tierName,
+        'amount': amount,
+        'note': note,
+        'actorUid': uid,
+        'actorRole': _organizationRole,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint('Organization activity log failed: $e');
+    }
+  }
+
+  Future<void> _showManageOrganizationDialog() async {
+    if (_organizationId == null || _organizationId!.isEmpty || _organizationRole != 'owner') {
+      _showSnack('Only organisation owners can manage settings.');
+      return;
+    }
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final nameController = TextEditingController(text: _organizationName ?? 'My Organisation');
+    bool regenerateInviteCode = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            return AlertDialog(
+              backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+              surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+              title: Text(
+                'Manage Organisation',
+                style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: nameController,
+                    decoration: const InputDecoration(labelText: 'Organisation name'),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Current code: ${_organizationInviteCode ?? '-'}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isDark ? Colors.white70 : Colors.black54,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: regenerateInviteCode,
+                    onChanged: (value) {
+                      setDialogState(() => regenerateInviteCode = value ?? false);
+                    },
+                    title: Text(
+                      'Regenerate invite code',
+                      style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
+                    ),
+                    controlAffinity: ListTileControlAffinity.leading,
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: Text('Cancel', style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000))),
+                ),
+                TextButton(
+                  style: TextButton.styleFrom(
+                    backgroundColor: const Color(0xFF000000),
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () async {
+                    Navigator.of(ctx).pop();
+                    await _updateOrganizationSettings(
+                      nameController.text,
+                      regenerateInviteCode: regenerateInviteCode,
+                    );
+                  },
+                  child: const Text('Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _showOrganizationActivityDialog() async {
+    final orgId = _organizationId;
+    if (orgId == null || orgId.isEmpty) {
+      _showSnack('Join an organisation first to view activity.');
+      return;
+    }
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final activityStream = FirebaseFirestore.instance
+        .collection('organizations')
+        .doc(orgId)
+        .collection('activity')
+        .orderBy('createdAt', descending: true)
+        .limit(40)
+        .snapshots();
+
+    String formatTimestamp(dynamic value) {
+      if (value is Timestamp) {
+        final dt = value.toDate().toLocal();
+        final y = dt.year.toString().padLeft(4, '0');
+        final m = dt.month.toString().padLeft(2, '0');
+        final d = dt.day.toString().padLeft(2, '0');
+        final hh = dt.hour.toString().padLeft(2, '0');
+        final mm = dt.minute.toString().padLeft(2, '0');
+        return '$y-$m-$d $hh:$mm';
+      }
+      return 'Pending time';
+    }
+
+    String formatDelta(dynamic value) {
+      final amount = (value as num?)?.toInt() ?? 0;
+      return amount > 0 ? '+$amount' : amount.toString();
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+        surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+        title: Text(
+          'Organisation Activity',
+          style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
+        ),
+        content: SizedBox(
+          width: 520,
+          height: 380,
+          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: activityStream,
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return Center(
+                  child: Text(
+                    'Could not load activity right now.',
+                    style: TextStyle(color: isDark ? Colors.white70 : Colors.black54),
+                    textAlign: TextAlign.center,
+                  ),
+                );
+              }
+
+              if (!snapshot.hasData) {
+                return const Center(child: CircularProgressIndicator());
+              }
+
+              final docs = snapshot.data!.docs;
+              if (docs.isEmpty) {
+                return Center(
+                  child: Text(
+                    'No activity yet.',
+                    style: TextStyle(color: isDark ? Colors.white70 : Colors.black54),
+                  ),
+                );
+              }
+
+              return ListView.separated(
+                itemCount: docs.length,
+                separatorBuilder: (_, __) => Divider(
+                  color: isDark ? Colors.white12 : Colors.black12,
+                  height: 1,
+                ),
+                itemBuilder: (context, index) {
+                  final data = docs[index].data();
+                  final action = (data['action'] as String?) ?? 'activity';
+                  final creditsAfter = (data['creditsAfter'] as num?)?.toInt();
+                  final tierName = data['tierName'] as String?;
+                  final actorRole = (data['actorRole'] as String?) ?? 'member';
+
+                  final subtitleParts = <String>[
+                    formatTimestamp(data['createdAt']),
+                    'delta ${formatDelta(data['creditsDelta'])}',
+                    if (creditsAfter != null) 'pool $creditsAfter',
+                    'role ${actorRole.toUpperCase()}',
+                    if (tierName != null && tierName.isNotEmpty) 'tier $tierName',
+                  ];
+
+                  return ListTile(
+                    dense: true,
+                    leading: Icon(
+                      action == 'credit_spent'
+                          ? Icons.remove_circle_outline
+                          : (action == 'settings_updated'
+                              ? Icons.settings
+                              : Icons.add_circle_outline),
+                      color: isDark ? Colors.white : const Color(0xFF000000),
+                    ),
+                    title: Text(
+                      action.replaceAll('_', ' '),
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: isDark ? Colors.white : const Color(0xFF000000),
+                      ),
+                    ),
+                    subtitle: Text(
+                      subtitleParts.join(' • '),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isDark ? Colors.white70 : Colors.black54,
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            style: TextButton.styleFrom(
+              backgroundColor: const Color(0xFF000000),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _updateOrganizationSettings(
+    String newName, {
+    required bool regenerateInviteCode,
+  }) async {
+    final orgId = _organizationId;
+    if (orgId == null || orgId.isEmpty || _organizationRole != 'owner') {
+      _showSnack('Only organisation owners can update settings.');
+      return;
+    }
+
+    final orgRef = FirebaseFirestore.instance.collection('organizations').doc(orgId);
+    final trimmedName = newName.trim().isEmpty ? (_organizationName ?? 'My Organisation') : newName.trim();
+    final updatedCode = regenerateInviteCode ? _newInviteCode() : _organizationInviteCode;
+
+    try {
+      await orgRef.update({
+        'name': trimmedName,
+        'inviteCode': updatedCode,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      final userRef = _userDocRef();
+      if (userRef != null) {
+        await userRef.set({
+          'organizationName': trimmedName,
+          'organizationInviteCode': updatedCode,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _organizationName = trimmedName;
+        _organizationInviteCode = updatedCode;
+      });
+
+      _showSnack('Organisation settings updated.');
+      await _logOrganizationActivity(
+        organizationId: orgId,
+        action: 'settings_updated',
+        creditsDelta: 0,
+        creditsAfter: _organizationSharedCredits,
+        note: regenerateInviteCode ? 'name_changed_and_code_regenerated' : 'name_changed',
+      );
+    } catch (e) {
+      debugPrint('Organization settings update failed: $e');
+      _showSnack('Could not update organisation settings right now.');
+    }
+  }
+
   Future<void> _checkInstallIdAndFreeTrial() async {
     try {
+      await _ensureSignedIn();
       final prefs = await SharedPreferences.getInstance();
       const installIdKey = 'lets_talk_install_id_v1';
       
@@ -658,7 +1415,12 @@ class _HomeScreenState extends State<HomeScreen> {
         debugPrint('Retrieved existing install ID: $installId');
       }
 
-      // Check Firebase if this device has already used free trial
+      if (mounted) {
+        setState(() => _installId = installId);
+      } else {
+        _installId = installId;
+      }
+
       final db = FirebaseFirestore.instance;
       final docRef = db.collection('device_installs').doc(installId);
       final docSnapshot = await docRef.get();
@@ -666,7 +1428,6 @@ class _HomeScreenState extends State<HomeScreen> {
       if (docSnapshot.exists && docSnapshot.data()?['used_free_trial'] == true) {
         debugPrint('Install ID $installId already used free trial');
       } else {
-        // First time - mark for future reinstalls
         await docRef.set({
           'used_free_trial': true,
           'first_seen': FieldValue.serverTimestamp(),
@@ -676,9 +1437,11 @@ class _HomeScreenState extends State<HomeScreen> {
         });
         debugPrint('Install ID $installId registered for first free trial use');
       }
+
+      await _ensureUserProfileDocument();
+      await _loadOrganizationMembership();
     } catch (e) {
       debugPrint('Error checking install ID: $e');
-      // On error, allow free trial to proceed (don't block user)
     }
   }
 
@@ -840,7 +1603,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 return Center(
                   child: SizedBox(
                     width: wordmarkWidth,
-                    child: _buildHeaderWordmark(true), // Always dark mode
+                    child: _buildHeaderWordmark(true),
                   ),
                 );
               },
@@ -878,60 +1641,6 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
-  }
-
-  Future<void> _showFirstInstallIntroSplash() async {
-    if (!mounted) return;
-
-    bool introVisible = false;
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        introVisible = true;
-        final isDark = Theme.of(ctx).brightness == Brightness.dark;
-        return AlertDialog(
-          backgroundColor: const Color(0xFF000000),
-          surfaceTintColor: const Color(0xFF000000),
-          content: LayoutBuilder(
-            builder: (context, constraints) {
-              final wordmarkWidth = (constraints.maxWidth * 0.95).clamp(260.0, 360.0);
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SizedBox(
-                    width: wordmarkWidth,
-                    child: _buildHeaderWordmark(true), // Always dark gradient + white text
-                  ),
-                  const SizedBox(height: 10),
-                  const Text(
-                    'Preparing LetsTalk...',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-        );
-      },
-    );
-
-    // Let the intro render, then keep it until startup initialization is done.
-    await Future<void>.delayed(const Duration(milliseconds: 1));
-    try {
-      await (_startupInitFuture ?? Future<void>.value());
-    } catch (_) {
-      // Keep flow resilient if startup telemetry/checks fail.
-    }
-
-    if (mounted && introVisible && Navigator.of(context, rootNavigator: true).canPop()) {
-      Navigator.of(context, rootNavigator: true).pop();
-    }
   }
 
   void _onInputChanged() {
@@ -998,7 +1707,6 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       },
       localeId: _locales[_selectedInputLang] ?? 'en-ZA',
-      // Keep capture active while user is holding the Talk button.
       listenFor: const Duration(seconds: 60),
       pauseFor: const Duration(seconds: 20),
     );
@@ -1009,7 +1717,57 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _isTalking = false);
   }
 
-  bool _consumeUsageAllowance() {
+  Future<bool> _consumeUsageAllowance() async {
+    final orgId = _organizationId;
+    if (orgId != null && orgId.isNotEmpty) {
+      try {
+        final orgRef = FirebaseFirestore.instance.collection('organizations').doc(orgId);
+        final remainingCredits = await FirebaseFirestore.instance.runTransaction<int?>((tx) async {
+          final snap = await tx.get(orgRef);
+          if (!snap.exists) return null;
+          final current = (snap.data()?['sharedCredits'] as num?)?.toInt() ?? 0;
+          if (current < _organizationUsageCost) {
+            return -1;
+          }
+          final updated = current - _organizationUsageCost;
+          tx.update(orgRef, {
+            'sharedCredits': updated,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+          return updated;
+        });
+
+        if (remainingCredits == null) {
+          _showSnack('Organisation not found.');
+          return false;
+        }
+        if (remainingCredits < 0) {
+          _showSnack('Organisation pool is empty. Please top up.');
+          _showCreditTiers();
+          return false;
+        }
+
+        if (mounted) {
+          setState(() => _organizationSharedCredits = remainingCredits);
+        }
+        await _logOrganizationActivity(
+          organizationId: orgId,
+          action: 'credit_spent',
+          creditsDelta: -_organizationUsageCost,
+          creditsAfter: remainingCredits,
+          note: 'translation',
+        );
+        _showSnack(
+          'Used $_organizationUsageCost org credit | Pool: $remainingCredits remaining',
+        );
+        return true;
+      } catch (e) {
+        debugPrint('Organisation pool debit failed: $e');
+        _showSnack('Could not use organisation pool.');
+        return false;
+      }
+    }
+
     if (_credits >= _usageCostSecs) {
       setState(() => _credits -= _usageCostSecs);
       _showSnack('Used $_usageCostSecs sec | Balance: $_credits sec remaining');
@@ -1020,7 +1778,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _doTranslate(String input) async {
-    if (!_consumeUsageAllowance()) {
+    if (!await _consumeUsageAllowance()) {
       return;
     }
     setState(() => _isTranslating = true);
@@ -1034,7 +1792,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _translatedText = _maskProfanityForDisplay(result);
       _translatedLang = _selectedOutputLang;
       _isTranslating = false;
-      // _phoneticText is set as a side-effect inside _translateText; include it here so the UI rebuilds with it
     });
 
     _history.insert(
@@ -1083,7 +1840,6 @@ class _HomeScreenState extends State<HomeScreen> {
         _selectedOutputLang == 'Urdu' ||
         _selectedOutputLang == 'Mandarin';
 
-    // Check cache first
     final cached = await _getCachedTranslation(input, _selectedOutputLang);
     if (cached != null && cached.isNotEmpty) {
       _phoneticText = '';
@@ -1110,7 +1866,6 @@ class _HomeScreenState extends State<HomeScreen> {
             .join();
 
         if (needsPhonetics) {
-          // dt=rm: romanization of each translated segment is at index [2] of each piece
           final phonetic = pieces
               .whereType<List>()
               .map((s) =>
@@ -1118,13 +1873,11 @@ class _HomeScreenState extends State<HomeScreen> {
               .where((s) => s.isNotEmpty)
               .join(' ')
               .trim();
-          // Fallback: check top-level decoded[1] (some API variants put it there)
           final fallback =
               (phonetic.isEmpty && decoded.length > 1 && decoded[1] is String)
                   ? (decoded[1] as String).trim()
                   : '';
           _phoneticText = phonetic.isNotEmpty ? phonetic : fallback;
-          debugPrint('Phonetics found: "$_phoneticText"');
         } else {
           _phoneticText = '';
         }
@@ -1151,7 +1904,6 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final provider = _ttsProviderForLanguage(language);
       final voiceName = _voiceNameForLanguage(language);
-      debugPrint('Requesting audio: text="$safeForSpeech", language=$language, provider=$provider, voice=${voiceName ?? 'auto'}');
       final audioData = await _generateAudioWithCache(
         safeForSpeech,
         language,
@@ -1159,10 +1911,8 @@ class _HomeScreenState extends State<HomeScreen> {
         provider: provider,
       );
       if (audioData != null && audioData.isNotEmpty) {
-        debugPrint('Audio received: ${audioData.length} bytes, playing...');
         await _audioPlayer.play(BytesSource(audioData));
       } else {
-        debugPrint('Narakeet returned no audio data (null or empty)');
         _showSnack(_narakeetUnavailableMessage());
       }
     } catch (e) {
@@ -1175,13 +1925,11 @@ class _HomeScreenState extends State<HomeScreen> {
       String text, String language, String? voice,
       {required String provider}) async {
     final cacheVoiceKey = '$provider|${voice ?? ''}';
-    // Check cache first
     final cachedBase64 = await _getCachedAudio(text, language, cacheVoiceKey);
     if (cachedBase64 != null) {
       return base64Decode(cachedBase64);
     }
 
-    // Not in cache, generate new audio
     final audioData = await _translationService.generateTranslation(
       text,
       language,
@@ -1189,7 +1937,6 @@ class _HomeScreenState extends State<HomeScreen> {
       ttsProvider: provider,
     );
 
-    // Save to cache if successful
     if (audioData != null && audioData.isNotEmpty) {
       final audioBase64 = base64Encode(audioData);
       await _saveCacheAudio(text, language, cacheVoiceKey, audioBase64);
@@ -1208,7 +1955,6 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    // Start timing
     final Stopwatch ttsStopwatch = Stopwatch()..start();
 
     try {
@@ -1218,21 +1964,12 @@ class _HomeScreenState extends State<HomeScreen> {
       final voiceName = _voiceNameForLanguage(_selectedOutputLang);
       final chunks = _buildRealtimeSpeechChunks(safeForSpeech);
       if (chunks.isEmpty) {
-        debugPrint('No audio data returned from API');
         _showSnack(_narakeetUnavailableMessage());
         return;
       }
 
-      debugPrint(
-          'Requesting chunked audio (${chunks.length} chunks) for language: $_selectedOutputLang, provider: $provider, voice: ${voiceName ?? 'auto'}');
-      for (int i = 0; i < chunks.length; i++) {
-        debugPrint('  Chunk ${i + 1}: "${chunks[i]}"');
-      }
-
-      // Kick off all chunk requests immediately so later chunks are ready sooner.
       final chunkRequests = chunks
           .map((chunk) {
-            debugPrint('Calling Narakeet for chunk: "$chunk"');
             return _generateAudioWithCache(
               chunk,
               _selectedOutputLang,
@@ -1248,48 +1985,30 @@ class _HomeScreenState extends State<HomeScreen> {
       for (int i = 0; i < chunkRequests.length; i++) {
         final audioData = await chunkRequests[i].timeout(
           i == 0 ? _firstChunkFetchTimeout : _nextChunkFetchTimeout,
-          onTimeout: () {
-            debugPrint('Chunk ${i + 1} request timed out');
-            return null;
-          },
+          onTimeout: () => null,
         );
         if (audioData == null || audioData.isEmpty) {
-          debugPrint(
-              'Chunk ${i + 1}/${chunkRequests.length} returned no audio (null/empty)');
           continue;
         }
 
-        debugPrint(
-            'Chunk ${i + 1}/${chunkRequests.length} audio size: ${audioData.length} bytes');
         await _audioPlayer.play(BytesSource(audioData));
         playedAny = true;
 
-        // Wait for completion before the next chunk to preserve natural flow.
         try {
           await _audioPlayer.onPlayerComplete.first
               .timeout(const Duration(seconds: 45));
-        } catch (_) {
-          // Continue even if completion signal times out.
-        }
+        } catch (_) {}
       }
 
-      // Stop timing after all playback is done
       ttsStopwatch.stop();
-      final ttsMillis = ttsStopwatch.elapsedMilliseconds;
-      final ttsSeconds = (ttsMillis / 1000).toStringAsFixed(2);
-      final timingMsg = '$ttsSeconds seconds';
-      debugPrint('TTS time: $timingMsg');
-      // Show in UI
       if (playedAny) {
-        _showSnack(timingMsg);
+        _showSnack('${(ttsStopwatch.elapsedMilliseconds / 1000).toStringAsFixed(2)} seconds');
       }
 
       if (!playedAny) {
-        debugPrint('ERROR: No chunks were successfully converted to audio. Check Narakeet API key and network.');
         _showSnack(_narakeetUnavailableMessage());
       }
     } catch (e) {
-      debugPrint('Audio playback error: $e');
       _showSnack('Narakeet audio error. Please try again.');
     } finally {
       setState(() => _isPlayingAudio = false);
@@ -1300,7 +2019,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final normalized = text.replaceAll(RegExp(r'\s+'), ' ').trim();
     if (normalized.isEmpty) return const [];
 
-    // Split on sentence punctuation first, then keep each chunk short.
     final sentences = normalized
         .split(RegExp(r'(?<=[.!?])\s+'))
         .map((s) => s.trim())
@@ -1317,7 +2035,6 @@ class _HomeScreenState extends State<HomeScreen> {
         continue;
       }
 
-      // For long sentences, split by words without breaking words.
       final words = sentence.split(' ');
       var buffer = StringBuffer();
 
@@ -1465,7 +2182,6 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      // Add text files after audio files so share targets prioritise media attachments.
       final inputTextFile = File('${dir.path}/lets_talk_input_$nowSuffix.txt');
       await inputTextFile.writeAsString(
         'Input Language: $inputLang\n\n$inputDisplay\n',
@@ -1515,7 +2231,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _sendHistoryToLearn(HistoryItem item) async {
     final phonetic = (item.phonetic ?? '').trim();
     final normalizedOutputLang = _normalizeLanguageLabel(item.outputLang);
-    // Use the same logic as the translation page
     final sent = await _sendToLearnMultipleLangs(
       translated: item.translated,
       original: item.original,
@@ -1534,8 +2249,7 @@ class _HomeScreenState extends State<HomeScreen> {
       'Narakeet unavailable. Check connection & try again.';
 
   void _showQrShare() {
-    const appUrl =
-      'https://dummy.link/letstalk';
+    const appUrl = 'https://dummy.link/letstalk';
     final isDark = Theme.of(context).brightness == Brightness.dark;
     showDialog(
       context: context,
@@ -1586,8 +2300,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       fontWeight: FontWeight.w600,
                     color: isDark ? Colors.white70 : const Color(0xFF000000))),
               const SizedBox(height: 16),
-              // Play Store link removed as requested
-              const SizedBox(height: 8),
               TextButton(
                 onPressed: () => Navigator.of(context).pop(),
                 style: TextButton.styleFrom(
@@ -1609,6 +2321,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
@@ -1617,12 +2330,19 @@ class _HomeScreenState extends State<HomeScreen> {
           color: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
           surfaceTintColor:
               isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+          child: SafeArea(
+            top: false,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(ctx).size.height * 0.9,
+              ),
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
               Row(
                 children: [
                   Icon(Icons.account_balance_wallet,
@@ -1669,7 +2389,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                   Chip(
-                    label: Text('Balance: $_credits sec',
+                    label: Text(
+                      _organizationId != null && _organizationId!.isNotEmpty
+                          ? 'Org Pool: ${_organizationSharedCredits ?? 0} credits'
+                          : 'Balance: $_credits sec',
                       style: TextStyle(
                         color: isDark ? Colors.white : const Color(0xFF000000),
                         fontWeight: FontWeight.bold,
@@ -1681,19 +2404,20 @@ class _HomeScreenState extends State<HomeScreen> {
                 ],
               ),
               const SizedBox(height: 16),
-                ..._tiers.map((tier) => Padding(
+              ..._tiers.map((tier) => Padding(
                     padding: const EdgeInsets.only(bottom: 10),
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: isDark ? Colors.white10 : Colors.black,
-                        foregroundColor: Colors.white, // Always white text
+                        foregroundColor: Colors.white,
                         minimumSize: const Size(double.infinity, 52),
                         shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12)),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                       ),
                       onPressed: () {
                         Navigator.pop(ctx);
-                        _startSandboxTierPayment(tier);
+                        _showPaymentGateways(tier);
                       },
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1702,27 +2426,152 @@ class _HomeScreenState extends State<HomeScreen> {
                             child: Text(
                               tier.name,
                               style: const TextStyle(
-                                  fontWeight: FontWeight.bold, fontSize: 16,
-                                  color: Colors.white),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                                color: Colors.white,
+                              ),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
                           const SizedBox(width: 8),
-                          Text('${tier.secs} sec',
-                            style: const TextStyle(
-                              color: Colors.white70,
-                            ),
+                          Text(
+                            tier.name == _organizationTierName
+                                ? '${tier.secs} credits'
+                                : '${tier.secs} sec',
+                            style: const TextStyle(color: Colors.white70),
                           ),
                           const SizedBox(width: 8),
-                          Text(tier.price,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold)),
+                          Text(
+                            tier.price,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
                         ],
                       ),
                     ),
-                    )),
-              ],
+                  )),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showPaymentGateways(_CreditTier tier) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return Material(
+          color: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+          surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+          child: SafeArea(
+            top: false,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(ctx).size.height * 0.9,
+              ),
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  Text(
+                    'Choose Payment Gateway',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: isDark ? Colors.white : const Color(0xFF000000),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    tier.name == _organizationTierName
+                        ? '${tier.name} • ${tier.secs} credits • ${tier.price}'
+                        : '${tier.name} • ${tier.secs} sec • ${tier.price}',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: isDark ? Colors.white70 : Colors.black54,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: isDark ? Colors.white10 : Colors.black,
+                        foregroundColor: Colors.white,
+                        minimumSize: const Size(double.infinity, 108),
+                        padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 20),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _startPaystackTierPayment(tier);
+                      },
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Image.asset('assets/paystack.png', width: 46, height: 46),
+                          const SizedBox(width: 16),
+                          const Text(
+                            'Paystack',
+                            style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: isDark ? Colors.white10 : Colors.black,
+                        foregroundColor: Colors.white,
+                        minimumSize: const Size(double.infinity, 108),
+                        padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 20),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _startPayPalTierPayment(tier);
+                      },
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Image.asset('assets/paypal.png', width: 46, height: 46),
+                          const SizedBox(width: 16),
+                          const Text(
+                            'PayPal',
+                            style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
         );
@@ -1735,161 +2584,109 @@ class _HomeScreenState extends State<HomeScreen> {
     return double.tryParse(cleaned) ?? 0;
   }
 
-  Future<void> _startSandboxTierPayment(_CreditTier tier) async {
+  bool _allowPaystackSandboxSimulation() {
+    final raw = (dotenv.env['PAYSTACK_SANDBOX_BYPASS'] ?? '').trim().toLowerCase();
+    final enabledByEnv = raw == '1' || raw == 'true' || raw == 'yes' || raw == 'on';
+    return kDebugMode || enabledByEnv;
+  }
+
+  Future<void> _completeTierPurchase(
+    _CreditTier tier, {
+    required double amount,
+    required String status,
+    required String reference,
+  }) async {
+    if (!mounted) return;
+
+    if (tier.name == _organizationTierName) {
+      final orgDone = await _createOrTopUpOrganizationPool(tier);
+      if (!orgDone) return;
+      _showSnack(
+        'Organisation pool topped up: ${tier.secs} credits (${tier.name}) [Paystack Sandbox].',
+      );
+    } else {
+      setState(() => _credits += tier.secs);
+      _showSnack('Credits added: ${tier.secs} sec (${tier.name}) [Paystack Sandbox].');
+    }
+
+    try {
+      await FirebaseFirestore.instance.collection('payment_events').add({
+        'userId': _authUid,
+        'organizationId': _organizationId,
+        'tierName': tier.name,
+        'secondsAdded': tier.secs,
+        'amountPaid': amount,
+        'status': status,
+        'reference': reference,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {
+      // Do not block crediting if telemetry logging fails.
+    }
+  }
+
+  Future<void> _simulatePaystackSandboxPayment(
+    _CreditTier tier,
+    double amount,
+  ) async {
+    final ref = 'SIM-${DateTime.now().millisecondsSinceEpoch}';
+    await _completeTierPurchase(
+      tier,
+      amount: amount,
+      status: 'completed_sandbox_paystack_simulated',
+      reference: ref,
+    );
+  }
+
+  void _startPaystackTierPayment(_CreditTier tier) async {
     final amount = _tierAmountFromPrice(tier.price);
-    if (amount <= 0) {
-      _showSnack('Invalid tier amount.');
+
+    String? accessCode = dotenv.env['PAYSTACK_TEST_ACCESS_CODE'];
+    accessCode = (accessCode != null && accessCode.trim().isNotEmpty)
+        ? accessCode.trim()
+        : await _requestPaystackAccessCode(tier, amount);
+
+    if (accessCode == null || accessCode.isEmpty) {
+      if (_allowPaystackSandboxSimulation()) {
+        try {
+          _showSnack(
+            'Paystack backend unavailable. Running simulated sandbox payment.',
+          );
+          await _simulatePaystackSandboxPayment(tier, amount);
+        } catch (e) {
+          debugPrint('Sandbox simulation error: $e');
+          _showSnack('Sandbox simulation failed: ${e.toString()}');
+        }
+      } else {
+        _showSnack(
+          'Could not get Paystack sandbox access code.',
+        );
+      }
       return;
     }
 
-    final paymentId =
-        'LV-${tier.name}-${DateTime.now().millisecondsSinceEpoch}';
+    try {
+      final response = await Paystack().launch(accessCode);
+      final isSuccess = response.status.toLowerCase() == 'success';
 
-    final paid = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(
-        fullscreenDialog: true,
-        builder: (payContext) => Scaffold(
-          appBar: AppBar(title: Text('PayFast Sandbox - ${tier.name}')),
-          body: SafeArea(
-            child: PayFast(
-              useSandBox: true,
-              passPhrase: _payFastPassPhrase,
-              onsiteActivationScriptUrl: _payFastSandboxScriptUrl,
-              paymentSummaryBuilder: (context, data, processPayment) {
-                return Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
-                        children: [
-                          SizedBox(
-                            width: 48,
-                            height: 48,
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: FittedBox(
-                                fit: BoxFit.contain,
-                                child: Image.asset(
-                                  'assets/letstalkmainblack.png',
-                                  width: 48,
-                                  height: 48,
-                                  fit: BoxFit.contain,
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Let\'s Talk - ${tier.name}',
-                                  style: const TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text('${tier.secs} sec top-up'),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Text('Amount: R${amount.toStringAsFixed(2)}'),
-                      const SizedBox(height: 14),
-                      Builder(
-                        builder: (context) {
-                          final isDark = Theme.of(context).brightness == Brightness.dark;
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              ElevatedButton(
-                                onPressed: processPayment,
-                                style: ElevatedButton.styleFrom(
-                                  foregroundColor: Colors.white, // Always white text
-                                  backgroundColor: isDark ? Colors.white10 : Colors.black,
-                                ),
-                                child: const Text('Pay Now'),
-                              ),
-                              const SizedBox(height: 8),
-                              OutlinedButton(
-                                onPressed: () {
-                                  if (Navigator.of(payContext).canPop()) {
-                                    Navigator.of(payContext).pop(true);
-                                  }
-                                },
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: isDark ? Colors.white : const Color(0xFF000000),
-                                  side: BorderSide(color: isDark ? Colors.white : Colors.black),
-                                ),
-                                child: const Text('Sandbox: Add Credits Now'),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                );
-              },
-              data: {
-                'merchant_id': _payFastMerchantId,
-                'merchant_key': _payFastMerchantKey,
-                'name_first': 'Let',
-                'name_last': "'s Talk", // or just 'Talk' if you prefer
-                'email_address': 'sandbox@letstalk.app',
-                'm_payment_id': paymentId,
-                'amount': amount.toStringAsFixed(2),
-                'item_name': 'LV Studio: ${tier.name}',
-                'return_url': 'https://yoursite.com/success',
-                'cancel_url': 'https://yoursite.com/cancel',
-                'notify_url': 'https://yoursite.com/notify',
-              },
-              onPaymentCompleted: (_) {
-                if (Navigator.of(payContext).canPop()) {
-                  Navigator.of(payContext).pop(true);
-                }
-              },
-              onPaymentCancelled: () {
-                if (Navigator.of(payContext).canPop()) {
-                  Navigator.of(payContext).pop(false);
-                }
-              },
-              onError: (msg) {
-                debugPrint('PayFast error: $msg');
-                if (Navigator.of(payContext).canPop()) {
-                  Navigator.of(payContext).pop(false);
-                }
-              },
-            ),
-          ),
-        ),
-      ),
-    );
-
-    if (!mounted) return;
-
-    if (paid == true) {
-      setState(() => _credits += tier.secs);
-      _showSnack('Credits added: ${tier.secs} sec (${tier.name}) [Sandbox].');
-      try {
-        await FirebaseFirestore.instance.collection('payment_events').add({
-          'tierName': tier.name,
-          'secondsAdded': tier.secs,
-          'amountPaid': amount,
-          'status': 'completed_sandbox',
-          'createdAt': FieldValue.serverTimestamp(),
-        });
-      } catch (_) {
-        // Do not block crediting if telemetry logging fails.
+      if (isSuccess) {
+        await _completeTierPurchase(
+          tier,
+          amount: amount,
+          status: 'completed_sandbox_paystack',
+          reference: response.reference,
+        );
+      } else {
+        _showSnack('Payment failed: ${response.message}');
       }
-    } else {
-      _showSnack('Payment cancelled. No credits added.');
+    } catch (e) {
+      debugPrint('Paystack error: $e');
+      _showSnack('Payment error: ${e.toString()}');
     }
+  }
+
+  void _startPayPalTierPayment(_CreditTier tier) {
+    _showSnack('PayPal integration coming soon. Use Paystack for now.');
   }
   Widget _buildHeaderWordmark(bool isDark) {
     final titleColor = isDark ? Colors.white : const Color(0xFF1F2D40);
@@ -2194,7 +2991,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
                                         Text('User', style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.white : const Color(0xFF000000))),
-                                        Text('user@example.com', style: TextStyle(fontSize: 12, color: isDark ? Colors.grey : Colors.black54)), // TODO: Replace with real email/ID
+                                        Text(_displayUserIdentity(), style: TextStyle(fontSize: 12, color: isDark ? Colors.grey : Colors.black54)),
                                       ],
                                     ),
                                   ],
@@ -2216,6 +3013,64 @@ class _HomeScreenState extends State<HomeScreen> {
                                     _showCreditTiers();
                                   },
                                 ),
+                                ListTile(
+                                  leading: Icon(Icons.groups, color: isDark ? Colors.white : Colors.black),
+                                  title: Text(
+                                    'Join Organisation',
+                                    style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
+                                  ),
+                                  subtitle: Text(
+                                    _organizationId != null && _organizationId!.isNotEmpty
+                                        ? 'Linked: ${_organizationName ?? 'Organisation'} (${_organizationRole.toUpperCase()})'
+                                        : 'Use invite code to join a shared pool',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: isDark ? Colors.white70 : Colors.black54,
+                                    ),
+                                  ),
+                                  onTap: () {
+                                    Navigator.pop(context);
+                                    _showJoinOrganizationDialog();
+                                  },
+                                ),
+                                if (_organizationId != null && _organizationId!.isNotEmpty)
+                                  ListTile(
+                                    leading: Icon(Icons.history, color: isDark ? Colors.white : Colors.black),
+                                    title: Text(
+                                      'Organisation Activity',
+                                      style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
+                                    ),
+                                    subtitle: Text(
+                                      'View recent pool top-ups and spend',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: isDark ? Colors.white70 : Colors.black54,
+                                      ),
+                                    ),
+                                    onTap: () {
+                                      Navigator.pop(context);
+                                      _showOrganizationActivityDialog();
+                                    },
+                                  ),
+                                if (_organizationRole == 'owner')
+                                  ListTile(
+                                    leading: Icon(Icons.manage_accounts, color: isDark ? Colors.white : Colors.black),
+                                    title: Text(
+                                      'Manage Organisation',
+                                      style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
+                                    ),
+                                    subtitle: Text(
+                                      'Rename or regenerate invite code',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: isDark ? Colors.white70 : Colors.black54,
+                                      ),
+                                    ),
+                                    onTap: () {
+                                      Navigator.pop(context);
+                                      _showManageOrganizationDialog();
+                                    },
+                                  ),
                                 ListTile(
                                   leading: Icon(Icons.info_outline,
                                       color: isDark ? Colors.white : Colors.black),
@@ -2475,8 +3330,8 @@ class _HomeScreenState extends State<HomeScreen> {
         foregroundColor: isDark ? Colors.white : Colors.black,
         elevation: 2,
         onPressed: () => setState(() => _activeTab = 'translate'),
-        child: const Icon(Icons.home),
         tooltip: 'Home',
+        child: const Icon(Icons.home),
       ),
     ),
   ],
@@ -3253,8 +4108,8 @@ class _HomeScreenState extends State<HomeScreen> {
             foregroundColor: isDark ? Colors.white : Colors.black,
             elevation: 2,
             onPressed: () => setState(() => _activeTab = 'translate'),
-            child: const Icon(Icons.home),
             tooltip: 'Home',
+            child: const Icon(Icons.home),
           ),
         ),
       ],

@@ -27,6 +27,8 @@ dependencies:
   url_launcher: ^6.2.6
   audioplayers: ^6.1.0
   payfast: ^1.0.2
+  paystack_flutter_sdk: ^0.0.1-alpha.2
+  webview_flutter: ^4.7.0
   shared_preferences: ^2.3.3
   qr_flutter: ^4.1.0
   # Note: audioplayers removed to save space as we use generic TTS now.
@@ -48,4 +50,6 @@ flutter:
   assets:
     - assets/letstalkmainblack.png
     - assets/letstalkmainwhite.png
+    - assets/paystack.png
+    - assets/paypal.png
     - .env
