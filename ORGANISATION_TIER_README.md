@@ -1,6 +1,6 @@
 # LET'S TALK Organisation Tier (Pool and Invite)
 
-This document describes the Organisation tier implementation for shared credits.
+This document describes the Organisation tier implementation for shared credits...
 
 ## 1. Firestore Data Structure
 
