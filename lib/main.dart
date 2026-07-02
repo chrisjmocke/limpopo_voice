@@ -4543,7 +4543,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                               readOnly: false,
                                               onChanged: (_) => setState(() {}),
                                               onSubmitted: (_) => _submitTTT(),
-                                              textInputAction: TextInputAction.newline,
+                                              textInputAction: TextInputAction.send,
                                             ),
                                           ),
                                         ],
