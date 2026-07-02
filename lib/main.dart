@@ -529,6 +529,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String _spokenLang = '';
   String _translatedLang = '';
   final TextEditingController _tttController = TextEditingController();
+  bool _showHintText = true;
   int _credits = 30;
   String? _authUid;
   String? _authEmail;
@@ -2663,7 +2664,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _onInputChanged() {
-    setState(() {});
+    if (_tttController.text.isNotEmpty && _showHintText) {
+      setState(() => _showHintText = false);
+    }
     _autocorrectTimer?.cancel();
     if (_tttController.text.trim().length < 4) return;
     _autocorrectTimer =
@@ -4531,7 +4534,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                               ),
                                               decoration: InputDecoration(
                                                 border: InputBorder.none,
-                                                hintText: _tttController.text.isEmpty ? 'Tap here to type a sentence...' : '',
+                                                hintText: _showHintText ? 'Tap here to type a sentence...' : '',
                                                 hintStyle: TextStyle(
                                                   color: isDark ? Colors.white54 : Colors.black54,
                                                   fontStyle: FontStyle.italic,
