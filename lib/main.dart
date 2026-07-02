@@ -750,6 +750,12 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     await _ensureUserProfileDocument();
+    
+    // Load persisted credits for authenticated users
+    if (!user.isAnonymous) {
+      await _loadCreditsFromFirestore();
+    }
+    
     if (reloadOrganization) {
       await _loadOrganizationMembership();
     }
@@ -1355,8 +1361,46 @@ class _HomeScreenState extends State<HomeScreen> {
       'authUid': _authUid,
       'email': _authEmail,
       'installId': _installId,
+      'credits': _credits,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+  }
+
+  Future<void> _loadCreditsFromFirestore() async {
+    final ref = _userDocRef();
+    if (ref == null) return;
+
+    try {
+      final doc = await ref.get();
+      if (doc.exists) {
+        final credits = (doc.data()?['credits'] as num?)?.toInt();
+        if (credits != null && credits >= 0) {
+          if (mounted) {
+            setState(() => _credits = credits);
+          } else {
+            _credits = credits;
+          }
+          debugPrint('Loaded credits from Firestore: $_credits');
+        }
+      }
+    } catch (e) {
+      debugPrint('Failed to load credits: $e');
+    }
+  }
+
+  Future<void> _updateCreditsInFirestore() async {
+    final ref = _userDocRef();
+    if (ref == null) return;
+
+    try {
+      await ref.update({
+        'credits': _credits,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      debugPrint('Saved credits to Firestore: $_credits');
+    } catch (e) {
+      debugPrint('Failed to save credits: $e');
+    }
   }
 
   Future<void> _refreshOrganizationDetails() async {
@@ -2640,6 +2684,9 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_credits >= _usageCostSecs) {
       setState(() => _credits -= _usageCostSecs);
       
+      // Save updated credits to Firestore
+      unawaited(_updateCreditsInFirestore());
+      
       // Mark device as used free trial when consuming first free credit
       if (_credits < 30) {
         await _markDeviceAsUsedFreeTrial();
@@ -3484,6 +3531,8 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     } else {
       setState(() => _credits += tier.secs);
+      // Save updated credits to Firestore after purchase
+      unawaited(_updateCreditsInFirestore());
       _showSnack('Credits added: ${tier.secs} sec (${tier.name}) [Paystack Sandbox].');
     }
 
