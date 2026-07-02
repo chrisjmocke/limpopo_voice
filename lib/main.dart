@@ -749,6 +749,12 @@ class _HomeScreenState extends State<HomeScreen> {
       debugPrint('Failed to reload user: $e');
     }
 
+    // Refresh Google profile data if missing
+    if (!user.isAnonymous && (user.photoURL == null || user.photoURL!.isEmpty)) {
+      debugPrint('User has no photoURL, attempting to refresh from Google');
+      unawaited(_refreshGoogleProfileData());
+    }
+
     await _ensureUserProfileDocument();
     
     // Load persisted credits for authenticated users
@@ -1320,6 +1326,55 @@ class _HomeScreenState extends State<HomeScreen> {
       debugPrint('Cached photo URL: $photoUrl');
     } catch (e) {
       debugPrint('Failed to cache photo URL: $e');
+    }
+  }
+
+  Future<void> _refreshGoogleProfileData() async {
+    final user = FirebaseAuth.instance.currentUser;
+    final providerIds = user?.providerData.map((item) => item.providerId).toSet() ?? {};
+    
+    // Only refresh for Google-authenticated users
+    if (!providerIds.contains('google.com')) {
+      debugPrint('Not a Google account, skipping profile refresh');
+      return;
+    }
+
+    // If they already have a photo, no need to refresh
+    if (user?.photoURL != null && user!.photoURL!.isNotEmpty) {
+      debugPrint('User already has photoURL: ${user.photoURL}');
+      return;
+    }
+
+    debugPrint('🔄 Refreshing Google profile data for: ${user?.email}');
+
+    try {
+      // Request Google sign-in with profile scope to refresh token
+      final googleUser = await GoogleSignIn(scopes: const ['email', 'profile']).signIn();
+      
+      if (googleUser != null) {
+        debugPrint('📸 Got Google user profile data');
+        debugPrint('Google photo URL: ${googleUser.photoUrl}');
+        debugPrint('Google display name: ${googleUser.displayName}');
+        
+        if (googleUser.photoUrl != null && googleUser.photoUrl!.isNotEmpty) {
+          await user?.updatePhotoURL(googleUser.photoUrl);
+          await _cacheUserPhotoUrl(googleUser.photoUrl);
+          debugPrint('✅ Updated photoURL: ${googleUser.photoUrl}');
+        }
+        
+        if (googleUser.displayName != null && googleUser.displayName!.isNotEmpty) {
+          await user?.updateDisplayName(googleUser.displayName);
+          debugPrint('✅ Updated displayName: ${googleUser.displayName}');
+        }
+        
+        await user?.reload();
+        debugPrint('✅ Profile refresh complete');
+        
+        // Trigger rebuild
+        if (mounted) setState(() {});
+      }
+    } catch (e) {
+      debugPrint('⚠️ Failed to refresh Google profile: $e');
     }
   }
 
