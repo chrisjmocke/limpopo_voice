@@ -1199,6 +1199,14 @@ class _HomeScreenState extends State<HomeScreen> {
     return 'Not signed in';
   }
 
+  ImageProvider? _getUserProfileImage() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null && user.photoURL != null && user.photoURL!.isNotEmpty) {
+      return NetworkImage(user.photoURL!);
+    }
+    return null;
+  }
+
   String _paystackInitUrl() {
     final configured = (dotenv.env['PAYSTACK_INIT_URL'] ?? '').trim();
     if (configured.isNotEmpty) {
@@ -3698,12 +3706,15 @@ class _HomeScreenState extends State<HomeScreen> {
                         children: [
                           CircleAvatar(
                             radius: 14,
+                            backgroundImage: _getUserProfileImage(),
                             backgroundColor: isDark ? Colors.white12 : Colors.black,
-                            child: Icon(
-                              Icons.person,
-                              size: 17,
-                              color: Colors.white,
-                            ),
+                            child: _getUserProfileImage() == null
+                                ? Icon(
+                                    Icons.person,
+                                    size: 17,
+                                    color: Colors.white,
+                                  )
+                                : null,
                           ),
                           if (!_isAnonymousUser())
                             const Positioned(
@@ -3733,9 +3744,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                   children: [
                                     CircleAvatar(
                                       radius: 20,
-                                      backgroundImage: null,
-                                      backgroundColor: isDark ? Colors.grey[400] : Colors.black, // TODO: Replace with user image
-                                      child: Icon(Icons.person, size: 24, color: Colors.white),
+                                      backgroundImage: _getUserProfileImage(),
+                                      backgroundColor: isDark ? Colors.grey[400] : Colors.black,
+                                      child: _getUserProfileImage() == null
+                                          ? Icon(Icons.person, size: 24, color: Colors.white)
+                                          : null,
                                     ),
                                     const SizedBox(width: 12),
                                     Column(
