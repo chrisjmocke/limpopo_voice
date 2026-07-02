@@ -4524,15 +4524,19 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 fontSize: 14,
                                                 color: isDark ? Colors.white : Colors.black,
                                               ),
-                                              decoration: const InputDecoration(
+                                              decoration: InputDecoration(
                                                 border: InputBorder.none,
-                                                hintText: '',
+                                                hintText: 'Tap here to type a sentence...',
+                                                hintStyle: TextStyle(
+                                                  color: isDark ? Colors.white54 : Colors.black54,
+                                                  fontStyle: FontStyle.italic,
+                                                ),
                                                 isDense: true,
                                                 contentPadding: EdgeInsets.zero,
                                               ),
                                               minLines: 1,
                                               maxLines: 3,
-                                              readOnly: true,
+                                              readOnly: false,
                                               onChanged: (_) => setState(() {}),
                                               onSubmitted: (_) => _submitTTT(),
                                               textInputAction: TextInputAction.newline,
