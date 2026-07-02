@@ -1017,7 +1017,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final migration = _capturePendingAccountMigration();
 
     try {
-      final googleUser = await GoogleSignIn(scopes: const ['email']).signIn();
+      final googleUser = await GoogleSignIn(scopes: const ['email', 'profile']).signIn();
       if (googleUser == null) {
         return;
       }
