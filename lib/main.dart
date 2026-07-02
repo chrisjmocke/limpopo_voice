@@ -4530,7 +4530,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                               ),
                                               decoration: InputDecoration(
                                                 border: InputBorder.none,
-                                                hintText: 'Tap here to type a sentence...',
+                                                hintText: _tttController.text.isEmpty ? 'Tap here to type a sentence...' : '',
                                                 hintStyle: TextStyle(
                                                   color: isDark ? Colors.white54 : Colors.black54,
                                                   fontStyle: FontStyle.italic,
