@@ -192,7 +192,7 @@ const _tiers = [
 const int _usageCostSecs = 5;
 const bool _enableClientFirestoreCache = false;
 const String _organizationTierName = 'Organisation';
-const int _organizationUsageCost = 1;
+const int _organizationUsageCost = 5;
 
 class HistoryItem {
   final String inputLang, outputLang, original, translated;
@@ -2777,7 +2777,7 @@ class _HomeScreenState extends State<HomeScreen> {
           note: 'translation',
         );
         _showSnack(
-          'Used $_organizationUsageCost org credit | Pool: $remainingCredits remaining',
+          'Used $_organizationUsageCost sec | Pool: $remainingCredits remaining',
         );
         return true;
       } catch (e) {
