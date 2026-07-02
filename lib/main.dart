@@ -1076,15 +1076,23 @@ class _HomeScreenState extends State<HomeScreen> {
           final photoUrl = googleUser.photoUrl;
           final displayName = googleUser.displayName;
           
+          debugPrint('Google user photo URL: $photoUrl');
+          debugPrint('Google user display name: $displayName');
+          
           if (displayName != null && displayName.isNotEmpty) {
             await result.user!.updateDisplayName(displayName);
+            debugPrint('Updated display name: $displayName');
           }
           if (photoUrl != null && photoUrl.isNotEmpty) {
             await result.user!.updatePhotoURL(photoUrl);
+            await _cacheUserPhotoUrl(photoUrl);
+            debugPrint('Updated photo URL: $photoUrl');
           }
           
           // Reload user to get updated profile data
           await result.user!.reload();
+          final reloadedUser = FirebaseAuth.instance.currentUser;
+          debugPrint('Reloaded user photo URL: ${reloadedUser?.photoURL}');
         } catch (e) {
           debugPrint('Failed to update user profile: $e');
         }
@@ -1257,9 +1265,47 @@ class _HomeScreenState extends State<HomeScreen> {
   ImageProvider? _getUserProfileImage() {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null && user.photoURL != null && user.photoURL!.isNotEmpty) {
+      debugPrint('Loading user profile photo: ${user.photoURL}');
       return NetworkImage(user.photoURL!);
     }
+    debugPrint('No user photo URL available');
     return null;
+  }
+
+  Widget _buildProfileAvatar({required double radius, required bool isDark}) {
+    final photoProvider = _getUserProfileImage();
+    
+    if (photoProvider == null) {
+      return CircleAvatar(
+        radius: radius,
+        backgroundColor: isDark ? Colors.white12 : Colors.black,
+        child: Icon(
+          Icons.person,
+          size: radius,
+          color: Colors.white,
+        ),
+      );
+    }
+
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: isDark ? Colors.white12 : Colors.black,
+      backgroundImage: photoProvider,
+      onBackgroundImageError: (exception, stackTrace) {
+        debugPrint('Failed to load profile image: $exception');
+      },
+    );
+  }
+
+  Future<void> _cacheUserPhotoUrl(String? photoUrl) async {
+    if (photoUrl == null || photoUrl.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('cached_photo_url', photoUrl);
+      debugPrint('Cached photo URL: $photoUrl');
+    } catch (e) {
+      debugPrint('Failed to cache photo URL: $e');
+    }
   }
 
   String _paystackInitUrl() {
@@ -3903,18 +3949,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       icon: Stack(
                         clipBehavior: Clip.none,
                         children: [
-                          CircleAvatar(
-                            radius: 14,
-                            backgroundImage: _getUserProfileImage(),
-                            backgroundColor: isDark ? Colors.white12 : Colors.black,
-                            child: _getUserProfileImage() == null
-                                ? Icon(
-                                    Icons.person,
-                                    size: 17,
-                                    color: Colors.white,
-                                  )
-                                : null,
-                          ),
+                          _buildProfileAvatar(radius: 14, isDark: isDark),
                           if (!_isAnonymousUser())
                             const Positioned(
                               right: -1,
@@ -3941,14 +3976,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               children: [
                                 Row(
                                   children: [
-                                    CircleAvatar(
-                                      radius: 20,
-                                      backgroundImage: _getUserProfileImage(),
-                                      backgroundColor: isDark ? Colors.grey[400] : Colors.black,
-                                      child: _getUserProfileImage() == null
-                                          ? Icon(Icons.person, size: 24, color: Colors.white)
-                                          : null,
-                                    ),
+                                    _buildProfileAvatar(radius: 20, isDark: isDark),
                                     const SizedBox(width: 12),
                                     Column(
                                       crossAxisAlignment: CrossAxisAlignment.start,
