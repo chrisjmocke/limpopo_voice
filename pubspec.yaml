@@ -32,6 +32,7 @@ dependencies:
   webview_flutter: ^4.7.0
   shared_preferences: ^2.3.3
   qr_flutter: ^4.1.0
+  device_info_plus: ^12.3.0
   # Note: audioplayers removed to save space as we use generic TTS now.
 
 dev_dependencies:

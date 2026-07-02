@@ -18,6 +18,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:paystack_flutter_sdk/paystack_flutter_sdk.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'translation_service.dart';
 import 'firebase_options.dart';
 
@@ -532,6 +533,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _authUid;
   String? _authEmail;
   String? _installId;
+  String? _deviceId;
   String? _organizationId;
   String? _organizationName;
   String? _organizationInviteCode;
@@ -2163,8 +2165,92 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _getAndStoreDeviceId() async {
+    try {
+      if (_deviceId != null && _deviceId!.isNotEmpty) {
+        return; // Already retrieved
+      }
+
+      final prefs = await SharedPreferences.getInstance();
+      const deviceIdKey = 'device_id_v1';
+      
+      String? deviceId = prefs.getString(deviceIdKey);
+      if (deviceId == null || deviceId.isEmpty) {
+        // Get hardware device ID
+        final deviceInfo = DeviceInfoPlugin();
+        
+        if (Platform.isAndroid) {
+          final androidInfo = await deviceInfo.androidInfo;
+          deviceId = androidInfo.id; // Android ID (persists across uninstalls on most devices)
+        } else if (Platform.isIOS) {
+          final iosInfo = await deviceInfo.iosInfo;
+          deviceId = iosInfo.identifierForVendor; // iOS identifier (persists for same vendor)
+        } else {
+          deviceId = _generateUUID(); // Fallback for other platforms
+        }
+        
+        if (deviceId != null && deviceId.isNotEmpty) {
+          await prefs.setString(deviceIdKey, deviceId);
+          debugPrint('Stored device ID: $deviceId');
+        }
+      }
+
+      if (mounted) {
+        setState(() => _deviceId = deviceId);
+      } else {
+        _deviceId = deviceId;
+      }
+    } catch (e) {
+      debugPrint('Failed to get device ID: $e');
+    }
+  }
+
+  Future<bool> _hasDeviceUsedFreeTrial() async {
+    if (_deviceId == null || _deviceId!.isEmpty) {
+      return false;
+    }
+
+    try {
+      final db = FirebaseFirestore.instance;
+      final docRef = db.collection('global_device_installs').doc(_deviceId);
+      final docSnapshot = await docRef.get();
+      
+      return docSnapshot.exists && docSnapshot.data()?['used_free_trial'] == true;
+    } catch (e) {
+      debugPrint('Failed to check device free trial status: $e');
+      return false;
+    }
+  }
+
+  Future<void> _markDeviceAsUsedFreeTrial() async {
+    if (_deviceId == null || _deviceId!.isEmpty) {
+      return;
+    }
+
+    try {
+      final db = FirebaseFirestore.instance;
+      final docRef = db.collection('global_device_installs').doc(_deviceId);
+      
+      await docRef.set({
+        'used_free_trial': true,
+        'first_seen': FieldValue.serverTimestamp(),
+        'last_seen': FieldValue.serverTimestamp(),
+        'device_info': {
+          'platform': Platform.isAndroid ? 'android' : Platform.isIOS ? 'ios' : 'unknown',
+        }
+      }, SetOptions(merge: true)).catchError((e) {
+        debugPrint('Failed to mark device as used free trial: $e');
+      });
+    } catch (e) {
+      debugPrint('Error marking device free trial: $e');
+    }
+  }
+
   Future<void> _checkInstallIdAndFreeTrial() async {
     try {
+      // Get device ID (persists across uninstalls)
+      await _getAndStoreDeviceId();
+      
       await _ensureSignedIn();
       final uid = _authUid;
       if (uid == null || uid.isEmpty) {
@@ -2541,8 +2627,25 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
+    // Check if user is trying to use free trial credits and device already used them
+    if (_credits == 30) {
+      final alreadyUsed = await _hasDeviceUsedFreeTrial();
+      if (alreadyUsed) {
+        _showSnack('This device already used free trial credits. Please purchase credits to continue.');
+        _showCreditTiers();
+        return false;
+      }
+    }
+
     if (_credits >= _usageCostSecs) {
       setState(() => _credits -= _usageCostSecs);
+      
+      // Mark device as used free trial when consuming first free credit
+      if (_credits < 30) {
+        await _markDeviceAsUsedFreeTrial();
+        debugPrint('Device marked as used free trial');
+      }
+      
       _showSnack('Used $_usageCostSecs sec | Balance: $_credits sec remaining');
       return true;
     }
