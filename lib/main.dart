@@ -3100,6 +3100,10 @@ class _HomeScreenState extends State<HomeScreen> {
   void _submitTTT() {
     final t = _tttController.text.trim();
     if (t.isEmpty) return;
+    
+    // Dismiss keyboard immediately
+    FocusScope.of(context).unfocus();
+    
     setState(() {
       _spokenRawText = t;
       _spokenText = _maskProfanityForDisplay(t);
@@ -3111,7 +3115,6 @@ class _HomeScreenState extends State<HomeScreen> {
     });
     _doTranslate(t);
     _tttController.clear();
-    FocusScope.of(context).unfocus();
   }
 
   void _resetOutput() => setState(() {
