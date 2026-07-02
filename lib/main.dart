@@ -740,6 +740,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (user == null) return;
 
+    // Reload user to get latest profile data (including photoURL)
+    try {
+      await user.reload();
+    } catch (e) {
+      debugPrint('Failed to reload user: $e');
+    }
+
     await _ensureUserProfileDocument();
     if (reloadOrganization) {
       await _loadOrganizationMembership();
@@ -1031,8 +1038,48 @@ class _HomeScreenState extends State<HomeScreen> {
           _showSnack('Signed in with Google.');
           return;
         }
+        
+        // Update user profile with Google account details
+        if (result.user != null) {
+          try {
+            final photoUrl = googleUser.photoUrl;
+            final displayName = googleUser.displayName;
+            
+            if (displayName != null && displayName.isNotEmpty) {
+              await result.user!.updateDisplayName(displayName);
+            }
+            if (photoUrl != null && photoUrl.isNotEmpty) {
+              await result.user!.updatePhotoURL(photoUrl);
+            }
+            
+            // Reload user to get updated profile data
+            await result.user!.reload();
+          } catch (e) {
+            debugPrint('Failed to update user profile: $e');
+          }
+        }
       } else {
         result = await auth.signInWithCredential(credential);
+      }
+
+      // Update user profile with Google account details
+      if (result.user != null) {
+        try {
+          final photoUrl = googleUser.photoUrl;
+          final displayName = googleUser.displayName;
+          
+          if (displayName != null && displayName.isNotEmpty) {
+            await result.user!.updateDisplayName(displayName);
+          }
+          if (photoUrl != null && photoUrl.isNotEmpty) {
+            await result.user!.updatePhotoURL(photoUrl);
+          }
+          
+          // Reload user to get updated profile data
+          await result.user!.reload();
+        } catch (e) {
+          debugPrint('Failed to update user profile: $e');
+        }
       }
 
       await _syncAuthState(result.user);
