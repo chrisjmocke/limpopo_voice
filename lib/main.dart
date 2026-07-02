@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
 import 'dart:math';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -11,14 +10,13 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
-import 'package:webview_flutter/webview_flutter.dart';
 import 'package:paystack_flutter_sdk/paystack_flutter_sdk.dart';
 import 'translation_service.dart';
 import 'firebase_options.dart';
@@ -148,6 +146,39 @@ class _CreditTier {
   final int secs;
   final String price;
   const _CreditTier(this.name, this.secs, this.price);
+}
+
+class _OrganizationPoolUpdate {
+  final String action;
+  final String organizationId;
+  final String organizationName;
+  final String inviteCode;
+  final int sharedCredits;
+
+  const _OrganizationPoolUpdate({
+    required this.action,
+    required this.organizationId,
+    required this.organizationName,
+    required this.inviteCode,
+    required this.sharedCredits,
+  });
+}
+
+class _PendingAccountMigration {
+  final String? organizationId;
+  final String? organizationName;
+  final String? organizationInviteCode;
+  final String role;
+
+  const _PendingAccountMigration({
+    required this.organizationId,
+    required this.organizationName,
+    required this.organizationInviteCode,
+    required this.role,
+  });
+
+  bool get hasOrganization => organizationId != null && organizationId!.isNotEmpty;
+  bool get ownsOrganization => hasOrganization && role == 'owner';
 }
 
 const _tiers = [
@@ -343,6 +374,8 @@ class _HomeScreenState extends State<HomeScreen> {
   static const int _speechChunkMaxChars = 90;
   static const Duration _firstChunkFetchTimeout = Duration(seconds: 55);
   static const Duration _nextChunkFetchTimeout = Duration(seconds: 55);
+  static const String _defaultProcessSpeechUrl =
+      'https://africa-south1-limpopo-voice-prod.cloudfunctions.net/processSpeech';
 
   static final RegExp _offensiveWordRegex = RegExp(
     '\\b(${_offensiveWords.map(RegExp.escape).join('|')})\\b',
@@ -504,6 +537,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _organizationInviteCode;
   String _organizationRole = 'personal';
   int? _organizationSharedCredits;
+  bool _authBusy = false;
   final List<HistoryItem> _history = [];
   String _selectedLearnLang = 'Sepedi';
   final Map<String, String> _learnFocusTextByLang = {};
@@ -599,6 +633,18 @@ class _HomeScreenState extends State<HomeScreen> {
     return _southAfricanLanguages.contains(normalized) ? 'narakeet' : 'google';
   }
 
+  String _translationFunctionUrl() {
+    final configured = (dotenv.env['TRANSLATE_FUNCTION_URL'] ?? '').trim();
+    if (configured.isNotEmpty) {
+      return configured;
+    }
+
+    debugPrint(
+      'TRANSLATE_FUNCTION_URL missing. Falling back to default processSpeech endpoint.',
+    );
+    return _defaultProcessSpeechUrl;
+  }
+
   String? _voiceNameForLanguage(String language) {
     final normalized = _normalizeLanguageLabel(language);
     final provider = _ttsProviderForLanguage(normalized);
@@ -624,7 +670,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _selectedLearnLang = _outputLangs.first;
     }
     _audioPlayer = AudioPlayer();
-    final functionUrl = dotenv.env['TRANSLATE_FUNCTION_URL'] ?? '';
+    final functionUrl = _translationFunctionUrl();
     _translationService = TranslationService(functionUrl: functionUrl);
     _translationService.primeSession();
     _configureAudioPlayback();
@@ -643,6 +689,478 @@ class _HomeScreenState extends State<HomeScreen> {
     return List.generate(32, (_) => chars[random.nextInt(chars.length)]).join();
   }
 
+  bool _isAnonymousUser([User? user]) {
+    final currentUser = user ?? FirebaseAuth.instance.currentUser;
+    return currentUser?.isAnonymous ?? false;
+  }
+
+  bool _isPaymentReadyUser([User? user]) {
+    final currentUser = user ?? FirebaseAuth.instance.currentUser;
+    final email = (currentUser?.email ?? _authEmail ?? '').trim();
+    return currentUser != null && !currentUser.isAnonymous && email.isNotEmpty;
+  }
+
+  String _authStatusLabel() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return 'Not signed in';
+    if (user.isAnonymous) return 'Guest session';
+    final providerIds = user.providerData.map((item) => item.providerId).toSet();
+    if (providerIds.contains('google.com')) return 'Google account';
+    if (providerIds.contains('password')) {
+      return user.emailVerified ? 'Email account' : 'Email account - verify inbox';
+    }
+    return 'Signed in';
+  }
+
+  Future<void> _syncAuthState(User? user, {bool reloadOrganization = true}) async {
+    if (!mounted) {
+      _authUid = user?.uid;
+      _authEmail = user?.email;
+      if (user == null) {
+        _organizationId = null;
+        _organizationName = null;
+        _organizationInviteCode = null;
+        _organizationRole = 'personal';
+        _organizationSharedCredits = null;
+      }
+      return;
+    }
+
+    setState(() {
+      _authUid = user?.uid;
+      _authEmail = user?.email;
+      if (user == null) {
+        _organizationId = null;
+        _organizationName = null;
+        _organizationInviteCode = null;
+        _organizationRole = 'personal';
+        _organizationSharedCredits = null;
+      }
+    });
+
+    if (user == null) return;
+
+    await _ensureUserProfileDocument();
+    if (reloadOrganization) {
+      await _loadOrganizationMembership();
+    }
+  }
+
+  _PendingAccountMigration? _capturePendingAccountMigration() {
+    if (_organizationId == null || _organizationId!.isEmpty) {
+      return null;
+    }
+
+    return _PendingAccountMigration(
+      organizationId: _organizationId,
+      organizationName: _organizationName,
+      organizationInviteCode: _organizationInviteCode,
+      role: _organizationRole,
+    );
+  }
+
+  Future<void> _restorePendingAccountMigration(_PendingAccountMigration? migration) async {
+    if (migration == null || !migration.hasOrganization || migration.ownsOrganization) {
+      return;
+    }
+
+    final userRef = _userDocRef();
+    if (userRef == null) return;
+
+    await userRef.set({
+      'organizationId': migration.organizationId,
+      'organizationRole': migration.role,
+      'organizationInviteCode': migration.organizationInviteCode,
+      'organizationName': migration.organizationName,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    if (!mounted) return;
+    setState(() {
+      _organizationId = migration.organizationId;
+      _organizationRole = migration.role;
+      _organizationInviteCode = migration.organizationInviteCode;
+      _organizationName = migration.organizationName;
+    });
+    await _refreshOrganizationDetails();
+  }
+
+  bool _canSwitchFromGuestToExistingAccount(_PendingAccountMigration? migration) {
+    if (migration?.ownsOrganization == true) {
+      _showSnack(
+        'This guest session owns an organisation. Upgrade this same guest with Google or a new email account to keep ownership.',
+      );
+      return false;
+    }
+    return true;
+  }
+
+  String _friendlyAuthError(FirebaseAuthException error) {
+    switch (error.code) {
+      case 'account-exists-with-different-credential':
+        return 'That email is already linked to a different sign-in method.';
+      case 'credential-already-in-use':
+        return 'That account already exists. Sign in to it instead of creating a new guest upgrade.';
+      case 'email-already-in-use':
+        return 'That email address is already registered. Use Sign In instead.';
+      case 'invalid-email':
+        return 'Enter a valid email address.';
+      case 'invalid-credential':
+      case 'wrong-password':
+      case 'invalid-password':
+      case 'user-not-found':
+        return 'The email or password is incorrect.';
+      case 'weak-password':
+        return 'Use a stronger password with at least 6 characters.';
+      case 'user-disabled':
+        return 'This account has been disabled.';
+      case 'too-many-requests':
+        return 'Too many sign-in attempts. Please try again later.';
+      default:
+        return error.message ?? 'Authentication failed. Please try again.';
+    }
+  }
+
+  Future<void> _showAuthOptionsDialog() async {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        scrollable: true,
+        backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+        surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+        title: Text(
+          'Sign In',
+          style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Use Google or email so payments, receipts, and organisation ownership stay attached to a real account.',
+              style: TextStyle(
+                fontSize: 12,
+                color: isDark ? Colors.white70 : Colors.black54,
+              ),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: isDark ? Colors.white10 : Colors.black,
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: _authBusy
+                    ? null
+                    : () {
+                        Navigator.of(ctx).pop();
+                        _signInWithGoogle();
+                      },
+                icon: const Icon(Icons.login),
+                label: const Text('Continue with Google'),
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _authBusy
+                    ? null
+                    : () {
+                        Navigator.of(ctx).pop();
+                        _showEmailAuthDialog(createAccount: true);
+                      },
+                icon: const Icon(Icons.email_outlined),
+                label: const Text('Create email account'),
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: TextButton(
+                onPressed: _authBusy
+                    ? null
+                    : () {
+                        Navigator.of(ctx).pop();
+                        _showEmailAuthDialog(createAccount: false);
+                      },
+                child: const Text('Sign in with email'),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            style: TextButton.styleFrom(
+              backgroundColor: const Color(0xFF000000),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showEmailAuthDialog({required bool createAccount}) async {
+    final emailController = TextEditingController(text: (_authEmail ?? '').trim());
+    final passwordController = TextEditingController();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    bool obscurePassword = true;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) => AlertDialog(
+            scrollable: true,
+            backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+            surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+            title: Text(
+              createAccount ? 'Create Email Account' : 'Email Sign In',
+              style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: emailController,
+                  keyboardType: TextInputType.emailAddress,
+                  autofillHints: const [AutofillHints.email],
+                  decoration: const InputDecoration(labelText: 'Email'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: passwordController,
+                  obscureText: obscurePassword,
+                  autofillHints: const [AutofillHints.password],
+                  decoration: InputDecoration(
+                    labelText: 'Password',
+                    suffixIcon: IconButton(
+                      onPressed: () {
+                        setDialogState(() => obscurePassword = !obscurePassword);
+                      },
+                      icon: Icon(obscurePassword ? Icons.visibility : Icons.visibility_off),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  createAccount
+                      ? 'Creating an email account keeps this guest profile, its organisation link, and future payments on one recoverable account.'
+                      : 'Use this only when you already have an email account for Let\'s Talk.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? Colors.white70 : Colors.black54,
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: Text('Cancel', style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000))),
+              ),
+              TextButton(
+                style: TextButton.styleFrom(
+                  backgroundColor: const Color(0xFF000000),
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: _authBusy
+                    ? null
+                    : () async {
+                        Navigator.of(ctx).pop();
+                        await _signInWithEmail(
+                          emailController.text,
+                          passwordController.text,
+                          createAccount: createAccount,
+                        );
+                      },
+                child: Text(createAccount ? 'Create' : 'Sign In'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _signInWithGoogle() async {
+    if (_authBusy) return;
+    if (mounted) {
+      setState(() => _authBusy = true);
+    } else {
+      _authBusy = true;
+    }
+
+    final auth = FirebaseAuth.instance;
+    final currentUser = auth.currentUser;
+    final migration = _capturePendingAccountMigration();
+
+    try {
+      final googleUser = await GoogleSignIn(scopes: const ['email']).signIn();
+      if (googleUser == null) {
+        return;
+      }
+
+      final googleAuth = await googleUser.authentication;
+      final credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+
+      UserCredential result;
+      if (currentUser != null && currentUser.isAnonymous) {
+        try {
+          result = await currentUser.linkWithCredential(credential);
+        } on FirebaseAuthException catch (e) {
+          if (e.code != 'credential-already-in-use' &&
+              e.code != 'account-exists-with-different-credential') {
+            rethrow;
+          }
+          if (!_canSwitchFromGuestToExistingAccount(migration)) {
+            return;
+          }
+          result = await auth.signInWithCredential(credential);
+          await _syncAuthState(result.user, reloadOrganization: false);
+          await _restorePendingAccountMigration(migration);
+          _showSnack('Signed in with Google.');
+          return;
+        }
+      } else {
+        result = await auth.signInWithCredential(credential);
+      }
+
+      await _syncAuthState(result.user);
+      _showSnack('Signed in with Google.');
+    } on FirebaseAuthException catch (e) {
+      _showSnack(_friendlyAuthError(e));
+    } on PlatformException catch (e) {
+      final msg = (e.message ?? '').toLowerCase();
+      final details = (e.details?.toString() ?? '').toLowerCase();
+      if (msg.contains('developer_error') || details.contains('developer_error')) {
+        _showSnack('Google sign-in config error. Enable Google provider in Firebase and refresh android/app/google-services.json.');
+      } else {
+        _showSnack('Google sign-in failed: ${e.code}');
+      }
+      debugPrint('Google sign-in platform error: code=${e.code}, message=${e.message}, details=${e.details}');
+    } catch (e) {
+      debugPrint('Google sign-in failed: $e');
+      _showSnack('Google sign-in failed. Please try again.');
+    } finally {
+      if (!mounted) {
+        _authBusy = false;
+      } else {
+        setState(() => _authBusy = false);
+      }
+    }
+  }
+
+  Future<void> _signInWithEmail(
+    String rawEmail,
+    String rawPassword, {
+    required bool createAccount,
+  }) async {
+    final email = rawEmail.trim();
+    final password = rawPassword.trim();
+    if (email.isEmpty || password.isEmpty) {
+      _showSnack('Enter both email and password.');
+      return;
+    }
+    if (createAccount && password.length < 6) {
+      _showSnack('Use a password with at least 6 characters.');
+      return;
+    }
+    if (_authBusy) return;
+
+    if (mounted) {
+      setState(() => _authBusy = true);
+    } else {
+      _authBusy = true;
+    }
+
+    final auth = FirebaseAuth.instance;
+    final currentUser = auth.currentUser;
+    final migration = _capturePendingAccountMigration();
+    final credential = EmailAuthProvider.credential(email: email, password: password);
+
+    try {
+      UserCredential result;
+      if (createAccount) {
+        if (currentUser != null && currentUser.isAnonymous) {
+          result = await currentUser.linkWithCredential(credential);
+        } else {
+          result = await auth.createUserWithEmailAndPassword(email: email, password: password);
+        }
+        await _syncAuthState(result.user);
+        if (result.user != null && !(result.user!.emailVerified)) {
+          await result.user!.sendEmailVerification();
+        }
+        _showSnack('Email account ready. Verification email sent.');
+      } else {
+        if (currentUser != null && currentUser.isAnonymous && !_canSwitchFromGuestToExistingAccount(migration)) {
+          return;
+        }
+        result = await auth.signInWithEmailAndPassword(email: email, password: password);
+        await _syncAuthState(result.user, reloadOrganization: false);
+        await _restorePendingAccountMigration(migration);
+        _showSnack('Signed in with email.');
+      }
+    } on FirebaseAuthException catch (e) {
+      _showSnack(_friendlyAuthError(e));
+    } catch (e) {
+      debugPrint('Email auth failed: $e');
+      _showSnack('Email sign-in failed. Please try again.');
+    } finally {
+      if (!mounted) {
+        _authBusy = false;
+      } else {
+        setState(() => _authBusy = false);
+      }
+    }
+  }
+
+  Future<void> _signOutToGuest() async {
+    if (_authBusy) return;
+    if (mounted) {
+      setState(() => _authBusy = true);
+    } else {
+      _authBusy = true;
+    }
+
+    try {
+      await GoogleSignIn().signOut().catchError((_) {});
+      await FirebaseAuth.instance.signOut();
+      await _ensureSignedIn();
+      await _ensureUserProfileDocument();
+      await _loadOrganizationMembership();
+      _showSnack('Signed out. Continuing as guest.');
+    } catch (e) {
+      debugPrint('Sign-out failed: $e');
+      _showSnack('Could not sign out right now.');
+    } finally {
+      if (!mounted) {
+        _authBusy = false;
+      } else {
+        setState(() => _authBusy = false);
+      }
+    }
+  }
+
+  Future<bool> _ensurePaymentReadyAccount() async {
+    if (_isPaymentReadyUser()) {
+      return true;
+    }
+
+    _showSnack('Sign in with Google or email before buying credits.');
+    await _showAuthOptionsDialog();
+    return false;
+  }
+
   Future<void> _ensureSignedIn() async {
     try {
       final auth = FirebaseAuth.instance;
@@ -652,16 +1170,7 @@ class _HomeScreenState extends State<HomeScreen> {
         user = credential.user;
       }
 
-      if (!mounted) {
-        _authUid = user?.uid;
-        _authEmail = user?.email;
-        return;
-      }
-
-      setState(() {
-        _authUid = user?.uid;
-        _authEmail = user?.email;
-      });
+      await _syncAuthState(user);
     } catch (e) {
       debugPrint('Firebase Auth sign-in failed: $e');
       if (mounted) {
@@ -671,6 +1180,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String _displayUserIdentity() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null && user.isAnonymous) {
+      return 'Guest session';
+    }
+
     final email = _authEmail;
     if (email != null && email.trim().isNotEmpty) {
       return email;
@@ -894,10 +1408,11 @@ class _HomeScreenState extends State<HomeScreen> {
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
         surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
         title: Text(
-          'Join Organisation',
+          'Join Shared Organisation',
           style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
         ),
         content: Column(
@@ -914,7 +1429,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Enter the code shared by your principal, doctor, or manager.',
+              'Enter the invite code shared by your organisation owner to connect to the shared credit pool.',
               style: TextStyle(
                 fontSize: 12,
                 color: isDark ? Colors.white70 : Colors.black54,
@@ -944,17 +1459,170 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<bool> _createOrTopUpOrganizationPool(_CreditTier tier) async {
-    final userRef = _userDocRef();
+  Future<void> _showOrganizationStatusDialog() async {
+    final orgId = _organizationId;
+    if (orgId == null || orgId.isEmpty) {
+      await _showJoinOrganizationDialog();
+      return;
+    }
+
+    await _refreshOrganizationDetails();
+    if (!mounted) return;
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final name = _organizationName?.trim().isNotEmpty == true
+        ? _organizationName!.trim()
+        : 'Organisation';
+    final inviteCode = _organizationInviteCode?.trim().isNotEmpty == true
+        ? _organizationInviteCode!.trim()
+        : '-';
+    final roleLabel = _organizationRole.toUpperCase();
+    final balanceLabel = _organizationSharedCredits != null
+        ? '${_organizationSharedCredits!} shared credits'
+        : 'Shared balance loading';
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        scrollable: true,
+        backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+        surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+        title: Text(
+          'Organisation',
+          style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              name,
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                color: isDark ? Colors.white : const Color(0xFF000000),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Role: $roleLabel',
+              style: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Pool: $balanceLabel',
+              style: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Invite code: $inviteCode',
+              style: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              _organizationRole == 'owner'
+                  ? 'Use this code to invite staff, students, patients, or colleagues into the shared pool.'
+                  : 'You are linked to this shared pool. Ask the owner if you need a new invite code or more credits.',
+              style: TextStyle(
+                fontSize: 12,
+                color: isDark ? Colors.white70 : Colors.black54,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: inviteCode == '-'
+                ? null
+                : () async {
+                    await Clipboard.setData(ClipboardData(text: inviteCode));
+                    if (!mounted) return;
+                    _showSnack('Invite code copied.');
+                  },
+            child: Text(
+              'Copy code',
+              style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
+            ),
+          ),
+          if (_organizationRole == 'owner')
+            TextButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                _showManageOrganizationDialog();
+              },
+              child: Text(
+                'Manage',
+                style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
+              ),
+            ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _showOrganizationActivityDialog();
+            },
+            child: Text(
+              'Activity',
+              style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
+            ),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(
+              backgroundColor: const Color(0xFF000000),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool> _canPurchaseOrganizationTier() async {
     final uid = _authUid;
-    if (uid == null || uid.isEmpty || userRef == null) {
+    if (uid == null || uid.isEmpty) {
       _showSnack('Organisation setup unavailable. Please wait for sign-in and try again.');
       return false;
     }
 
+    final orgId = _organizationId;
+    if (orgId == null || orgId.isEmpty) {
+      return true;
+    }
+
+    try {
+      final orgSnap = await FirebaseFirestore.instance
+          .collection('organizations')
+          .doc(orgId)
+          .get();
+      if (!orgSnap.exists) {
+        return true;
+      }
+
+      final data = orgSnap.data() ?? <String, dynamic>{};
+      final ownerUid = (data['ownerUid'] as String?)?.trim();
+      if (ownerUid != null && ownerUid.isNotEmpty && ownerUid != uid) {
+        _showSnack('Only the organisation owner can top up the shared pool.');
+        return false;
+      }
+
+      return true;
+    } catch (e) {
+      debugPrint('Organization purchase precheck failed: $e');
+      _showSnack('Could not verify organisation access right now.');
+      return false;
+    }
+  }
+
+  Future<_OrganizationPoolUpdate?> _createOrTopUpOrganizationPool(_CreditTier tier) async {
+    final userRef = _userDocRef();
+    final uid = _authUid;
+    if (uid == null || uid.isEmpty || userRef == null) {
+      _showSnack('Organisation setup unavailable. Please wait for sign-in and try again.');
+      return null;
+    }
+
     final db = FirebaseFirestore.instance;
     var orgId = _organizationId;
-    final creatingNewOrg = orgId == null || orgId.isEmpty;
     final inviteCode = (_organizationInviteCode != null && _organizationInviteCode!.isNotEmpty)
         ? _organizationInviteCode!
         : _newInviteCode();
@@ -969,7 +1637,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final orgRef = db.collection('organizations').doc(orgId);
 
     try {
-      final updatedCredits = await db.runTransaction<int>((tx) async {
+      final update = await db.runTransaction<_OrganizationPoolUpdate>((tx) async {
         final orgSnap = await tx.get(orgRef);
         final now = FieldValue.serverTimestamp();
 
@@ -990,9 +1658,29 @@ class _HomeScreenState extends State<HomeScreen> {
             'organizationName': orgName,
             'updatedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
-          return tier.secs;
+          return _OrganizationPoolUpdate(
+            action: 'created',
+            organizationId: orgId!,
+            organizationName: orgName,
+            inviteCode: inviteCode,
+            sharedCredits: tier.secs,
+          );
         } else {
           final data = orgSnap.data() ?? <String, dynamic>{};
+          final ownerUid = (data['ownerUid'] as String?)?.trim();
+          if (ownerUid != null && ownerUid.isNotEmpty && ownerUid != uid) {
+            throw StateError('organization-owner-required');
+          }
+
+          final existingName = (data['name'] as String?)?.trim();
+          final existingInviteCode = (data['inviteCode'] as String?)?.trim();
+          final resolvedName = (existingName != null && existingName.isNotEmpty)
+              ? existingName
+              : orgName;
+          final resolvedInviteCode =
+              (existingInviteCode != null && existingInviteCode.isNotEmpty)
+                  ? existingInviteCode
+                  : inviteCode;
           final currentCredits = (data['sharedCredits'] as num?)?.toInt() ?? 0;
           final nextCredits = currentCredits + tier.secs;
           tx.update(orgRef, {
@@ -1003,36 +1691,46 @@ class _HomeScreenState extends State<HomeScreen> {
           tx.set(userRef, {
             'organizationId': orgId,
             'organizationRole': 'owner',
-            'organizationInviteCode': inviteCode,
-            'organizationName': orgName,
+            'organizationInviteCode': resolvedInviteCode,
+            'organizationName': resolvedName,
             'updatedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
-          return nextCredits;
+          return _OrganizationPoolUpdate(
+            action: 'topped_up',
+            organizationId: orgId!,
+            organizationName: resolvedName,
+            inviteCode: resolvedInviteCode,
+            sharedCredits: nextCredits,
+          );
         }
       });
 
-      if (!mounted) return false;
+      if (!mounted) return null;
       setState(() {
-        _organizationId = orgId;
+        _organizationId = update.organizationId;
         _organizationRole = 'owner';
-        _organizationInviteCode = inviteCode;
-        _organizationName = orgName;
-        _organizationSharedCredits = updatedCredits;
+        _organizationInviteCode = update.inviteCode;
+        _organizationName = update.organizationName;
+        _organizationSharedCredits = update.sharedCredits;
       });
       await _refreshOrganizationDetails();
       await _logOrganizationActivity(
-        organizationId: orgId,
-        action: creatingNewOrg ? 'pool_created' : 'pool_topped_up',
+        organizationId: update.organizationId,
+        action: update.action == 'created' ? 'pool_created' : 'pool_topped_up',
         creditsDelta: tier.secs,
-        creditsAfter: updatedCredits,
+        creditsAfter: update.sharedCredits,
         tierName: tier.name,
       );
       await _showOrganizationOwnerInfo();
-      return true;
+      return update;
     } catch (e) {
       debugPrint('Organisation top-up failed: $e');
-      _showSnack('Could not top up organisation pool right now.');
-      return false;
+      if (e is StateError && e.message == 'organization-owner-required') {
+        _showSnack('Only the organisation owner can top up the shared pool.');
+      } else {
+        _showSnack('Could not top up organisation pool right now.');
+      }
+      return null;
     }
   }
 
@@ -1045,6 +1743,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
         surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
         title: Text(
@@ -1148,6 +1847,7 @@ class _HomeScreenState extends State<HomeScreen> {
         return StatefulBuilder(
           builder: (ctx, setDialogState) {
             return AlertDialog(
+              scrollable: true,
               backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
               surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
               title: Text(
@@ -1165,6 +1865,14 @@ class _HomeScreenState extends State<HomeScreen> {
                   const SizedBox(height: 10),
                   Text(
                     'Current code: ${_organizationInviteCode ?? '-'}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isDark ? Colors.white70 : Colors.black54,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Regenerating the code will stop the old code from being used for new joins.',
                     style: TextStyle(
                       fontSize: 12,
                       color: isDark ? Colors.white70 : Colors.black54,
@@ -1403,6 +2111,12 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _checkInstallIdAndFreeTrial() async {
     try {
       await _ensureSignedIn();
+      final uid = _authUid;
+      if (uid == null || uid.isEmpty) {
+        debugPrint('Install ID check skipped: missing auth uid.');
+        return;
+      }
+
       final prefs = await SharedPreferences.getInstance();
       const installIdKey = 'lets_talk_install_id_v1';
       
@@ -1421,8 +2135,12 @@ class _HomeScreenState extends State<HomeScreen> {
         _installId = installId;
       }
 
-      final db = FirebaseFirestore.instance;
-      final docRef = db.collection('device_installs').doc(installId);
+        final db = FirebaseFirestore.instance;
+        final docRef = db
+          .collection('users')
+          .doc(uid)
+          .collection('device_installs')
+          .doc(installId);
       final docSnapshot = await docRef.get();
       
       if (docSnapshot.exists && docSnapshot.data()?['used_free_trial'] == true) {
@@ -2599,10 +3317,12 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
 
     if (tier.name == _organizationTierName) {
-      final orgDone = await _createOrTopUpOrganizationPool(tier);
-      if (!orgDone) return;
+      final orgUpdate = await _createOrTopUpOrganizationPool(tier);
+      if (orgUpdate == null) return;
       _showSnack(
-        'Organisation pool topped up: ${tier.secs} credits (${tier.name}) [Paystack Sandbox].',
+        orgUpdate.action == 'created'
+            ? 'Organisation created with ${tier.secs} shared credits (${tier.name}) [Paystack Sandbox].'
+            : 'Organisation pool topped up: ${tier.secs} credits (${tier.name}) [Paystack Sandbox].',
       );
     } else {
       setState(() => _credits += tier.secs);
@@ -2639,6 +3359,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _startPaystackTierPayment(_CreditTier tier) async {
+    final paymentReady = await _ensurePaymentReadyAccount();
+    if (!paymentReady) return;
+
+    if (tier.name == _organizationTierName) {
+      final allowed = await _canPurchaseOrganizationTier();
+      if (!allowed) return;
+    }
+
     final amount = _tierAmountFromPrice(tier.price);
 
     String? accessCode = dotenv.env['PAYSTACK_TEST_ACCESS_CODE'];
@@ -2965,6 +3693,29 @@ class _HomeScreenState extends State<HomeScreen> {
                     alignment: Alignment.centerRight,
                     child: PopupMenuButton<int>(
                       tooltip: 'User menu',
+                      icon: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          CircleAvatar(
+                            radius: 14,
+                            backgroundColor: isDark ? Colors.white12 : Colors.black,
+                            child: Icon(
+                              Icons.person,
+                              size: 17,
+                              color: Colors.white,
+                            ),
+                          ),
+                          if (!_isAnonymousUser())
+                            const Positioned(
+                              right: -1,
+                              bottom: -1,
+                              child: CircleAvatar(
+                                radius: 5,
+                                backgroundColor: Color(0xFF17C964),
+                              ),
+                            ),
+                        ],
+                      ),
                       color: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
                       surfaceTintColor:
                           isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
@@ -2992,11 +3743,44 @@ class _HomeScreenState extends State<HomeScreen> {
                                       children: [
                                         Text('User', style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.white : const Color(0xFF000000))),
                                         Text(_displayUserIdentity(), style: TextStyle(fontSize: 12, color: isDark ? Colors.grey : Colors.black54)),
+                                        Text(_authStatusLabel(), style: TextStyle(fontSize: 11, color: isDark ? Colors.white70 : Colors.black54)),
                                       ],
                                     ),
                                   ],
                                 ),
                                 const Divider(height: 18),
+                                if (_isAnonymousUser())
+                                  ListTile(
+                                    leading: Icon(Icons.login, color: isDark ? Colors.white : Colors.black),
+                                    title: Text('Sign In', style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000))),
+                                    subtitle: Text(
+                                      'Google or email for payments and organisation ownership',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: isDark ? Colors.white70 : Colors.black54,
+                                      ),
+                                    ),
+                                    onTap: () {
+                                      Navigator.pop(context);
+                                      _showAuthOptionsDialog();
+                                    },
+                                  ),
+                                if (!_isAnonymousUser())
+                                  ListTile(
+                                    leading: Icon(Icons.logout, color: isDark ? Colors.white : Colors.black),
+                                    title: Text('Sign Out', style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000))),
+                                    subtitle: Text(
+                                      'Return to a guest session on this device',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: isDark ? Colors.white70 : Colors.black54,
+                                      ),
+                                    ),
+                                    onTap: () {
+                                      Navigator.pop(context);
+                                      _signOutToGuest();
+                                    },
+                                  ),
                                 ListTile(
                                   leading: Icon(Icons.qr_code_2, color: isDark ? Colors.white : Colors.black),
                                   title: Text('Share App', style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000))),
@@ -3016,12 +3800,14 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ListTile(
                                   leading: Icon(Icons.groups, color: isDark ? Colors.white : Colors.black),
                                   title: Text(
-                                    'Join Organisation',
+                                    _organizationId != null && _organizationId!.isNotEmpty
+                                        ? 'Organisation'
+                                        : 'Join Organisation',
                                     style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
                                   ),
                                   subtitle: Text(
                                     _organizationId != null && _organizationId!.isNotEmpty
-                                        ? 'Linked: ${_organizationName ?? 'Organisation'} (${_organizationRole.toUpperCase()})'
+                                        ? '${_organizationName ?? 'Organisation'} • ${_organizationRole.toUpperCase()} • ${_organizationSharedCredits ?? 0} credits'
                                         : 'Use invite code to join a shared pool',
                                     style: TextStyle(
                                       fontSize: 11,
@@ -3030,7 +3816,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                   onTap: () {
                                     Navigator.pop(context);
-                                    _showJoinOrganizationDialog();
+                                    if (_organizationId != null && _organizationId!.isNotEmpty) {
+                                      _showOrganizationStatusDialog();
+                                    } else {
+                                      _showJoinOrganizationDialog();
+                                    }
                                   },
                                 ),
                                 if (_organizationId != null && _organizationId!.isNotEmpty)
@@ -3090,12 +3880,6 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ];
                       },
-                      child: CircleAvatar(
-                        radius: 16,
-                        backgroundImage: null, // Placeholder icon
-                        backgroundColor: isDark ? Colors.grey[400] : Colors.black, // TODO: Replace with NetworkImage or AssetImage for user thumb
-                        child: Icon(Icons.person, size: 20, color: Colors.white),
-                      ),
                     ),
                   ),
                 ],
