@@ -1076,25 +1076,28 @@ class _HomeScreenState extends State<HomeScreen> {
           final photoUrl = googleUser.photoUrl;
           final displayName = googleUser.displayName;
           
+          debugPrint('🔵 GOOGLE SIGN-IN SUCCESS');
           debugPrint('Google user photo URL: $photoUrl');
           debugPrint('Google user display name: $displayName');
           
           if (displayName != null && displayName.isNotEmpty) {
             await result.user!.updateDisplayName(displayName);
-            debugPrint('Updated display name: $displayName');
+            debugPrint('✅ Updated display name: $displayName');
           }
           if (photoUrl != null && photoUrl.isNotEmpty) {
             await result.user!.updatePhotoURL(photoUrl);
             await _cacheUserPhotoUrl(photoUrl);
-            debugPrint('Updated photo URL: $photoUrl');
+            debugPrint('✅ Updated photo URL: $photoUrl');
+          } else {
+            debugPrint('⚠️ WARNING: photoUrl is null or empty!');
           }
           
           // Reload user to get updated profile data
           await result.user!.reload();
           final reloadedUser = FirebaseAuth.instance.currentUser;
-          debugPrint('Reloaded user photo URL: ${reloadedUser?.photoURL}');
+          debugPrint('After reload - photoURL: ${reloadedUser?.photoURL}');
         } catch (e) {
-          debugPrint('Failed to update user profile: $e');
+          debugPrint('❌ Failed to update user profile: $e');
         }
       }
 
@@ -1264,18 +1267,28 @@ class _HomeScreenState extends State<HomeScreen> {
 
   ImageProvider? _getUserProfileImage() {
     final user = FirebaseAuth.instance.currentUser;
+    debugPrint('📸 _getUserProfileImage called for: ${user?.email}');
+    
     if (user != null && user.photoURL != null && user.photoURL!.isNotEmpty) {
-      debugPrint('Loading user profile photo: ${user.photoURL}');
+      debugPrint('✅ Using Firebase photoURL: ${user.photoURL}');
       return NetworkImage(user.photoURL!);
     }
-    debugPrint('No user photo URL available');
+    
+    debugPrint('⚠️ No photoURL from Firebase');
     return null;
   }
 
   Widget _buildProfileAvatar({required double radius, required bool isDark}) {
+    final user = FirebaseAuth.instance.currentUser;
+    debugPrint('=== BUILD AVATAR ===');
+    debugPrint('Current user: ${user?.email}');
+    debugPrint('User photoURL: ${user?.photoURL}');
+    debugPrint('User displayName: ${user?.displayName}');
+    
     final photoProvider = _getUserProfileImage();
     
     if (photoProvider == null) {
+      debugPrint('No photo provider - showing default icon');
       return CircleAvatar(
         radius: radius,
         backgroundColor: isDark ? Colors.white12 : Colors.black,
@@ -1287,12 +1300,14 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     }
 
+    debugPrint('Photo provider available, loading: $photoProvider');
     return CircleAvatar(
       radius: radius,
       backgroundColor: isDark ? Colors.white12 : Colors.black,
       backgroundImage: photoProvider,
       onBackgroundImageError: (exception, stackTrace) {
-        debugPrint('Failed to load profile image: $exception');
+        debugPrint('❌ FAILED TO LOAD PROFILE IMAGE: $exception');
+        debugPrint('Stack: $stackTrace');
       },
     );
   }
