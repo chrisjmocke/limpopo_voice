@@ -2663,6 +2663,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _onInputChanged() {
+    setState(() {});
     _autocorrectTimer?.cancel();
     if (_tttController.text.trim().length < 4) return;
     _autocorrectTimer =
