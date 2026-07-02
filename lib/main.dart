@@ -3851,6 +3851,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ? 'History'
         : (_activeTab == 'learn' ? 'Learn' : 'Translate');
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       body: SafeArea(
         child: GestureDetector(
           onHorizontalDragEnd: (details) {
@@ -4436,9 +4437,8 @@ class _HomeScreenState extends State<HomeScreen> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final boxHeight = (constraints.maxHeight - 260) * 0.42;
-        final keyboardInset = MediaQuery.of(context).viewInsets.bottom;
         return SingleChildScrollView(
-          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4).copyWith(bottom: keyboardInset + 8),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
           child: ConstrainedBox(
             constraints: BoxConstraints(minHeight: constraints.maxHeight - 8),
             child: IntrinsicHeight(
