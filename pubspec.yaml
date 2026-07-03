@@ -54,4 +54,16 @@ flutter:
     - assets/letstalkmainwhite.png
     - assets/paystack.png
     - assets/paypal.png
+    - assets/learn_sentences.json
+    - assets/audio/learn/Afrikaans/
+    - assets/audio/learn/English/
+    - assets/audio/learn/isiNdebele/
+    - assets/audio/learn/isiXhosa/
+    - assets/audio/learn/isiZulu/
+    - assets/audio/learn/Sepedi/
+    - assets/audio/learn/Sesotho/
+    - assets/audio/learn/Setswana/
+    - assets/audio/learn/siSwati/
+    - assets/audio/learn/Tshivenda/
+    - assets/audio/learn/Xitsonga/
     - .env

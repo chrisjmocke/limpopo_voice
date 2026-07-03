@@ -58,5 +58,13 @@ service cloud.firestore {
       allow create: if signedIn() && isOrgMember(orgId);
       allow update, delete: if false;
     }
+
+    // Payment telemetry events. Allow only self-owned creates from client.
+    match /payment_events/{eventId} {
+      allow create: if signedIn() &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.createdAt == request.time;
+      allow read, update, delete: if false;
+    }
   }
 }

@@ -18,6 +18,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:paystack_flutter_sdk/paystack_flutter_sdk.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'translation_service.dart';
 import 'firebase_options.dart';
@@ -64,7 +65,6 @@ class _LetsTalkAppState extends State<LetsTalkApp> {
           primary: const Color(0xFF000000),
           secondary: const Color(0xFF000000),
           brightness: Brightness.light,
-          background: const Color(0xFFF7F7F7),
           surface: const Color(0xFFF7F7F7),
         ),
         scaffoldBackgroundColor: const Color(0xFFF7F7F7),
@@ -79,7 +79,6 @@ class _LetsTalkAppState extends State<LetsTalkApp> {
           primary: const Color(0xFF000000),
           secondary: const Color(0xFF000000),
           brightness: Brightness.dark,
-          background: const Color(0xFF000000),
           surface: const Color(0xFF000000),
         ),
         scaffoldBackgroundColor: const Color(0xFF000000),
@@ -149,6 +148,8 @@ class _CreditTier {
   const _CreditTier(this.name, this.secs, this.price);
 }
 
+enum _PayPalMode { sandbox, live }
+
 class _OrganizationPoolUpdate {
   final String action;
   final String organizationId;
@@ -191,6 +192,11 @@ const _tiers = [
 ];
 const int _usageCostSecs = 5;
 const bool _enableClientFirestoreCache = false;
+const bool _enableLocalPersistentAudioCache = true;
+const Duration _localAudioCacheTtl = Duration(days: 30);
+const int _maxLocalAudioCacheEntries = 120;
+const String _localAudioCacheIndexPrefsKey = 'local_audio_cache_index_v1';
+const String _userLearnPhrasesPrefsKey = 'user_learn_phrases_v1';
 const String _organizationTierName = 'Organisation';
 const int _organizationUsageCost = 5;
 
@@ -212,9 +218,6 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
           final FocusNode _inputFocusNode = FocusNode();
-        final Set<int> _selectedHistoryIndexes = {};
-        final bool _showClearAll = false;
-      String? _userEmail;
       Future<void> _deleteUserPhrase(int idx) async {
         final sure = await _confirmDeleteLearnPhrase();
         if (sure) {
@@ -226,6 +229,7 @@ class _HomeScreenState extends State<HomeScreen> {
               _userLearnPhrasesByLang[lang] = List.from(list);
             }
           });
+          await _persistUserLearnPhrases();
         }
       }
 
@@ -259,6 +263,7 @@ class _HomeScreenState extends State<HomeScreen> {
         return result == true;
       }
     final Map<String, List<Map<String, String>>> _userLearnPhrasesByLang = {};
+    final Map<String, Uint8List> _hotAudioCache = {};
 
     Future<bool> _sendToLearnMultipleLangs({
       required String translated,
@@ -314,6 +319,7 @@ class _HomeScreenState extends State<HomeScreen> {
           _learnFocusPhoneticByLang[lang] = phonetic.isEmpty ? null : phonetic;
         }
       });
+      await _persistUserLearnPhrases();
       _showSnack('Sentence sent to selected languages (max 5 per language)');
       return true;
     }
@@ -433,14 +439,12 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String _activeTab = 'translate';
-  Future<void>? _startupInitFuture;
   final stt.SpeechToText _speech = stt.SpeechToText();
   late final TranslationService _translationService;
   late final AudioPlayer _audioPlayer;
   bool _speechAvailable = false;
   bool _isTalking = false;
   bool _isTranslating = false;
-  bool _isPlayingAudio = false;
   String _selectedInputLang = 'English';
   String _selectedOutputLang = 'Sepedi';
   final _inputLangs = [
@@ -528,8 +532,14 @@ class _HomeScreenState extends State<HomeScreen> {
   String _phoneticText = '';
   String _spokenLang = '';
   String _translatedLang = '';
+  final Map<String, List<String>> _learnSentences = {};
   final TextEditingController _tttController = TextEditingController();
   bool _showHintText = true;
+  bool _showTalkHintText = true;
+  String? _pendingPayPalOrderId;
+  _CreditTier? _pendingPayPalTier;
+  double? _pendingPayPalAmount;
+  _PayPalMode? _pendingPayPalMode;
   int _credits = 30;
   String? _authUid;
   String? _authEmail;
@@ -546,9 +556,11 @@ class _HomeScreenState extends State<HomeScreen> {
   final Map<String, String> _learnFocusTextByLang = {};
   final Map<String, String> _learnFocusMeaningByLang = {};
   final Map<String, String?> _learnFocusPhoneticByLang = {};
-  bool _exportingHistory = false;
   bool _sharingCurrentTranslation = false;
   Timer? _autocorrectTimer;
+  int _localAudioCacheHits = 0;
+  int _sharedAudioCacheHits = 0;
+  int _remoteAudioCacheMisses = 0;
 
   static const Map<String, List<Map<String, String>>> _learnPhrasesByLang = {
     'English': [
@@ -680,10 +692,95 @@ class _HomeScreenState extends State<HomeScreen> {
     _initSpeech();
     unawaited(Paystack().initialize('pk_test_d8de1c368577b34a06507f38cf0bf989b47522a5', true));
     _tttController.addListener(_onInputChanged);
-    _startupInitFuture = _checkInstallIdAndFreeTrial();
+    unawaited(_loadLearnSentences());
+    unawaited(_loadUserLearnPhrases());
+    unawaited(_checkInstallIdAndFreeTrial());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _showDisclaimerIfFirstInstall();
     });
+  }
+
+  Future<void> _loadUserLearnPhrases() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_userLearnPhrasesPrefsKey);
+      if (raw == null || raw.trim().isEmpty) return;
+
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return;
+
+      final loaded = <String, List<Map<String, String>>>{};
+      decoded.forEach((lang, phrasesDynamic) {
+        if (phrasesDynamic is! List) return;
+        final phrases = phrasesDynamic
+            .whereType<Map>()
+            .map((entry) => entry.map(
+                  (k, v) => MapEntry(k.toString(), v?.toString() ?? ''),
+                ))
+            .where((entry) => (entry['text'] ?? '').trim().isNotEmpty)
+            .toList(growable: false);
+        if (phrases.isNotEmpty) {
+          loaded[_normalizeLanguageLabel(lang)] =
+              List<Map<String, String>>.from(phrases);
+        }
+      });
+
+      if (!mounted) {
+        _userLearnPhrasesByLang
+          ..clear()
+          ..addAll(loaded);
+        return;
+      }
+
+      setState(() {
+        _userLearnPhrasesByLang
+          ..clear()
+          ..addAll(loaded);
+      });
+    } catch (e) {
+      debugPrint('Failed to load user learn phrases: $e');
+    }
+  }
+
+  Future<void> _persistUserLearnPhrases() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final payload = <String, List<Map<String, String>>>{};
+      _userLearnPhrasesByLang.forEach((lang, phrases) {
+        if (phrases.isEmpty) return;
+        payload[lang] =
+            phrases.map((p) => Map<String, String>.from(p)).toList(growable: false);
+      });
+      await prefs.setString(_userLearnPhrasesPrefsKey, jsonEncode(payload));
+    } catch (e) {
+      debugPrint('Failed to persist user learn phrases: $e');
+    }
+  }
+
+  Future<void> _loadLearnSentences() async {
+    try {
+      final jsonString = await rootBundle.loadString('assets/learn_sentences.json');
+      final jsonData = jsonDecode(jsonString) as Map<String, dynamic>;
+      final sentences = jsonData['sentences'] as List<dynamic>? ?? [];
+      
+      setState(() {
+        _learnSentences.clear();
+        for (final item in sentences) {
+          if (item is Map<String, dynamic>) {
+            final language = item['language'] as String? ?? '';
+            final sentenceList = (item['sentences'] as List<dynamic>? ?? [])
+              .map((s) => s.toString())
+              .toList();
+            if (language.isNotEmpty) {
+              _learnSentences[language] = sentenceList;
+            }
+          }
+        }
+      });
+      debugPrint('Loaded learn sentences: ${_learnSentences.length} languages');
+    } catch (e) {
+      debugPrint('Failed to load learn sentences: $e');
+    }
   }
 
   String _generateUUID() {
@@ -1206,7 +1303,11 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     try {
-      await GoogleSignIn().signOut().catchError((_) {});
+      try {
+        await GoogleSignIn().signOut();
+      } catch (_) {
+        // Best-effort Google provider sign-out.
+      }
       await FirebaseAuth.instance.signOut();
       await _ensureSignedIn();
       await _ensureUserProfileDocument();
@@ -1385,6 +1486,237 @@ class _HomeScreenState extends State<HomeScreen> {
       return configured;
     }
     return 'https://africa-south1-limpopo-voice-prod.cloudfunctions.net/createPaystackTransactionHttp';
+  }
+
+  _PayPalMode? _payPalModeFromEnv() {
+    final raw = (dotenv.env['PAYPAL_MODE'] ?? '').trim().toLowerCase();
+    if (raw == 'sandbox') return _PayPalMode.sandbox;
+    if (raw == 'live') return _PayPalMode.live;
+    return null;
+  }
+
+  String _payPalModeLabel(_PayPalMode mode) {
+    return mode == _PayPalMode.live ? 'live' : 'sandbox';
+  }
+
+  String? _payPalCreateOrderUrl(_PayPalMode mode) {
+    final envKey = mode == _PayPalMode.live
+        ? 'PAYPAL_CREATE_ORDER_URL_LIVE'
+        : 'PAYPAL_CREATE_ORDER_URL_SANDBOX';
+    final configured = (dotenv.env[envKey] ?? '').trim();
+    if (configured.isNotEmpty) {
+      return configured;
+    }
+    return null;
+  }
+
+  String? _payPalCaptureOrderUrl(_PayPalMode mode) {
+    final envKey = mode == _PayPalMode.live
+        ? 'PAYPAL_CAPTURE_ORDER_URL_LIVE'
+        : 'PAYPAL_CAPTURE_ORDER_URL_SANDBOX';
+    final configured = (dotenv.env[envKey] ?? '').trim();
+    if (configured.isNotEmpty) {
+      return configured;
+    }
+    return null;
+  }
+
+  bool _allowPayPalSandboxSimulation() {
+    final raw = (dotenv.env['PAYPAL_SANDBOX_BYPASS'] ?? '').trim().toLowerCase();
+    final enabledByEnv = raw == '1' || raw == 'true' || raw == 'yes' || raw == 'on';
+    return kDebugMode || enabledByEnv;
+  }
+
+  Future<Map<String, String>?> _requestPayPalOrder(
+    _CreditTier tier,
+    double amount,
+    _PayPalMode mode,
+  ) async {
+    final headers = await _buildAuthorizedJsonHeaders();
+    if (headers == null) {
+      _showSnack('Could not authenticate PayPal request.');
+      return null;
+    }
+
+    final endpoint = _payPalCreateOrderUrl(mode);
+    if (endpoint == null || endpoint.isEmpty) {
+      _showSnack(
+        'Missing ${mode == _PayPalMode.live ? 'PAYPAL_CREATE_ORDER_URL_LIVE' : 'PAYPAL_CREATE_ORDER_URL_SANDBOX'} in .env',
+      );
+      return null;
+    }
+
+    final payload = {
+      'amountCents': (amount * 100).round(),
+      'email': _authEmail ?? '',
+      'orgId': tier.name == _organizationTierName ? _organizationId : null,
+      'tierName': tier.name,
+      'mode': _payPalModeLabel(mode),
+    };
+
+    final uri = Uri.parse(endpoint);
+    http.Response response;
+
+    try {
+      response = await http
+          .post(uri, headers: headers, body: jsonEncode(payload))
+          .timeout(const Duration(seconds: 30));
+    } catch (e) {
+      debugPrint('PayPal create order request failed: $e');
+      return null;
+    }
+
+    if (response.statusCode == 401) {
+      final refreshedHeaders = await _buildAuthorizedJsonHeaders(forceRefresh: true);
+      if (refreshedHeaders == null) return null;
+      try {
+        response = await http
+            .post(uri, headers: refreshedHeaders, body: jsonEncode(payload))
+            .timeout(const Duration(seconds: 30));
+      } catch (e) {
+        debugPrint('PayPal create order retry failed: $e');
+        return null;
+      }
+    }
+
+    if (response.statusCode != 200) {
+      debugPrint('PayPal create order HTTP ${response.statusCode}: ${response.body}');
+      return null;
+    }
+
+    try {
+      final body = jsonDecode(response.body);
+      if (body is! Map<String, dynamic>) return null;
+      final orderId = (body['order_id'] as String?)?.trim();
+      final approvalUrl = (body['approval_url'] as String?)?.trim();
+      if (approvalUrl == null || approvalUrl.isEmpty || orderId == null || orderId.isEmpty) {
+        return null;
+      }
+      return {
+        'order_id': orderId,
+        'approval_url': approvalUrl,
+      };
+    } catch (e) {
+      debugPrint('PayPal create order response parse failed: $e');
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>?> _requestPayPalCapture(
+    _CreditTier tier,
+    double amount,
+    String orderId,
+    _PayPalMode mode,
+  ) async {
+    final headers = await _buildAuthorizedJsonHeaders();
+    if (headers == null) {
+      _showSnack('Could not authenticate PayPal capture request.');
+      return null;
+    }
+
+    final endpoint = _payPalCaptureOrderUrl(mode);
+    if (endpoint == null || endpoint.isEmpty) {
+      _showSnack(
+        'Missing ${mode == _PayPalMode.live ? 'PAYPAL_CAPTURE_ORDER_URL_LIVE' : 'PAYPAL_CAPTURE_ORDER_URL_SANDBOX'} in .env',
+      );
+      return null;
+    }
+
+    final payload = {
+      'orderId': orderId,
+      'amountCents': (amount * 100).round(),
+      'orgId': tier.name == _organizationTierName ? _organizationId : null,
+      'tierName': tier.name,
+      'mode': _payPalModeLabel(mode),
+    };
+
+    final uri = Uri.parse(endpoint);
+    http.Response response;
+
+    try {
+      response = await http
+          .post(uri, headers: headers, body: jsonEncode(payload))
+          .timeout(const Duration(seconds: 30));
+    } catch (e) {
+      debugPrint('PayPal capture request failed: $e');
+      return null;
+    }
+
+    if (response.statusCode == 401) {
+      final refreshedHeaders = await _buildAuthorizedJsonHeaders(forceRefresh: true);
+      if (refreshedHeaders == null) return null;
+      try {
+        response = await http
+            .post(uri, headers: refreshedHeaders, body: jsonEncode(payload))
+            .timeout(const Duration(seconds: 30));
+      } catch (e) {
+        debugPrint('PayPal capture retry failed: $e');
+        return null;
+      }
+    }
+
+    if (response.statusCode != 200) {
+      debugPrint('PayPal capture HTTP ${response.statusCode}: ${response.body}');
+      return null;
+    }
+
+    try {
+      final body = jsonDecode(response.body);
+      return body is Map<String, dynamic> ? body : null;
+    } catch (e) {
+      debugPrint('PayPal capture response parse failed: $e');
+      return null;
+    }
+  }
+
+  Future<bool> _capturePendingPayPalOrder() async {
+    final orderId = _pendingPayPalOrderId;
+    final tier = _pendingPayPalTier;
+    final amount = _pendingPayPalAmount;
+    final mode = _pendingPayPalMode;
+    if (orderId == null || tier == null || amount == null || mode == null) {
+      return false;
+    }
+
+    final captureResult = await _requestPayPalCapture(tier, amount, orderId, mode);
+    if (captureResult == null) {
+      return false;
+    }
+
+    final completed = captureResult['completed'] == true;
+    if (!completed) {
+      _showSnack('PayPal order not approved yet. Complete checkout in browser first.');
+      return false;
+    }
+
+    final reference =
+        (captureResult['capture_id'] as String?)?.trim().isNotEmpty == true
+            ? (captureResult['capture_id'] as String).trim()
+            : orderId;
+
+    await _completeTierPurchase(
+      tier,
+      amount: amount,
+      status: 'completed_${_payPalModeLabel(mode)}_paypal',
+      reference: reference,
+      sourceLabel: 'PayPal ${_payPalModeLabel(mode)}',
+    );
+
+    if (mounted) {
+      setState(() {
+        _pendingPayPalOrderId = null;
+        _pendingPayPalTier = null;
+        _pendingPayPalAmount = null;
+        _pendingPayPalMode = null;
+      });
+    } else {
+      _pendingPayPalOrderId = null;
+      _pendingPayPalTier = null;
+      _pendingPayPalAmount = null;
+      _pendingPayPalMode = null;
+    }
+
+    return true;
   }
 
   Future<Map<String, String>?> _buildAuthorizedJsonHeaders({bool forceRefresh = false}) async {
@@ -2470,6 +2802,202 @@ class _HomeScreenState extends State<HomeScreen> {
     return '${normalized}_${language}_$voice';
   }
 
+  String _stableCacheHash(String input) {
+    var hash = 0;
+    for (final codeUnit in input.codeUnits) {
+      hash = ((hash * 31) + codeUnit) & 0x7fffffff;
+    }
+    return hash.toRadixString(16);
+  }
+
+  Future<Directory?> _getLocalAudioCacheDir() async {
+    if (!_enableLocalPersistentAudioCache) return null;
+    try {
+      final baseDir = await getApplicationDocumentsDirectory();
+      final dir = Directory('${baseDir.path}/tts_audio_cache');
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+      return dir;
+    } catch (e) {
+      debugPrint('Failed to get local audio cache dir: $e');
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>> _readLocalAudioCacheIndex() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_localAudioCacheIndexPrefsKey);
+      if (raw == null || raw.trim().isEmpty) return <String, dynamic>{};
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) return decoded;
+      return <String, dynamic>{};
+    } catch (e) {
+      debugPrint('Failed to read local audio cache index: $e');
+      return <String, dynamic>{};
+    }
+  }
+
+  Future<void> _writeLocalAudioCacheIndex(Map<String, dynamic> index) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_localAudioCacheIndexPrefsKey, jsonEncode(index));
+    } catch (e) {
+      debugPrint('Failed to write local audio cache index: $e');
+    }
+  }
+
+  Future<void> _pruneLocalAudioCache(Map<String, dynamic> index) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final ttlMs = _localAudioCacheTtl.inMilliseconds;
+    final removable = <String>[];
+
+    for (final entry in index.entries) {
+      final value = entry.value;
+      if (value is! Map) {
+        removable.add(entry.key);
+        continue;
+      }
+
+      final path = (value['path'] ?? '').toString();
+      final updatedAt = (value['updatedAt'] is int)
+          ? value['updatedAt'] as int
+          : int.tryParse('${value['updatedAt']}') ?? 0;
+
+      if (path.isEmpty || updatedAt <= 0 || now - updatedAt > ttlMs) {
+        removable.add(entry.key);
+      }
+    }
+
+    for (final key in removable) {
+      final value = index[key];
+      if (value is Map && value['path'] != null) {
+        try {
+          final file = File(value['path'].toString());
+          if (await file.exists()) {
+            await file.delete();
+          }
+        } catch (_) {}
+      }
+      index.remove(key);
+      _hotAudioCache.remove(key);
+    }
+
+    if (index.length <= _maxLocalAudioCacheEntries) return;
+
+    final sorted = index.entries.toList()
+      ..sort((a, b) {
+        final aMap = a.value is Map ? a.value as Map : const {};
+        final bMap = b.value is Map ? b.value as Map : const {};
+        final aAccess = (aMap['lastAccessedAt'] is int)
+            ? aMap['lastAccessedAt'] as int
+            : int.tryParse('${aMap['lastAccessedAt']}') ?? 0;
+        final bAccess = (bMap['lastAccessedAt'] is int)
+            ? bMap['lastAccessedAt'] as int
+            : int.tryParse('${bMap['lastAccessedAt']}') ?? 0;
+        return aAccess.compareTo(bAccess);
+      });
+
+    final extra = index.length - _maxLocalAudioCacheEntries;
+    for (var i = 0; i < extra; i++) {
+      final key = sorted[i].key;
+      final value = sorted[i].value;
+      if (value is Map && value['path'] != null) {
+        try {
+          final file = File(value['path'].toString());
+          if (await file.exists()) {
+            await file.delete();
+          }
+        } catch (_) {}
+      }
+      index.remove(key);
+      _hotAudioCache.remove(key);
+    }
+  }
+
+  Future<Uint8List?> _getLocalCachedAudio(String cacheKey) async {
+    if (!_enableLocalPersistentAudioCache) return null;
+
+    final hot = _hotAudioCache[cacheKey];
+    if (hot != null && hot.isNotEmpty) {
+      return hot;
+    }
+
+    final index = await _readLocalAudioCacheIndex();
+    final value = index[cacheKey];
+    if (value is! Map) return null;
+
+    final path = (value['path'] ?? '').toString();
+    final updatedAt = (value['updatedAt'] is int)
+        ? value['updatedAt'] as int
+        : int.tryParse('${value['updatedAt']}') ?? 0;
+    if (path.isEmpty || updatedAt <= 0) {
+      index.remove(cacheKey);
+      await _writeLocalAudioCacheIndex(index);
+      return null;
+    }
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - updatedAt > _localAudioCacheTtl.inMilliseconds) {
+      try {
+        final file = File(path);
+        if (await file.exists()) {
+          await file.delete();
+        }
+      } catch (_) {}
+      index.remove(cacheKey);
+      await _writeLocalAudioCacheIndex(index);
+      return null;
+    }
+
+    try {
+      final file = File(path);
+      if (!await file.exists()) {
+        index.remove(cacheKey);
+        await _writeLocalAudioCacheIndex(index);
+        return null;
+      }
+
+      final bytes = await file.readAsBytes();
+      if (bytes.isEmpty) return null;
+
+      _hotAudioCache[cacheKey] = bytes;
+      value['lastAccessedAt'] = now;
+      index[cacheKey] = value;
+      await _writeLocalAudioCacheIndex(index);
+      return bytes;
+    } catch (e) {
+      debugPrint('Failed to read local cached audio for $cacheKey: $e');
+      return null;
+    }
+  }
+
+  Future<void> _saveLocalCachedAudio(String cacheKey, Uint8List audioData) async {
+    if (!_enableLocalPersistentAudioCache || audioData.isEmpty) return;
+    final dir = await _getLocalAudioCacheDir();
+    if (dir == null) return;
+
+    try {
+      final fileName = '${_stableCacheHash(cacheKey)}.bin';
+      final file = File('${dir.path}/$fileName');
+      await file.writeAsBytes(audioData, flush: true);
+
+      final index = await _readLocalAudioCacheIndex();
+      final now = DateTime.now().millisecondsSinceEpoch;
+      index[cacheKey] = {
+        'path': file.path,
+        'updatedAt': now,
+        'lastAccessedAt': now,
+      };
+      await _pruneLocalAudioCache(index);
+      await _writeLocalAudioCacheIndex(index);
+      _hotAudioCache[cacheKey] = audioData;
+    } catch (e) {
+      debugPrint('Failed to save local cached audio for $cacheKey: $e');
+    }
+  }
+
   bool _isFirestorePermissionDenied(Object error) {
     final msg = error.toString().toLowerCase();
     return msg.contains('permission-denied') ||
@@ -2712,6 +3240,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     setState(() {
       _isTalking = true;
+      _showHintText = false;
+      _showTalkHintText = false;
       _spokenText = '';
       _translatedText = '';
       _phoneticText = '';
@@ -2879,9 +3409,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<String> _translateText(String input) async {
     final source = _translateCodes[_selectedInputLang] ?? 'auto';
     final target = _translateCodes[_selectedOutputLang] ?? 'en';
-    final needsPhonetics = _selectedOutputLang == 'Hindi' ||
-        _selectedOutputLang == 'Urdu' ||
-        _selectedOutputLang == 'Mandarin';
 
     final cached = await _getCachedTranslation(input, _selectedOutputLang);
     if (cached != null && cached.isNotEmpty) {
@@ -2890,7 +3417,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final uri = Uri.parse(
-      'https://translate.googleapis.com/translate_a/single?client=gtx&sl=$source&tl=$target&dt=t${needsPhonetics ? '&dt=rm' : ''}&q=${Uri.encodeQueryComponent(input)}',
+      'https://translate.googleapis.com/translate_a/single?client=gtx&sl=$source&tl=$target&dt=t&q=${Uri.encodeQueryComponent(input)}',
     );
 
     try {
@@ -2908,22 +3435,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 (segment) => segment.isNotEmpty ? segment.first.toString() : '')
             .join();
 
-        if (needsPhonetics) {
-          final phonetic = pieces
-              .whereType<List>()
-              .map((s) =>
-                  s.length > 2 && s[2] != null ? s[2].toString().trim() : '')
-              .where((s) => s.isNotEmpty)
-              .join(' ')
-              .trim();
-          final fallback =
-              (phonetic.isEmpty && decoded.length > 1 && decoded[1] is String)
-                  ? (decoded[1] as String).trim()
-                  : '';
-          _phoneticText = phonetic.isNotEmpty ? phonetic : fallback;
-        } else {
-          _phoneticText = '';
-        }
+        _phoneticText = '';
 
         final result = translated.trim().isEmpty ? input : translated.trim();
         await _saveCacheTranslation(input, _selectedOutputLang, result);
@@ -2964,14 +3476,69 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  String? _learnAudioAssetPath(String language, String text) {
+    final normalizedLanguage = _normalizeLanguageLabel(language);
+    final phrases = _learnPhrasesByLang[normalizedLanguage];
+    if (phrases == null) return null;
+
+    final index = phrases.indexWhere((phrase) => phrase['text'] == text);
+    if (index < 0) return null;
+
+    final fileName = '${(index + 1).toString().padLeft(2, '0')}.m4a';
+    return 'audio/learn/$normalizedLanguage/$fileName';
+  }
+
+  Future<void> _playLearnPhraseAudio({
+    required String language,
+    required String text,
+    required bool isUserPhrase,
+  }) async {
+    final assetPath = _learnAudioAssetPath(language, text);
+    if (assetPath != null) {
+      try {
+        await _audioPlayer.stop();
+        debugPrint('Playing Learn asset audio: $assetPath');
+        await _audioPlayer.play(AssetSource(assetPath));
+        return;
+      } catch (e) {
+        debugPrint('Learn asset audio playback failed for $assetPath: $e');
+        _showSnack('Learn audio file missing or unreadable: $assetPath');
+        return;
+      }
+    }
+
+    if (isUserPhrase) {
+      await _speakText(text, language);
+      return;
+    }
+
+    _showSnack('Learn audio file missing for this phrase.');
+  }
+
   Future<Uint8List?> _generateAudioWithCache(
       String text, String language, String? voice,
       {required String provider}) async {
     final cacheVoiceKey = '$provider|${voice ?? ''}';
+    final cacheLookupKey = _getCacheKey(text, language, cacheVoiceKey);
+
+    final localCached = await _getLocalCachedAudio(cacheLookupKey);
+    if (localCached != null && localCached.isNotEmpty) {
+      _localAudioCacheHits++;
+      debugPrint('Audio cache hit (local): $_localAudioCacheHits');
+      return localCached;
+    }
+
     final cachedBase64 = await _getCachedAudio(text, language, cacheVoiceKey);
     if (cachedBase64 != null) {
-      return base64Decode(cachedBase64);
+      final decoded = base64Decode(cachedBase64);
+      await _saveLocalCachedAudio(cacheLookupKey, decoded);
+      _sharedAudioCacheHits++;
+      debugPrint('Audio cache hit (shared): $_sharedAudioCacheHits');
+      return decoded;
     }
+
+    _remoteAudioCacheMisses++;
+    debugPrint('Audio cache miss (remote generation): $_remoteAudioCacheMisses');
 
     final audioData = await _translationService.generateTranslation(
       text,
@@ -2983,6 +3550,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (audioData != null && audioData.isNotEmpty) {
       final audioBase64 = base64Encode(audioData);
       await _saveCacheAudio(text, language, cacheVoiceKey, audioBase64);
+      await _saveLocalCachedAudio(cacheLookupKey, audioData);
     }
 
     return audioData;
@@ -3001,8 +3569,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final Stopwatch ttsStopwatch = Stopwatch()..start();
 
     try {
-      setState(() => _isPlayingAudio = true);
-
       final provider = _ttsProviderForLanguage(_selectedOutputLang);
       final voiceName = _voiceNameForLanguage(_selectedOutputLang);
       final chunks = _buildRealtimeSpeechChunks(safeForSpeech);
@@ -3053,8 +3619,6 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     } catch (e) {
       _showSnack('Narakeet audio error. Please try again.');
-    } finally {
-      setState(() => _isPlayingAudio = false);
     }
   }
 
@@ -3242,10 +3806,12 @@ class _HomeScreenState extends State<HomeScreen> {
       );
       files.add(XFile(outputTextFile.path, mimeType: 'text/plain'));
 
-      await Share.shareXFiles(
-        files,
-        subject: 'Let\'s Talk Translation',
-        text: payload.toString(),
+      await SharePlus.instance.share(
+        ShareParams(
+          files: files,
+          subject: 'Let\'s Talk Translation',
+          text: payload.toString(),
+        ),
       );
     } catch (e) {
       debugPrint('Share translation package error: $e');
@@ -3567,8 +4133,10 @@ class _HomeScreenState extends State<HomeScreen> {
                           borderRadius: BorderRadius.circular(16),
                         ),
                       ),
-                      onPressed: () {
+                      onPressed: () async {
                         Navigator.pop(ctx);
+                        await Future<void>.delayed(const Duration(milliseconds: 120));
+                        if (!mounted) return;
                         _startPaystackTierPayment(tier);
                       },
                       child: Row(
@@ -3597,8 +4165,10 @@ class _HomeScreenState extends State<HomeScreen> {
                           borderRadius: BorderRadius.circular(16),
                         ),
                       ),
-                      onPressed: () {
+                      onPressed: () async {
                         Navigator.pop(ctx);
+                        await Future<void>.delayed(const Duration(milliseconds: 120));
+                        if (!mounted) return;
                         _startPayPalTierPayment(tier);
                       },
                       child: Row(
@@ -3641,6 +4211,7 @@ class _HomeScreenState extends State<HomeScreen> {
     required double amount,
     required String status,
     required String reference,
+    String sourceLabel = 'Payment',
   }) async {
     if (!mounted) return;
 
@@ -3649,14 +4220,14 @@ class _HomeScreenState extends State<HomeScreen> {
       if (orgUpdate == null) return;
       _showSnack(
         orgUpdate.action == 'created'
-            ? 'Organisation created with ${tier.secs} shared credits (${tier.name}) [Paystack Sandbox].'
-            : 'Organisation pool topped up: ${tier.secs} credits (${tier.name}) [Paystack Sandbox].',
+            ? 'Organisation created with ${tier.secs} shared credits (${tier.name}) [$sourceLabel].'
+            : 'Organisation pool topped up: ${tier.secs} credits (${tier.name}) [$sourceLabel].',
       );
     } else {
       setState(() => _credits += tier.secs);
       // Save updated credits to Firestore after purchase
       unawaited(_updateCreditsInFirestore());
-      _showSnack('Credits added: ${tier.secs} sec (${tier.name}) [Paystack Sandbox].');
+      _showSnack('Credits added: ${tier.secs} sec (${tier.name}) [$sourceLabel].');
     }
 
     try {
@@ -3685,7 +4256,46 @@ class _HomeScreenState extends State<HomeScreen> {
       amount: amount,
       status: 'completed_sandbox_paystack_simulated',
       reference: ref,
+      sourceLabel: 'Paystack Sandbox',
     );
+  }
+
+  Future<void> _waitForInteractiveView() async {
+    for (int i = 0; i < 12; i++) {
+      if (!mounted) return;
+      final state = WidgetsBinding.instance.lifecycleState;
+      if (state == null || state == AppLifecycleState.resumed) {
+        await WidgetsBinding.instance.endOfFrame;
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+  }
+
+  Future<dynamic> _launchPaystackWithViewRetry(String accessCode) async {
+    Object? lastError;
+    for (int attempt = 0; attempt < 3; attempt++) {
+      await _waitForInteractiveView();
+      if (!mounted) {
+        throw StateError('Widget is no longer mounted.');
+      }
+
+      try {
+        return await Paystack().launch(accessCode);
+      } catch (e) {
+        lastError = e;
+        final message = e.toString();
+        final isMissingView =
+            message.contains('MISSING_VIEW') ||
+            message.contains('Activity is not found to present payment UI');
+        if (!isMissingView || attempt == 2) {
+          rethrow;
+        }
+        debugPrint('Paystack launch missing view, retrying (${attempt + 1}/2)...');
+        await Future<void>.delayed(Duration(milliseconds: 250 * (attempt + 1)));
+      }
+    }
+    throw lastError ?? StateError('Paystack launch failed');
   }
 
   void _startPaystackTierPayment(_CreditTier tier) async {
@@ -3724,7 +4334,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     try {
-      final response = await Paystack().launch(accessCode);
+      final response = await _launchPaystackWithViewRetry(accessCode);
       final isSuccess = response.status.toLowerCase() == 'success';
 
       if (isSuccess) {
@@ -3733,6 +4343,7 @@ class _HomeScreenState extends State<HomeScreen> {
           amount: amount,
           status: 'completed_sandbox_paystack',
           reference: response.reference,
+          sourceLabel: 'Paystack Sandbox',
         );
       } else {
         _showSnack('Payment failed: ${response.message}');
@@ -3743,8 +4354,110 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _startPayPalTierPayment(_CreditTier tier) {
-    _showSnack('PayPal integration coming soon. Use Paystack for now.');
+  Future<void> _simulatePayPalSandboxPayment(
+    _CreditTier tier,
+    double amount,
+  ) async {
+    final ref = 'SIM-PAYPAL-${DateTime.now().millisecondsSinceEpoch}';
+    await _completeTierPurchase(
+      tier,
+      amount: amount,
+      status: 'completed_sandbox_paypal_simulated',
+      reference: ref,
+      sourceLabel: 'PayPal Sandbox',
+    );
+  }
+
+  void _startPayPalTierPayment(_CreditTier tier) async {
+    final paymentReady = await _ensurePaymentReadyAccount();
+    if (!paymentReady) return;
+
+    if (tier.name == _organizationTierName) {
+      final allowed = await _canPurchaseOrganizationTier();
+      if (!allowed) return;
+    }
+
+    final mode = _payPalModeFromEnv();
+    if (mode == null) {
+      _showSnack("PAYPAL_MODE must be set to 'sandbox' or 'live'.");
+      return;
+    }
+
+    if (_pendingPayPalOrderId != null) {
+      final pendingMode = _pendingPayPalMode;
+      if (pendingMode != null && pendingMode != mode) {
+        _showSnack(
+          'Pending PayPal order is ${_payPalModeLabel(pendingMode)}. Set PAYPAL_MODE to match before capture.',
+        );
+        return;
+      }
+      _showSnack('Attempting to finalize pending PayPal order...');
+      final finalized = await _capturePendingPayPalOrder();
+      if (finalized) {
+        return;
+      }
+      _showSnack('Pending PayPal order not completed yet.');
+      return;
+    }
+
+    final amount = _tierAmountFromPrice(tier.price);
+    final orderData = await _requestPayPalOrder(tier, amount, mode);
+    final approvalUrl = orderData?['approval_url'];
+    final orderId = orderData?['order_id'];
+
+    if (approvalUrl == null || approvalUrl.isEmpty || orderId == null || orderId.isEmpty) {
+      if (mode == _PayPalMode.sandbox && _allowPayPalSandboxSimulation()) {
+        try {
+          _showSnack(
+            'PayPal sandbox backend unavailable. Running simulated sandbox payment.',
+          );
+          await _simulatePayPalSandboxPayment(tier, amount);
+        } catch (e) {
+          debugPrint('PayPal sandbox simulation error: $e');
+          _showSnack('PayPal sandbox simulation failed: ${e.toString()}');
+        }
+      } else {
+        _showSnack(
+          mode == _PayPalMode.live
+              ? 'Could not create PayPal live order.'
+              : 'Could not create PayPal sandbox order.',
+        );
+      }
+      return;
+    }
+
+    final uri = Uri.tryParse(approvalUrl);
+    if (uri == null) {
+      _showSnack('Invalid PayPal approval URL returned by backend.');
+      return;
+    }
+
+    try {
+      final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!launched) {
+        _showSnack('Could not open PayPal checkout.');
+        return;
+      }
+      if (mounted) {
+        setState(() {
+          _pendingPayPalOrderId = orderId;
+          _pendingPayPalTier = tier;
+          _pendingPayPalAmount = amount;
+          _pendingPayPalMode = mode;
+        });
+      } else {
+        _pendingPayPalOrderId = orderId;
+        _pendingPayPalTier = tier;
+        _pendingPayPalAmount = amount;
+        _pendingPayPalMode = mode;
+      }
+      _showSnack(
+        'PayPal ${_payPalModeLabel(mode)} checkout opened. After approval, tap PayPal again to finalize crediting.',
+      );
+    } catch (e) {
+      debugPrint('PayPal launch error: $e');
+      _showSnack('Could not open PayPal checkout: ${e.toString()}');
+    }
   }
   Widget _buildHeaderWordmark(bool isDark) {
     final titleColor = isDark ? Colors.white : const Color(0xFF1F2D40);
@@ -3786,27 +4499,27 @@ class _HomeScreenState extends State<HomeScreen> {
                     letterSpacing: 0.6,
                     shadows: [
                       Shadow(
-                        color: Colors.black.withOpacity(isDark ? 0.65 : 0.28),
+                        color: Colors.black.withValues(alpha: isDark ? 0.65 : 0.28),
                         blurRadius: 0,
                         offset: const Offset(1, 0),
                       ),
                       Shadow(
-                        color: Colors.black.withOpacity(isDark ? 0.65 : 0.28),
+                        color: Colors.black.withValues(alpha: isDark ? 0.65 : 0.28),
                         blurRadius: 0,
                         offset: const Offset(-1, 0),
                       ),
                       Shadow(
-                        color: Colors.black.withOpacity(isDark ? 0.65 : 0.28),
+                        color: Colors.black.withValues(alpha: isDark ? 0.65 : 0.28),
                         blurRadius: 0,
                         offset: const Offset(0, 1),
                       ),
                       Shadow(
-                        color: Colors.black.withOpacity(isDark ? 0.65 : 0.28),
+                        color: Colors.black.withValues(alpha: isDark ? 0.65 : 0.28),
                         blurRadius: 0,
                         offset: const Offset(0, -1),
                       ),
                       Shadow(
-                        color: Colors.black.withOpacity(isDark ? 0.7 : 0.3),
+                        color: Colors.black.withValues(alpha: isDark ? 0.7 : 0.3),
                         blurRadius: 8,
                         offset: const Offset(0, 2),
                       ),
@@ -3825,17 +4538,17 @@ class _HomeScreenState extends State<HomeScreen> {
                     height: 1,
                     shadows: [
                       Shadow(
-                        color: Colors.black.withOpacity(isDark ? 0.55 : 0.2),
+                        color: Colors.black.withValues(alpha: isDark ? 0.55 : 0.2),
                         blurRadius: 0,
                         offset: const Offset(1, 0),
                       ),
                       Shadow(
-                        color: Colors.black.withOpacity(isDark ? 0.55 : 0.2),
+                        color: Colors.black.withValues(alpha: isDark ? 0.55 : 0.2),
                         blurRadius: 0,
                         offset: const Offset(-1, 0),
                       ),
                       Shadow(
-                        color: Colors.black.withOpacity(isDark ? 0.65 : 0.2),
+                        color: Colors.black.withValues(alpha: isDark ? 0.65 : 0.2),
                         blurRadius: 5,
                         offset: const Offset(0, 1),
                       ),
@@ -3854,9 +4567,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final pageName = _activeTab == 'history'
-        ? 'History'
-        : (_activeTab == 'learn' ? 'Learn' : 'Translate');
     return Scaffold(
       resizeToAvoidBottomInset: false,
       body: SafeArea(
@@ -3989,8 +4699,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                               actions: [
                                 Builder(
-                                  builder: (ctx2) {
-                                    final isDark = Theme.of(ctx2).brightness == Brightness.dark;
+                                  builder: (_) {
                                     return TextButton(
                                       style: TextButton.styleFrom(
                                         backgroundColor: const Color(0xFF000000),
@@ -4022,23 +4731,45 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   Align(
                     alignment: Alignment.centerRight,
-                    child: PopupMenuButton<int>(
-                      tooltip: 'User menu',
-                      icon: Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          _buildProfileAvatar(radius: 14, isDark: isDark),
-                          if (!_isAnonymousUser())
-                            const Positioned(
-                              right: -1,
-                              bottom: -1,
-                              child: CircleAvatar(
-                                radius: 5,
-                                backgroundColor: Color(0xFF17C964),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        GestureDetector(
+                          onTap: _showCreditTiers,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: isDark ? Colors.white12 : const Color(0xFFF1F3F5),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              '$_credits',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: isDark ? Colors.white : const Color(0xFF000000),
                               ),
                             ),
-                        ],
-                      ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        PopupMenuButton<int>(
+                          tooltip: 'User menu',
+                          icon: Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              _buildProfileAvatar(radius: 14, isDark: isDark),
+                              if (!_isAnonymousUser())
+                                const Positioned(
+                                  right: -1,
+                                  bottom: -1,
+                                  child: CircleAvatar(
+                                    radius: 5,
+                                    backgroundColor: Color(0xFF17C964),
+                                  ),
+                                ),
+                            ],
+                          ),
                       color: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
                       surfaceTintColor:
                           isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
@@ -4199,6 +4930,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         ];
                       },
                     ),
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -4281,40 +5014,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<bool> _confirmClearSentFromHistory() async {
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (ctx) {
-        final isDark = Theme.of(ctx).brightness == Brightness.dark;
-        return AlertDialog(
-          title: const Text('sure?'),
-          content: const Text(
-            'This will delete the phrase sent from History on the Learn page.',
-          ),
-          backgroundColor:
-              isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-          surfaceTintColor:
-              isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: Text('Cancel', style: TextStyle(color: isDark ? Colors.white : Color(0xFF000000))),
-            ),
-            TextButton(
-              style: TextButton.styleFrom(
-                backgroundColor: const Color(0xFF000000),
-                foregroundColor: Colors.white,
-              ),
-              onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('Clear', style: TextStyle(color: Colors.white)),
-            ),
-          ],
-        );
-      },
-    );
-    return result == true;
-  }
-
   Widget _buildLearnTab(bool isDark) {
     final learnPhraseKey = _selectedLearnLang;
     final userPhrases = _userLearnPhrasesByLang[learnPhraseKey] ?? [];
@@ -4323,8 +5022,6 @@ class _HomeScreenState extends State<HomeScreen> {
       ...userPhrases,
       ...defaultPhrases.where((def) => !userPhrases.any((u) => u['text'] == def['text'])),
     ]; // Avoid duplicate default if user added same
-    final currentLearnText = _learnFocusTextByLang[_selectedLearnLang] ?? '';
-    final hasHistoryFocus = currentLearnText.trim().isNotEmpty;
     return Stack(
       children: [
         SingleChildScrollView(
@@ -4405,8 +5102,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   IconButton(
                     icon: const Icon(Icons.volume_up),
                     tooltip: 'Listen',
-                    onPressed: () =>
-                        _speakText(phrase['text'] ?? '', _selectedLearnLang),
+                    onPressed: () => _playLearnPhraseAudio(
+                      language: _selectedLearnLang,
+                      text: phrase['text'] ?? '',
+                      isUserPhrase: isUserPhrase,
+                    ),
                   ),
                   if (isUserPhrase)
                     IconButton(
@@ -4616,7 +5316,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     margin: const EdgeInsets.only(bottom: 8),
                     padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                     decoration: BoxDecoration(
-                      color: isDark ? Colors.white12 : const Color(0xFFFFF3E0),
+                      color: isDark ? Colors.white12 : const Color(0xFFD9C7A3),
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(color: isDark ? Colors.white24 : Colors.black26),
                     ),
@@ -4765,7 +5465,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               shape: BoxShape.circle,
                               boxShadow: [
                                 BoxShadow(
-                                  color: Colors.black.withOpacity(0.10),
+                                  color: Colors.black.withValues(alpha: 0.10),
                                   blurRadius: 8,
                                   offset: const Offset(0, 2),
                                 ),
@@ -4800,7 +5500,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               boxShadow: [
                                 BoxShadow(
                                   color: (_isTalking ? Colors.red : Colors.green)
-                                      .withOpacity(0.4),
+                                      .withValues(alpha: 0.4),
                                   blurRadius: _isTalking ? 20 : 10,
                                   spreadRadius: _isTalking ? 4 : 2,
                                 )
@@ -4812,14 +5512,15 @@ class _HomeScreenState extends State<HomeScreen> {
                                   Icon(_isTalking ? Icons.mic : Icons.mic_none,
                                       color: Colors.white, size: 40),
                                   const SizedBox(height: 4),
-                                  Text(
-                                    _isTalking ? 'LISTENING' : 'HOLD TO TALK',
-                                    style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
-                                        letterSpacing: 0.5),
-                                  ),
+                                  if (_showTalkHintText)
+                                    Text(
+                                      _isTalking ? 'LISTENING' : 'HOLD TO TALK',
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                          letterSpacing: 0.5),
+                                    ),
                                 ]),
                           ),
                         ),
@@ -4841,7 +5542,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               shape: BoxShape.circle,
                               boxShadow: [
                                 BoxShadow(
-                                  color: Colors.black.withOpacity(0.10),
+                                  color: Colors.black.withValues(alpha: 0.10),
                                   blurRadius: 8,
                                   offset: const Offset(0, 2),
                                 ),
@@ -4884,7 +5585,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final dropdownColor = isDark
       ? const Color(0xFF000000)
       : isOutputDropdown
-        ? const Color(0xFFFFF3E0)
+        ? const Color(0xFFD9C7A3)
         : Colors.white;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
@@ -4893,7 +5594,7 @@ class _HomeScreenState extends State<HomeScreen> {
         color: isDark
           ? Colors.transparent
           : isOutputDropdown
-            ? const Color(0xFFFFF3E0)
+            ? const Color(0xFFD9C7A3)
             : isInputDropdown
               ? const Color(0xFFE0F8D8)
               : Colors.transparent,
@@ -4927,38 +5628,8 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _outBox(String label, String text, Color color, bool isDark) {
-    // Use the passed color for the background in light mode, else white12 in dark mode
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: isDark ? Colors.white12 : color,
-        borderRadius: BorderRadius.circular(12),
-        border: isDark ? null : Border.all(
-          color: Colors.black26,
-        ),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(label,
-            style: TextStyle(
-                fontWeight: FontWeight.bold,
-            color: isDark ? Colors.white : const Color(0xFF000000),
-                fontSize: 12,
-                fontFamily: 'monospace')),
-        const SizedBox(height: 6),
-        Text(text,
-            style: TextStyle(
-                fontSize: 16,
-                color: isDark ? Colors.white : const Color(0xFF000000),
-                fontFamily: 'monospace')),
-      ]),
-    );
-  }
-
   Future<void> _exportHistory() async {
     if (_history.isEmpty) return;
-    setState(() => _exportingHistory = true);
     try {
       final dir = await getTemporaryDirectory();
       final files = <XFile>[];
@@ -5018,14 +5689,16 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       if (files.isNotEmpty) {
-        await Share.shareXFiles(files,
-            subject: 'Let\'s Talk — Translation History');
+        await SharePlus.instance.share(
+          ShareParams(
+            files: files,
+            subject: 'Let\'s Talk — Translation History',
+          ),
+        );
       }
     } catch (e) {
       debugPrint('Export error: $e');
       _showSnack('Export failed');
-    } finally {
-      setState(() => _exportingHistory = false);
     }
   }
 
@@ -5135,7 +5808,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 itemCount: _history.length,
                 itemBuilder: (context, i) {
                   final item = _history[i];
-                  final selected = _selectedHistoryIndexes.contains(i);
                   return Card(
                     margin: const EdgeInsets.only(bottom: 12),
                     color: isDark ? Colors.white12 : const Color(0xFFFFEBEE), // pastel red

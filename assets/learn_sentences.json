@@ -1,0 +1,103 @@
+{
+  "sentences": [
+    {
+      "language": "English",
+      "sentences": [
+        "Hello, how are you?",
+        "Thank you very much.",
+        "Please help me.",
+        "Goodbye, see you later."
+      ]
+    },
+    {
+      "language": "Sepedi",
+      "sentences": [
+        "Dumela, o phela bjang?",
+        "Ke a leboga kudu.",
+        "Hle, nthuše.",
+        "Sala gabotse."
+      ]
+    },
+    {
+      "language": "Xitsonga",
+      "sentences": [
+        "Avuxeni, u njhani?",
+        "Ndza nkhensa swinene.",
+        "Ndzi kombela mpfuno.",
+        "Endla kahle."
+      ]
+    },
+    {
+      "language": "Tshivenda",
+      "sentences": [
+        "Ndaa, ni hone?",
+        "Ndo livhuwa vhukuma.",
+        "Ndi humbela thuso.",
+        "Salani zwavhudi."
+      ]
+    },
+    {
+      "language": "Setswana",
+      "sentences": [
+        "Dumela, o tsogile jang?",
+        "Ke a go leboga thata.",
+        "Tsweetswee nthuse.",
+        "Tsamaya sentle."
+      ]
+    },
+    {
+      "language": "isiXhosa",
+      "sentences": [
+        "Molo, unjani?",
+        "Enkosi kakhulu.",
+        "Nceda undincede.",
+        "Hamba kakuhle."
+      ]
+    },
+    {
+      "language": "isiZulu",
+      "sentences": [
+        "Sawubona, unjani?",
+        "Ngiyabonga kakhulu.",
+        "Ngicela ungisize.",
+        "Hamba kahle."
+      ]
+    },
+    {
+      "language": "siSwati",
+      "sentences": [
+        "Sawubona, wentani?",
+        "Ngiyabonga kakhulu.",
+        "Ngicela ungisize.",
+        "Sala kahle."
+      ]
+    },
+    {
+      "language": "Sesotho",
+      "sentences": [
+        "Dumela, o phela jwang?",
+        "Ke a leboha haholo.",
+        "Ka kopo nthuse.",
+        "Sala hantle."
+      ]
+    },
+    {
+      "language": "isiNdebele",
+      "sentences": [
+        "Lotjhani, unjani?",
+        "Ngiyathokoza khulu.",
+        "Ngicela ungisize.",
+        "Sala kahle."
+      ]
+    },
+    {
+      "language": "Afrikaans",
+      "sentences": [
+        "Hallo, hoe gaan dit?",
+        "Baie dankie.",
+        "Help my asseblief.",
+        "Totsiens."
+      ]
+    }
+  ]
+}

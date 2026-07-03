@@ -13,6 +13,7 @@ const admin = require("firebase-admin");
 const crypto = require("crypto");
 const cors = require("cors")({ origin: true });
 const paystackFunctions = require("./paystack");
+const paypalFunctions = require("./paypal");
 
 setGlobalOptions({ region: "africa-south1" });
 
@@ -1111,3 +1112,5 @@ exports.ttsProviderReadiness = onRequest((req, res) => {
 exports.createPaystackTransaction = paystackFunctions.createPaystackTransaction;
 exports.createPaystackTransactionHttp = paystackFunctions.createPaystackTransactionHttp;
 exports.paystackWebhook = paystackFunctions.paystackWebhook;
+exports.createPayPalOrderHttp = paypalFunctions.createPayPalOrderHttp;
+exports.capturePayPalOrderHttp = paypalFunctions.capturePayPalOrderHttp;
