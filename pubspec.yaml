@@ -28,8 +28,7 @@ dependencies:
   url_launcher: ^6.2.6
   audioplayers: ^6.1.0
   payfast: ^1.0.2
-  paystack_flutter_sdk: ^0.0.1-alpha.2
-  webview_flutter: ^4.7.0
+  webview_flutter: ^4.13.1
   shared_preferences: ^2.3.3
   qr_flutter: ^4.1.0
   device_info_plus: ^12.3.0

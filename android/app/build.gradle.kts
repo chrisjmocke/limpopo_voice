@@ -23,8 +23,6 @@ android {
 
     namespace = "com.limpopovoice.translate"
     compileSdk = flutter.compileSdkVersion
-    namespace = "com.limpopovoice.translate"
-    compileSdk = flutter.compileSdkVersion
 
     defaultConfig {
         applicationId = "com.limpopovoice.translate"
@@ -58,9 +56,7 @@ android {
     }
 
     buildTypes {
-
         release {
-
             // 🔥 USE REAL SIGNING
             signingConfig = if (hasKeystoreProperties) {
                 signingConfigs.getByName("release")
@@ -77,4 +73,8 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // No manual Paystack dependency needed, handled by flutter_paystack_max
 }

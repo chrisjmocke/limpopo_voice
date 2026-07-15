@@ -17,11 +17,13 @@ import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:paystack_flutter_sdk/paystack_flutter_sdk.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 import 'translation_service.dart';
 import 'firebase_options.dart';
+
+// const _paystackChannel = MethodChannel('com.limpopovoice.translate/paystack');
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -56,33 +58,20 @@ class _LetsTalkAppState extends State<LetsTalkApp> {
     return MaterialApp(
       title: 'Let\'s Talk',
       debugShowCheckedModeBanner: false,
-      themeMode: _themeMode,
-      theme: ThemeData(
-        brightness: Brightness.light,
-        fontFamily: 'monospace',
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF000000),
-          primary: const Color(0xFF000000),
-          secondary: const Color(0xFF000000),
-          brightness: Brightness.light,
-          surface: const Color(0xFFF7F7F7),
-        ),
-        scaffoldBackgroundColor: const Color(0xFFF7F7F7),
-        canvasColor: const Color(0xFFF7F7F7),
-        useMaterial3: true,
-      ),
+      themeMode: ThemeMode.dark, // Fixed to dark mode only
       darkTheme: ThemeData(
         brightness: Brightness.dark,
         fontFamily: 'monospace',
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF000000),
-          primary: const Color(0xFF000000),
-          secondary: const Color(0xFF000000),
+          seedColor: const Color(0xFF4CAF50), // Natural green
+          primary: const Color(0xFF66BB6A), // Lighter green
+          secondary: const Color(0xFFA5D6A7), // Even lighter green
           brightness: Brightness.dark,
-          surface: const Color(0xFF000000),
+          surface: const Color(0xFF03070D), // Same as headerwordmark darkest color
+          surfaceContainerHighest: const Color(0xFF0D1A2A), // Headerwordmark middle color
         ),
-        scaffoldBackgroundColor: const Color(0xFF000000),
-        canvasColor: const Color(0xFF000000),
+        scaffoldBackgroundColor: const Color(0xFF03070D), // Pure black from headerwordmark
+        canvasColor: const Color(0xFF03070D), // Same as scaffold
         useMaterial3: true,
       ),
       builder: (context, child) {
@@ -143,9 +132,9 @@ class _LetsTalkAppState extends State<LetsTalkApp> {
 
 class _CreditTier {
   final String name;
-  final int secs;
+  final int credits; // 1 credit = 5 seconds (capped at 5 sec per translation)
   final String price;
-  const _CreditTier(this.name, this.secs, this.price);
+  const _CreditTier(this.name, this.credits, this.price);
 }
 
 enum _PayPalMode { sandbox, live }
@@ -184,13 +173,13 @@ class _PendingAccountMigration {
 }
 
 const _tiers = [
-  _CreditTier('Micro', 30, 'R9.99'),
-  _CreditTier('Basic', 180, 'R49.99'),
-  _CreditTier('Pro', 600, 'R169.99'),
-  _CreditTier('Enterprise', 1500, 'R419.99'),
-  _CreditTier('Organisation', 5000, 'R899.99')
+  _CreditTier('Micro', 10, 'R10'),        // 10 translations
+  _CreditTier('Basic', 50, 'R50'),        // 50 translations
+  _CreditTier('Pro', 100, 'R100'),        // 100 translations
+  _CreditTier('Enterprise', 200, 'R200'),  // 200 translations
+  _CreditTier('Organisation', 500, 'R500') // 500 translations
 ];
-const int _usageCostSecs = 5;
+const int _usageCostCredits = 1; // 1 credit = 5 seconds per translation (capped)
 const bool _enableClientFirestoreCache = false;
 const bool _enableLocalPersistentAudioCache = true;
 const Duration _localAudioCacheTtl = Duration(days: 30);
@@ -690,7 +679,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _translationService.primeSession();
     _configureAudioPlayback();
     _initSpeech();
-    unawaited(Paystack().initialize('pk_test_d8de1c368577b34a06507f38cf0bf989b47522a5', true));
+    // Native Paystack initialization is handled in the plugin's onAttachedToEngine
     _tttController.addListener(_onInputChanged);
     unawaited(_loadLearnSentences());
     unawaited(_loadUserLearnPhrases());
@@ -2196,7 +2185,7 @@ class _HomeScreenState extends State<HomeScreen> {
             'name': orgName,
             'ownerUid': uid,
             'inviteCode': inviteCode,
-            'sharedCredits': tier.secs,
+            'sharedCredits': tier.credits,
             'tierType': 'organization',
             'createdAt': now,
             'updatedAt': now,
@@ -2213,7 +2202,7 @@ class _HomeScreenState extends State<HomeScreen> {
             organizationId: orgId!,
             organizationName: orgName,
             inviteCode: inviteCode,
-            sharedCredits: tier.secs,
+            sharedCredits: tier.credits,
           );
         } else {
           final data = orgSnap.data() ?? <String, dynamic>{};
@@ -2232,7 +2221,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ? existingInviteCode
                   : inviteCode;
           final currentCredits = (data['sharedCredits'] as num?)?.toInt() ?? 0;
-          final nextCredits = currentCredits + tier.secs;
+          final nextCredits = currentCredits + tier.credits;
           tx.update(orgRef, {
             'sharedCredits': nextCredits,
             'updatedAt': now,
@@ -2267,7 +2256,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await _logOrganizationActivity(
         organizationId: update.organizationId,
         action: update.action == 'created' ? 'pool_created' : 'pool_topped_up',
-        creditsDelta: tier.secs,
+        creditsDelta: tier.credits,
         creditsAfter: update.sharedCredits,
         tierName: tier.name,
       );
@@ -3270,7 +3259,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _isTalking = false);
   }
 
-  Future<bool> _consumeUsageAllowance() async {
+  Future<bool> _consumeUsageAllowance({bool silent = false}) async {
     final orgId = _organizationId;
     if (orgId != null && orgId.isNotEmpty) {
       try {
@@ -3291,12 +3280,14 @@ class _HomeScreenState extends State<HomeScreen> {
         });
 
         if (remainingCredits == null) {
-          _showSnack('Organisation not found.');
+          if (!silent) _showSnack('Organisation not found.');
           return false;
         }
         if (remainingCredits < 0) {
-          _showSnack('Organisation pool is empty. Please top up.');
-          _showCreditTiers();
+          if (!silent) {
+            _showSnack('Organisation pool is empty. Please top up.');
+            _showCreditTiers();
+          }
           return false;
         }
 
@@ -3310,13 +3301,15 @@ class _HomeScreenState extends State<HomeScreen> {
           creditsAfter: remainingCredits,
           note: 'translation',
         );
-        _showSnack(
-          'Used $_organizationUsageCost sec | Pool: $remainingCredits remaining',
-        );
+        if (!silent) {
+          _showSnack(
+            'Used $_organizationUsageCost sec | Pool: $remainingCredits remaining',
+          );
+        }
         return true;
       } catch (e) {
         debugPrint('Organisation pool debit failed: $e');
-        _showSnack('Could not use organisation pool.');
+        if (!silent) _showSnack('Could not use organisation pool.');
         return false;
       }
     }
@@ -3325,14 +3318,16 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_credits == 30) {
       final alreadyUsed = await _hasDeviceUsedFreeTrial();
       if (alreadyUsed) {
-        _showSnack('This device already used free trial credits. Please purchase credits to continue.');
-        _showCreditTiers();
+        if (!silent) {
+          _showSnack('This device already used free trial credits. Please purchase credits to continue.');
+          _showCreditTiers();
+        }
         return false;
       }
     }
 
-    if (_credits >= _usageCostSecs) {
-      setState(() => _credits -= _usageCostSecs);
+    if (_credits >= _organizationUsageCost) {
+      setState(() => _credits -= _organizationUsageCost);
       
       // Save updated credits to Firestore
       unawaited(_updateCreditsInFirestore());
@@ -3343,17 +3338,19 @@ class _HomeScreenState extends State<HomeScreen> {
         debugPrint('Device marked as used free trial');
       }
       
-      _showSnack('Used $_usageCostSecs sec | Balance: $_credits sec remaining');
+      if (!silent) {
+        _showSnack('Used $_organizationUsageCost sec | Balance: $_credits sec remaining');
+      }
       return true;
     }
-    _showCreditTiers();
+    if (!silent) _showCreditTiers();
     return false;
   }
 
   Future<void> _doTranslate(String input) async {
-    if (!await _consumeUsageAllowance()) {
-      return;
-    }
+    // Attempt to consume credits for audio. Silent=true means don't show tiers yet.
+    final bool hasCreditsForAudio = await _consumeUsageAllowance(silent: true);
+
     setState(() => _isTranslating = true);
     final result = await _translateText(input);
     if (!mounted) {
@@ -3376,7 +3373,13 @@ class _HomeScreenState extends State<HomeScreen> {
             _maskProfanityForDisplay(result),
             DateTime.now(),
             phonetic: _phoneticText));
-    await _speakTranslatedText(result);
+
+    if (hasCreditsForAudio) {
+      await _speakTranslatedText(result);
+    } else {
+      _showSnack('Free text translation. Upgrade to hear audio!');
+      // Optionally show the tiers if they click a "Hear Audio" button later
+    }
   }
 
   String _maskProfanityForDisplay(String text) {
@@ -3451,6 +3454,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _speakText(String text, String language) async {
     if (_containsProfanity(text)) {
+      return;
+    }
+
+    // Check and consume credits for audio
+    if (!await _consumeUsageAllowance()) {
       return;
     }
 
@@ -4048,8 +4056,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           const SizedBox(width: 8),
                           Text(
                             tier.name == _organizationTierName
-                                ? '${tier.secs} credits'
-                                : '${tier.secs} sec',
+                                ? '${tier.credits} credits'
+                                : '${tier.credits} translation',
                             style: const TextStyle(color: Colors.white70),
                           ),
                           const SizedBox(width: 8),
@@ -4113,8 +4121,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   const SizedBox(height: 6),
                   Text(
                     tier.name == _organizationTierName
-                        ? '${tier.name} • ${tier.secs} credits • ${tier.price}'
-                        : '${tier.name} • ${tier.secs} sec • ${tier.price}',
+                        ? '${tier.name} • ${tier.credits} credits • ${tier.price}'
+                        : '${tier.name} • ${tier.credits} translation • ${tier.price}',
                     style: TextStyle(
                       fontSize: 13,
                       color: isDark ? Colors.white70 : Colors.black54,
@@ -4220,14 +4228,14 @@ class _HomeScreenState extends State<HomeScreen> {
       if (orgUpdate == null) return;
       _showSnack(
         orgUpdate.action == 'created'
-            ? 'Organisation created with ${tier.secs} shared credits (${tier.name}) [$sourceLabel].'
-            : 'Organisation pool topped up: ${tier.secs} credits (${tier.name}) [$sourceLabel].',
+            ? 'Organisation created with ${tier.credits} shared credits (${tier.name}) [$sourceLabel].'
+            : 'Organisation pool topped up: ${tier.credits} credits (${tier.name}) [$sourceLabel].',
       );
     } else {
-      setState(() => _credits += tier.secs);
+      setState(() => _credits += tier.credits);
       // Save updated credits to Firestore after purchase
       unawaited(_updateCreditsInFirestore());
-      _showSnack('Credits added: ${tier.secs} sec (${tier.name}) [$sourceLabel].');
+      _showSnack('Credits added: ${tier.credits} translation (${tier.name}) [$sourceLabel].');
     }
 
     try {
@@ -4235,7 +4243,7 @@ class _HomeScreenState extends State<HomeScreen> {
         'userId': _authUid,
         'organizationId': _organizationId,
         'tierName': tier.name,
-        'secondsAdded': tier.secs,
+        'secondsAdded': tier.credits,
         'amountPaid': amount,
         'status': status,
         'reference': reference,
@@ -4273,29 +4281,39 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<dynamic> _launchPaystackWithViewRetry(String accessCode) async {
-    Object? lastError;
-    for (int attempt = 0; attempt < 3; attempt++) {
-      await _waitForInteractiveView();
-      if (!mounted) {
-        throw StateError('Widget is no longer mounted.');
-      }
+    try {
+      // Secure approach: Open Paystack Checkout URL in a WebView
+      // This avoids having the Secret Key in the frontend.
+      final checkoutUrl = 'https://checkout.paystack.com/$accessCode';
+      
+      final result = await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => _PaystackWebView(checkoutUrl: checkoutUrl),
+        ),
+      );
 
-      try {
-        return await Paystack().launch(accessCode);
-      } catch (e) {
-        lastError = e;
-        final message = e.toString();
-        final isMissingView =
-            message.contains('MISSING_VIEW') ||
-            message.contains('Activity is not found to present payment UI');
-        if (!isMissingView || attempt == 2) {
-          rethrow;
-        }
-        debugPrint('Paystack launch missing view, retrying (${attempt + 1}/2)...');
-        await Future<void>.delayed(Duration(milliseconds: 250 * (attempt + 1)));
+      if (result == 'success') {
+        return _PaystackResponse(
+          status: 'success',
+          reference: accessCode,
+          message: 'Payment Successful',
+        );
+      } else {
+        return _PaystackResponse(
+          status: 'error',
+          reference: '',
+          message: 'Payment Cancelled or Failed',
+        );
       }
+    } catch (e) {
+      debugPrint('Paystack error: $e');
+      return _PaystackResponse(
+        status: 'error',
+        reference: '',
+        message: e.toString(),
+      );
     }
-    throw lastError ?? StateError('Paystack launch failed');
   }
 
   void _startPaystackTierPayment(_CreditTier tier) async {
@@ -4667,23 +4685,6 @@ class _HomeScreenState extends State<HomeScreen> {
                               Icon(Icons.school, size: 18, color: isDark ? Colors.white : Colors.black),
                               const SizedBox(width: 12),
                               Text('Learn', style: TextStyle(color: isDark ? Colors.white : Colors.black)),
-                            ],
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'theme',
-                          child: Row(
-                            children: [
-                              Icon(
-                                isDark ? Icons.light_mode : Icons.dark_mode,
-                                size: 18,
-                                color: isDark ? Colors.white : Colors.black,
-                              ),
-                              const SizedBox(width: 12),
-                              Text(
-                                isDark ? 'Light Mode' : 'Dark Mode',
-                                style: TextStyle(color: isDark ? Colors.white : Colors.black),
-                              ),
                             ],
                           ),
                         ),
@@ -5893,7 +5894,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ],
     );
   }
-
+  
   @override
   void dispose() {
     _speech.stop();
@@ -5901,5 +5902,59 @@ class _HomeScreenState extends State<HomeScreen> {
     _autocorrectTimer?.cancel();
     _tttController.dispose();
     super.dispose();
+  }
+}
+
+class _PaystackResponse {
+  final String status;
+  final String reference;
+  final String message;
+  _PaystackResponse({required this.status, required this.reference, required this.message});
+}
+
+class _PaystackWebView extends StatefulWidget {
+  final String checkoutUrl;
+  const _PaystackWebView({required this.checkoutUrl});
+
+  @override
+  State<_PaystackWebView> createState() => _PaystackWebViewState();
+}
+
+class _PaystackWebViewState extends State<_PaystackWebView> {
+  late final WebViewController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onNavigationRequest: (request) {
+            final url = request.url.toLowerCase();
+            if (url.contains('finish') || url.contains('success') || url.contains('completed')) {
+              Navigator.pop(context, 'success');
+              return NavigationDecision.prevent;
+            }
+            if (url.contains('cancel') || url.contains('close')) {
+              Navigator.pop(context, 'cancel');
+              return NavigationDecision.prevent;
+            }
+            return NavigationDecision.navigate;
+          },
+        ),
+      )
+      ..loadRequest(Uri.parse(widget.checkoutUrl));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Secure Payment'),
+        backgroundColor: Colors.black,
+      ),
+      body: WebViewWidget(controller: _controller),
+    );
   }
 }
