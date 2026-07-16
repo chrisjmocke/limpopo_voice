@@ -29,7 +29,7 @@ const createPaystackTransaction = onCall(
       throw new HttpsError("unauthenticated", "User must be signed in");
     }
 
-    const { amountCents, email, orgId } = request.data || {};
+    const { amountCents, email, orgId, callback_url } = request.data || {};
     if (typeof amountCents !== "number" || amountCents <= 0) {
       throw new HttpsError("invalid-argument", "Invalid amount");
     }
@@ -46,6 +46,7 @@ const createPaystackTransaction = onCall(
       email: payerEmail,
       amount: Math.trunc(amountCents),
       reference,
+      callback_url: typeof callback_url === "string" ? callback_url : undefined,
       metadata: {
         userId: request.auth.uid,
         orgId: typeof orgId === "string" && orgId.trim() ? orgId.trim() : null,
@@ -102,7 +103,7 @@ const createPaystackTransactionHttp = onRequest(
       return res.status(401).send({ error: "Unauthorized" });
     }
 
-    const { amountCents, email, orgId } = req.body || {};
+    const { amountCents, email, orgId, callback_url } = req.body || {};
     if (typeof amountCents !== "number" || amountCents <= 0) {
       return res.status(400).send({ error: "Invalid amount" });
     }
@@ -126,6 +127,7 @@ const createPaystackTransactionHttp = onRequest(
           email: payerEmail,
           amount: Math.trunc(amountCents),
           reference,
+          callback_url: typeof callback_url === "string" ? callback_url : undefined,
           metadata: {
             userId: decodedToken.uid,
             orgId: typeof orgId === "string" && orgId.trim() ? orgId.trim() : null,
@@ -170,8 +172,14 @@ const paystackWebhook = onRequest(
     }
 
     const secretKey = getPaystackSecret();
-    const rawBody = req.rawBody || Buffer.from(JSON.stringify(req.body || {}));
-    const hash = crypto.createHmac("sha512", secretKey).update(rawBody).digest("hex");
+    // In Firebase Functions v2, req.rawBody is the preferred way to get the original body for signature verification.
+    // Reconstructing it with JSON.stringify is unreliable due to potential whitespace/key-order differences.
+    const rawBody = req.rawBody;
+    if (!rawBody) {
+      console.error("Missing rawBody in webhook request. Signature verification might fail.");
+    }
+    const bodyToVerify = rawBody || Buffer.from(JSON.stringify(req.body || {}));
+    const hash = crypto.createHmac("sha512", secretKey).update(bodyToVerify).digest("hex");
 
     if (hash !== signature) {
       console.warn("Invalid Paystack webhook signature");

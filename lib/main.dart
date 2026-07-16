@@ -431,6 +431,8 @@ class _HomeScreenState extends State<HomeScreen> {
   final stt.SpeechToText _speech = stt.SpeechToText();
   late final TranslationService _translationService;
   late final AudioPlayer _audioPlayer;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _creditsSubscription;
+  final Completer<void> _deviceIdCompleter = Completer<void>();
   bool _speechAvailable = false;
   bool _isTalking = false;
   bool _isTranslating = false;
@@ -529,7 +531,7 @@ class _HomeScreenState extends State<HomeScreen> {
   _CreditTier? _pendingPayPalTier;
   double? _pendingPayPalAmount;
   _PayPalMode? _pendingPayPalMode;
-  int _credits = 30;
+  int _credits = 6;
   String? _authUid;
   String? _authEmail;
   String? _installId;
@@ -842,11 +844,23 @@ class _HomeScreenState extends State<HomeScreen> {
       unawaited(_refreshGoogleProfileData());
     }
 
+    // Load persisted credits first so we don't overwrite them with defaults
+    await _loadCreditsFromFirestore();
     await _ensureUserProfileDocument();
-    
-    // Load persisted credits for authenticated users
-    if (!user.isAnonymous) {
-      await _loadCreditsFromFirestore();
+
+    // Setup real-time credits listener
+    await _creditsSubscription?.cancel();
+    final ref = _userDocRef();
+    if (ref != null) {
+      _creditsSubscription = ref.snapshots().listen((snapshot) {
+        if (snapshot.exists) {
+          final credits = (snapshot.data()?['credits'] as num?)?.toInt();
+          if (credits != null && credits != _credits) {
+            debugPrint('Real-time credit update: $credits');
+            if (mounted) setState(() => _credits = credits);
+          }
+        }
+      });
     }
     
     if (reloadOrganization) {
@@ -1725,7 +1739,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<String?> _requestPaystackAccessCode(_CreditTier tier, double amount) async {
+  Future<String?> _requestPaystackAccessCode(_CreditTier tier, double amount, {String? callbackUrl}) async {
     final headers = await _buildAuthorizedJsonHeaders();
     if (headers == null) {
       _showSnack('Could not authenticate payment request.');
@@ -1736,6 +1750,7 @@ class _HomeScreenState extends State<HomeScreen> {
       'amountCents': (amount * 100).round(),
       'email': _authEmail ?? '',
       'orgId': tier.name == _organizationTierName ? _organizationId : null,
+      'callback_url': callbackUrl,
     };
 
     final uri = Uri.parse(_paystackInitUrl());
@@ -1799,7 +1814,6 @@ class _HomeScreenState extends State<HomeScreen> {
       'authUid': _authUid,
       'email': _authEmail,
       'installId': _installId,
-      'credits': _credits,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
   }
@@ -2684,10 +2698,17 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     } catch (e) {
       debugPrint('Failed to get device ID: $e');
+    } finally {
+      if (!_deviceIdCompleter.isCompleted) {
+        _deviceIdCompleter.complete();
+      }
     }
   }
 
   Future<bool> _hasDeviceUsedFreeTrial() async {
+    if (!_deviceIdCompleter.isCompleted) {
+      await _deviceIdCompleter.future;
+    }
     if (_deviceId == null || _deviceId!.isEmpty) {
       return false;
     }
@@ -2705,6 +2726,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _markDeviceAsUsedFreeTrial() async {
+    if (!_deviceIdCompleter.isCompleted) {
+      await _deviceIdCompleter.future;
+    }
     if (_deviceId == null || _deviceId!.isEmpty) {
       return;
     }
@@ -2777,6 +2801,19 @@ class _HomeScreenState extends State<HomeScreen> {
           debugPrint('Failed to record device install: $e');
         });
         debugPrint('Install ID $installId registered for first free trial use');
+      }
+
+      // If anonymous user and device already used trial, set credits to 0
+      if (_isAnonymousUser()) {
+        final deviceUsedTrial = await _hasDeviceUsedFreeTrial();
+        if (deviceUsedTrial && _credits > 0) {
+          debugPrint('Anonymous user on device that already used trial. Setting credits to 0.');
+          if (mounted) {
+            setState(() => _credits = 0);
+          } else {
+            _credits = 0;
+          }
+        }
       }
 
       await _ensureUserProfileDocument();
@@ -3301,9 +3338,10 @@ class _HomeScreenState extends State<HomeScreen> {
           creditsAfter: remainingCredits,
           note: 'translation',
         );
+        debugPrint('Deducted $_organizationUsageCost from Org Pool. Remaining: $remainingCredits');
         if (!silent) {
           _showSnack(
-            'Used $_organizationUsageCost sec | Pool: $remainingCredits remaining',
+            'Used $_organizationUsageCost credits from Organisation Pool | $remainingCredits remaining',
           );
         }
         return true;
@@ -3315,9 +3353,17 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     // Check if user is trying to use free trial credits and device already used them
-    if (_credits == 30) {
+    if (_credits == 6) {
       final alreadyUsed = await _hasDeviceUsedFreeTrial();
       if (alreadyUsed) {
+        debugPrint('Device trial already used. Resetting local credits to 0.');
+        if (mounted) {
+          setState(() => _credits = 0);
+        } else {
+          _credits = 0;
+        }
+        unawaited(_updateCreditsInFirestore());
+
         if (!silent) {
           _showSnack('This device already used free trial credits. Please purchase credits to continue.');
           _showCreditTiers();
@@ -3326,20 +3372,21 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
-    if (_credits >= _organizationUsageCost) {
-      setState(() => _credits -= _organizationUsageCost);
+    if (_credits >= _usageCostCredits) {
+      setState(() => _credits -= _usageCostCredits);
       
       // Save updated credits to Firestore
       unawaited(_updateCreditsInFirestore());
+      debugPrint('Deducted $_usageCostCredits from Personal Balance. Remaining: $_credits');
       
       // Mark device as used free trial when consuming first free credit
-      if (_credits < 30) {
+      if (_credits < 6) {
         await _markDeviceAsUsedFreeTrial();
         debugPrint('Device marked as used free trial');
       }
       
       if (!silent) {
-        _showSnack('Used $_organizationUsageCost sec | Balance: $_credits sec remaining');
+        _showSnack('Used $_usageCostCredits credit | Balance: $_credits translations remaining');
       }
       return true;
     }
@@ -3348,14 +3395,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _doTranslate(String input) async {
-    // Attempt to consume credits for audio. Silent=true means don't show tiers yet.
-    final bool hasCreditsForAudio = await _consumeUsageAllowance(silent: true);
-
     setState(() => _isTranslating = true);
+    
+    // 1. Get Translation (checks text cache)
     final result = await _translateText(input);
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
 
     setState(() {
       _translatedRawText = result;
@@ -3364,6 +3408,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _isTranslating = false;
     });
 
+    // 2. Add to history
     _history.insert(
         0,
         HistoryItem(
@@ -3374,11 +3419,20 @@ class _HomeScreenState extends State<HomeScreen> {
             DateTime.now(),
             phonetic: _phoneticText));
 
-    if (hasCreditsForAudio) {
+    // 3. Audio Handling
+    final provider = _ttsProviderForLanguage(_selectedOutputLang);
+    final voiceName = _voiceNameForLanguage(_selectedOutputLang);
+    final safeForSpeech = _silenceProfanityForSpeech(result);
+    
+    if (safeForSpeech.isEmpty) return;
+
+    // Initial live translation ALWAYS deducts a credit as per user requirement.
+    // The cache is still used for repeats and to speed up generation, but deduction happens here.
+    final bool hasCredits = await _consumeUsageAllowance(silent: false);
+    if (hasCredits) {
       await _speakTranslatedText(result);
     } else {
       _showSnack('Free text translation. Upgrade to hear audio!');
-      // Optionally show the tiers if they click a "Hear Audio" button later
     }
   }
 
@@ -3457,22 +3511,46 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    // Check and consume credits for audio
-    if (!await _consumeUsageAllowance()) {
-      return;
-    }
-
     final safeForSpeech = _silenceProfanityForSpeech(text);
     if (safeForSpeech.trim().isEmpty) return;
+
     try {
       final provider = _ttsProviderForLanguage(language);
       final voiceName = _voiceNameForLanguage(language);
+      
+      // 1. Check Cache First (No credit deduction)
+      final cacheVoiceKey = '$provider|${voiceName ?? ''}';
+      final cacheLookupKey = _getCacheKey(safeForSpeech, language, cacheVoiceKey);
+
+      final localCached = await _getLocalCachedAudio(cacheLookupKey);
+      if (localCached != null && localCached.isNotEmpty) {
+        debugPrint('Repeat: Audio cache hit (local)');
+        await _audioPlayer.play(BytesSource(localCached));
+        return;
+      }
+
+      final cachedBase64 = await _getCachedAudio(safeForSpeech, language, cacheVoiceKey);
+      if (cachedBase64 != null) {
+        debugPrint('Repeat: Audio cache hit (shared)');
+        final decoded = base64Decode(cachedBase64);
+        await _saveLocalCachedAudio(cacheLookupKey, decoded);
+        await _audioPlayer.play(BytesSource(decoded));
+        return;
+      }
+
+      // 2. Cache Miss: Deduct credit and generate
+      debugPrint('Repeat: Cache miss, deducting credit');
+      if (!await _consumeUsageAllowance()) {
+        return;
+      }
+
       final audioData = await _generateAudioWithCache(
         safeForSpeech,
         language,
         voiceName,
         provider: provider,
       );
+
       if (audioData != null && audioData.isNotEmpty) {
         await _audioPlayer.play(BytesSource(audioData));
       } else {
@@ -4012,7 +4090,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     label: Text(
                       _organizationId != null && _organizationId!.isNotEmpty
                           ? 'Org Pool: ${_organizationSharedCredits ?? 0} credits'
-                          : 'Balance: $_credits sec',
+                          : 'Balance: $_credits translations',
                       style: TextStyle(
                         color: isDark ? Colors.white : const Color(0xFF000000),
                         fontWeight: FontWeight.bold,
@@ -4057,7 +4135,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           Text(
                             tier.name == _organizationTierName
                                 ? '${tier.credits} credits'
-                                : '${tier.credits} translation',
+                                : '${tier.credits} translations',
                             style: const TextStyle(color: Colors.white70),
                           ),
                           const SizedBox(width: 8),
@@ -4122,7 +4200,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   Text(
                     tier.name == _organizationTierName
                         ? '${tier.name} • ${tier.credits} credits • ${tier.price}'
-                        : '${tier.name} • ${tier.credits} translation • ${tier.price}',
+                        : '${tier.name} • ${tier.credits} translations • ${tier.price}',
                     style: TextStyle(
                       fontSize: 13,
                       color: isDark ? Colors.white70 : Colors.black54,
@@ -4235,7 +4313,7 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() => _credits += tier.credits);
       // Save updated credits to Firestore after purchase
       unawaited(_updateCreditsInFirestore());
-      _showSnack('Credits added: ${tier.credits} translation (${tier.name}) [$sourceLabel].');
+      _showSnack('Credits added: ${tier.credits} translations (${tier.name}) [$sourceLabel].');
     }
 
     try {
@@ -4303,7 +4381,7 @@ class _HomeScreenState extends State<HomeScreen> {
         return _PaystackResponse(
           status: 'error',
           reference: '',
-          message: 'Payment Cancelled or Failed',
+          message: 'Payment window closed. If you completed payment, your credits will update shortly.',
         );
       }
     } catch (e) {
@@ -4330,7 +4408,7 @@ class _HomeScreenState extends State<HomeScreen> {
     String? accessCode = dotenv.env['PAYSTACK_TEST_ACCESS_CODE'];
     accessCode = (accessCode != null && accessCode.trim().isNotEmpty)
         ? accessCode.trim()
-        : await _requestPaystackAccessCode(tier, amount);
+        : await _requestPaystackAccessCode(tier, amount, callbackUrl: 'https://standard.paystack.co/close');
 
     if (accessCode == null || accessCode.isEmpty) {
       if (_allowPaystackSandboxSimulation()) {
@@ -4352,19 +4430,42 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     try {
+      // Listen for real-time credit updates during the payment process
+      final userRef = _userDocRef();
+      StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? subscription;
+      bool creditedByWebhook = false;
+
+      if (userRef != null) {
+        subscription = userRef.snapshots().listen((snapshot) {
+          if (!snapshot.exists) return;
+          final newCredits = (snapshot.data()?['credits'] as num?)?.toInt() ?? 0;
+          if (newCredits > _credits) {
+            creditedByWebhook = true;
+            debugPrint('✅ Credits updated in Firestore by webhook during payment.');
+            if (mounted) setState(() => _credits = newCredits);
+          }
+        });
+      }
+
       final response = await _launchPaystackWithViewRetry(accessCode);
-      final isSuccess = response.status.toLowerCase() == 'success';
+      await subscription?.cancel();
+
+      final isSuccess = response.status.toLowerCase() == 'success' || creditedByWebhook;
 
       if (isSuccess) {
-        await _completeTierPurchase(
-          tier,
-          amount: amount,
-          status: 'completed_sandbox_paystack',
-          reference: response.reference,
-          sourceLabel: 'Paystack Sandbox',
-        );
+        if (!creditedByWebhook) {
+          await _completeTierPurchase(
+            tier,
+            amount: amount,
+            status: 'completed_sandbox_paystack',
+            reference: response.reference,
+            sourceLabel: 'Paystack Sandbox',
+          );
+        } else {
+          _showSnack('Credits added successfully.');
+        }
       } else {
-        _showSnack('Payment failed: ${response.message}');
+        _showSnack(response.message);
       }
     } catch (e) {
       debugPrint('Paystack error: $e');
@@ -4744,7 +4845,9 @@ class _HomeScreenState extends State<HomeScreen> {
                               borderRadius: BorderRadius.circular(999),
                             ),
                             child: Text(
-                              '$_credits',
+                              _organizationId != null && _organizationId!.isNotEmpty
+                                  ? '${_organizationSharedCredits ?? 0}'
+                                  : '$_credits',
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w700,
@@ -5897,6 +6000,7 @@ class _HomeScreenState extends State<HomeScreen> {
   
   @override
   void dispose() {
+    _creditsSubscription?.cancel();
     _speech.stop();
     _audioPlayer.release();
     _autocorrectTimer?.cancel();
@@ -5932,7 +6036,12 @@ class _PaystackWebViewState extends State<_PaystackWebView> {
         NavigationDelegate(
           onNavigationRequest: (request) {
             final url = request.url.toLowerCase();
-            if (url.contains('finish') || url.contains('success') || url.contains('completed')) {
+            // Paystack callback URL detection
+            if (url.contains('standard.paystack.co/close') ||
+                url.contains('finish') ||
+                url.contains('success') ||
+                url.contains('completed') ||
+                (url.contains('trxref=') && url.contains('reference='))) {
               Navigator.pop(context, 'success');
               return NavigationDecision.prevent;
             }

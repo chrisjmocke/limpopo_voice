@@ -66,5 +66,18 @@ service cloud.firestore {
         request.resource.data.createdAt == request.time;
       allow read, update, delete: if false;
     }
+
+    // Global device tracking for free trial abuse prevention.
+    match /global_device_installs/{deviceId} {
+      allow read, write: if signedIn();
+    }
+
+    // Shared caches for translations and audio.
+    match /cache_translations/{cacheKey} {
+      allow read, write: if signedIn();
+    }
+    match /cache_audio/{cacheKey} {
+      allow read, write: if signedIn();
+    }
   }
 }
