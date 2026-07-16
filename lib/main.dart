@@ -438,6 +438,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isTranslating = false;
   String _selectedInputLang = 'English';
   String _selectedOutputLang = 'Sepedi';
+  bool _showCreditsInHeader = true;
   final _inputLangs = [
     'English',
     'Afrikaans',
@@ -3157,6 +3158,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final accepted = prefs.getBool(key) ?? false;
     if (accepted || !mounted) return;
 
+    setState(() => _showCreditsInHeader = false);
+
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -3207,7 +3210,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
                 ),
-                onPressed: () => Navigator.of(ctx).pop(),
+                onPressed: () {
+                  Navigator.of(ctx).pop();
+                  setState(() => _showCreditsInHeader = true);
+                },
                 child: const Text('Accept and Close', style: TextStyle(color: Colors.black)),
               );
             },
@@ -4836,26 +4842,27 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        GestureDetector(
-                          onTap: _showCreditTiers,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: isDark ? Colors.white12 : const Color(0xFFF1F3F5),
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Text(
-                              _organizationId != null && _organizationId!.isNotEmpty
-                                  ? '${_organizationSharedCredits ?? 0}'
-                                  : '$_credits',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                color: isDark ? Colors.white : const Color(0xFF000000),
+                        if (_showCreditsInHeader)
+                          GestureDetector(
+                            onTap: _showCreditTiers,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: isDark ? Colors.white12 : const Color(0xFFF1F3F5),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Text(
+                                _organizationId != null && _organizationId!.isNotEmpty
+                                    ? '${_organizationSharedCredits ?? 0}'
+                                    : '$_credits',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: isDark ? Colors.white : const Color(0xFF000000),
+                                ),
                               ),
                             ),
                           ),
-                        ),
                         const SizedBox(width: 8),
                         PopupMenuButton<int>(
                           tooltip: 'User menu',
