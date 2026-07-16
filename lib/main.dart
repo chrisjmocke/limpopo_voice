@@ -2805,15 +2805,18 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       // If anonymous user and device already used trial, set credits to 0
+      // Only do this if they are at the starting balance (6), to avoid resetting
+      // someone who is mid-trial and just restarted the app.
       if (_isAnonymousUser()) {
         final deviceUsedTrial = await _hasDeviceUsedFreeTrial();
-        if (deviceUsedTrial && _credits > 0) {
+        if (deviceUsedTrial && _credits == 6) {
           debugPrint('Anonymous user on device that already used trial. Setting credits to 0.');
           if (mounted) {
             setState(() => _credits = 0);
           } else {
             _credits = 0;
           }
+          unawaited(_updateCreditsInFirestore());
         }
       }
 
