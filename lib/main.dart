@@ -187,7 +187,7 @@ const int _maxLocalAudioCacheEntries = 120;
 const String _localAudioCacheIndexPrefsKey = 'local_audio_cache_index_v1';
 const String _userLearnPhrasesPrefsKey = 'user_learn_phrases_v1';
 const String _organizationTierName = 'Organisation';
-const int _organizationUsageCost = 5;
+const int _organizationUsageCost = 1;
 
 class HistoryItem {
   final String inputLang, outputLang, original, translated;
@@ -540,6 +540,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _organizationId;
   String? _organizationName;
   String? _organizationInviteCode;
+  int? _organizationMemberCreditLimit;
   String _organizationRole = 'personal';
   int? _organizationSharedCredits;
   bool _authBusy = false;
@@ -636,8 +637,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String _ttsProviderForLanguage(String language) {
-    final normalized = _normalizeLanguageLabel(language);
-    return _southAfricanLanguages.contains(normalized) ? 'narakeet' : 'google';
+    return 'narakeet';
   }
 
   String _translationFunctionUrl() {
@@ -1834,7 +1834,11 @@ class _HomeScreenState extends State<HomeScreen> {
             _credits = credits;
           }
           debugPrint('Loaded credits from Firestore: $_credits');
+        } else {
+          debugPrint('Credits document exists but credits field is missing or invalid: ${doc.data()}');
         }
+      } else {
+        debugPrint('Credits document does not exist for user: $_authUid');
       }
     } catch (e) {
       debugPrint('Failed to load credits: $e');
@@ -1878,6 +1882,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _organizationInviteCode =
             (data['inviteCode'] as String?) ?? _organizationInviteCode;
         _organizationSharedCredits = (data['sharedCredits'] as num?)?.toInt();
+        _organizationMemberCreditLimit = (data['memberCreditLimit'] as num?)?.toInt();
       });
     } catch (e) {
       debugPrint('Organization refresh failed: $e');
@@ -1937,6 +1942,7 @@ class _HomeScreenState extends State<HomeScreen> {
         'organizationRole': 'member',
         'organizationInviteCode': orgData['inviteCode'],
         'organizationName': orgData['name'],
+        'organizationMemberCreditLimit': orgData['memberCreditLimit'] ?? 0,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
@@ -1946,6 +1952,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _organizationRole = 'member';
         _organizationInviteCode = orgData['inviteCode'] as String?;
         _organizationName = orgData['name'] as String?;
+        _organizationMemberCreditLimit = (orgData['memberCreditLimit'] as num?)?.toInt() ?? 0;
       });
       await _refreshOrganizationDetails();
       _showSnack('Joined ${_organizationName ?? 'organization'} successfully.');
@@ -2360,6 +2367,8 @@ class _HomeScreenState extends State<HomeScreen> {
     String? tierName,
     double? amount,
     String? note,
+    String? inputText,
+    String? outputText,
   }) async {
     final uid = _authUid;
     if (uid == null || uid.isEmpty || organizationId.isEmpty) return;
@@ -2376,6 +2385,8 @@ class _HomeScreenState extends State<HomeScreen> {
         'tierName': tierName,
         'amount': amount,
         'note': note,
+        'inputText': inputText,
+        'outputText': outputText,
         'actorUid': uid,
         'actorRole': _organizationRole,
         'createdAt': FieldValue.serverTimestamp(),
@@ -2393,6 +2404,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final nameController = TextEditingController(text: _organizationName ?? 'My Organisation');
+    final creditLimitController = TextEditingController(text: (_organizationMemberCreditLimit ?? 0).toString());
     bool regenerateInviteCode = false;
 
     await showDialog<void>(
@@ -2415,6 +2427,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   TextField(
                     controller: nameController,
                     decoration: const InputDecoration(labelText: 'Organisation name'),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: creditLimitController,
+                    decoration: const InputDecoration(labelText: 'Member credit limit (0 for unlimited)'),
+                    keyboardType: TextInputType.number,
                   ),
                   const SizedBox(height: 10),
                   Text(
@@ -2461,6 +2479,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     Navigator.of(ctx).pop();
                     await _updateOrganizationSettings(
                       nameController.text,
+                      memberCreditLimit: int.tryParse(creditLimitController.text) ?? 0,
                       regenerateInviteCode: regenerateInviteCode,
                     );
                   },
@@ -2559,6 +2578,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   final creditsAfter = (data['creditsAfter'] as num?)?.toInt();
                   final tierName = data['tierName'] as String?;
                   final actorRole = (data['actorRole'] as String?) ?? 'member';
+                  final inputText = data['inputText'] as String?;
+                  final outputText = data['outputText'] as String?;
 
                   final subtitleParts = <String>[
                     formatTimestamp(data['createdAt']),
@@ -2592,6 +2613,44 @@ class _HomeScreenState extends State<HomeScreen> {
                         color: isDark ? Colors.white70 : Colors.black54,
                       ),
                     ),
+                    trailing: (action == 'credit_spent' && (inputText != null || outputText != null))
+                        ? IconButton(
+                            icon: Icon(
+                              Icons.remove_red_eye_outlined,
+                              color: isDark ? Colors.white70 : Colors.black54,
+                            ),
+                            onPressed: () => showDialog<void>(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+                                title: const Text('Translation Details'),
+                                content: SingleChildScrollView(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (inputText != null) ...[
+                                        const Text('Input:', style: TextStyle(fontWeight: FontWeight.bold)),
+                                        Text(inputText),
+                                        const SizedBox(height: 10),
+                                      ],
+                                      if (outputText != null) ...[
+                                        const Text('Output:', style: TextStyle(fontWeight: FontWeight.bold)),
+                                        Text(outputText),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.of(ctx).pop(),
+                                    child: const Text('Close'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                        : null,
                   );
                 },
               );
@@ -2614,6 +2673,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _updateOrganizationSettings(
     String newName, {
+    int? memberCreditLimit,
     required bool regenerateInviteCode,
   }) async {
     final orgId = _organizationId;
@@ -2627,25 +2687,36 @@ class _HomeScreenState extends State<HomeScreen> {
     final updatedCode = regenerateInviteCode ? _newInviteCode() : _organizationInviteCode;
 
     try {
-      await orgRef.update({
+      final updateData = <String, dynamic>{
         'name': trimmedName,
         'inviteCode': updatedCode,
         'updatedAt': FieldValue.serverTimestamp(),
-      });
+      };
+      if (memberCreditLimit != null) {
+        updateData['memberCreditLimit'] = memberCreditLimit;
+      }
+      await orgRef.update(updateData);
 
       final userRef = _userDocRef();
       if (userRef != null) {
-        await userRef.set({
+        final userData = <String, dynamic>{
           'organizationName': trimmedName,
           'organizationInviteCode': updatedCode,
           'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
+        };
+        if (memberCreditLimit != null) {
+          userData['organizationMemberCreditLimit'] = memberCreditLimit;
+        }
+        await userRef.set(userData, SetOptions(merge: true));
       }
 
       if (!mounted) return;
       setState(() {
         _organizationName = trimmedName;
         _organizationInviteCode = updatedCode;
+        if (memberCreditLimit != null) {
+          _organizationMemberCreditLimit = memberCreditLimit;
+        }
       });
 
       _showSnack('Organisation settings updated.');
@@ -3305,7 +3376,11 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _isTalking = false);
   }
 
-  Future<bool> _consumeUsageAllowance({bool silent = false}) async {
+  Future<bool> _consumeUsageAllowance({
+    bool silent = false,
+    String? inputText,
+    String? outputText,
+  }) async {
     final orgId = _organizationId;
     if (orgId != null && orgId.isNotEmpty) {
       try {
@@ -3346,6 +3421,8 @@ class _HomeScreenState extends State<HomeScreen> {
           creditsDelta: -_organizationUsageCost,
           creditsAfter: remainingCredits,
           note: 'translation',
+          inputText: inputText,
+          outputText: outputText,
         );
         debugPrint('Deducted $_organizationUsageCost from Org Pool. Remaining: $remainingCredits');
         if (!silent) {
@@ -3437,12 +3514,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // Initial live translation ALWAYS deducts a credit as per user requirement.
     // The cache is still used for repeats and to speed up generation, but deduction happens here.
-    final bool hasCredits = await _consumeUsageAllowance(silent: false);
-    if (hasCredits) {
-      await _speakTranslatedText(result);
-    } else {
-      _showSnack('Free text translation. Upgrade to hear audio!');
-    }
+    await _speakTranslatedText(result);
   }
 
   String _maskProfanityForDisplay(String text) {
@@ -3516,42 +3588,46 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _speakText(String text, String language) async {
+    debugPrint('[_speakText] Attempting to speak text: "$text" in language: $language');
     if (_containsProfanity(text)) {
+      debugPrint('[_speakText] Profanity detected, aborting speech.');
       return;
     }
 
     final safeForSpeech = _silenceProfanityForSpeech(text);
-    if (safeForSpeech.trim().isEmpty) return;
+    if (safeForSpeech.trim().isEmpty) {
+      debugPrint('[_speakText] Safe text is empty, aborting speech.');
+      return;
+    }
 
     try {
       final provider = _ttsProviderForLanguage(language);
       final voiceName = _voiceNameForLanguage(language);
+      debugPrint('[_speakText] Determined provider: $provider, voice: $voiceName');
       
       // 1. Check Cache First (No credit deduction)
       final cacheVoiceKey = '$provider|${voiceName ?? ''}';
       final cacheLookupKey = _getCacheKey(safeForSpeech, language, cacheVoiceKey);
+      debugPrint('[_speakText] Cache lookup key: $cacheLookupKey');
 
       final localCached = await _getLocalCachedAudio(cacheLookupKey);
       if (localCached != null && localCached.isNotEmpty) {
-        debugPrint('Repeat: Audio cache hit (local)');
+        debugPrint('[_speakText] Audio cache hit (local)');
         await _audioPlayer.play(BytesSource(localCached));
         return;
       }
 
       final cachedBase64 = await _getCachedAudio(safeForSpeech, language, cacheVoiceKey);
       if (cachedBase64 != null) {
-        debugPrint('Repeat: Audio cache hit (shared)');
+        debugPrint('[_speakText] Audio cache hit (shared)');
         final decoded = base64Decode(cachedBase64);
         await _saveLocalCachedAudio(cacheLookupKey, decoded);
         await _audioPlayer.play(BytesSource(decoded));
         return;
       }
 
-      // 2. Cache Miss: Deduct credit and generate
-      debugPrint('Repeat: Cache miss, deducting credit');
-      if (!await _consumeUsageAllowance()) {
-        return;
-      }
+      // 2. Cache Miss: Generate audio, then deduct credit
+      debugPrint('[_speakText] Cache miss, generating audio.');
 
       final audioData = await _generateAudioWithCache(
         safeForSpeech,
@@ -3561,12 +3637,18 @@ class _HomeScreenState extends State<HomeScreen> {
       );
 
       if (audioData != null && audioData.isNotEmpty) {
+        if (!await _consumeUsageAllowance(inputText: safeForSpeech)) {
+          debugPrint('[_speakText] Failed to consume usage allowance after generation, ignoring.');
+          return;
+        }
+        debugPrint('[_speakText] Audio data generated, playing.');
         await _audioPlayer.play(BytesSource(audioData));
       } else {
+        debugPrint('[_speakText] Audio data is null or empty. Showing Narakeet unavailable message.');
         _showSnack(_narakeetUnavailableMessage());
       }
     } catch (e) {
-      debugPrint('Audio playback error: $e');
+      debugPrint('[_speakText] Audio playback error: $e');
       _showSnack('Audio error: $e');
     }
   }
@@ -3613,13 +3695,15 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<Uint8List?> _generateAudioWithCache(
       String text, String language, String? voice,
       {required String provider}) async {
+    debugPrint('[_generateAudioWithCache] Attempting to generate audio for text: "$text", language: $language, voice: $voice, provider: $provider');
     final cacheVoiceKey = '$provider|${voice ?? ''}';
     final cacheLookupKey = _getCacheKey(text, language, cacheVoiceKey);
+    debugPrint('[_generateAudioWithCache] Cache lookup key: $cacheLookupKey');
 
     final localCached = await _getLocalCachedAudio(cacheLookupKey);
     if (localCached != null && localCached.isNotEmpty) {
       _localAudioCacheHits++;
-      debugPrint('Audio cache hit (local): $_localAudioCacheHits');
+      debugPrint('[_generateAudioWithCache] Audio cache hit (local): $_localAudioCacheHits');
       return localCached;
     }
 
@@ -3628,12 +3712,12 @@ class _HomeScreenState extends State<HomeScreen> {
       final decoded = base64Decode(cachedBase64);
       await _saveLocalCachedAudio(cacheLookupKey, decoded);
       _sharedAudioCacheHits++;
-      debugPrint('Audio cache hit (shared): $_sharedAudioCacheHits');
+      debugPrint('[_generateAudioWithCache] Audio cache hit (shared): $_sharedAudioCacheHits');
       return decoded;
     }
 
     _remoteAudioCacheMisses++;
-    debugPrint('Audio cache miss (remote generation): $_remoteAudioCacheMisses');
+    debugPrint('[_generateAudioWithCache] Audio cache miss (remote generation): $_remoteAudioCacheMisses');
 
     final audioData = await _translationService.generateTranslation(
       text,
@@ -3643,9 +3727,12 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     if (audioData != null && audioData.isNotEmpty) {
+      debugPrint('[_generateAudioWithCache] Audio data received from translation service. Caching locally.');
       final audioBase64 = base64Encode(audioData);
       await _saveCacheAudio(text, language, cacheVoiceKey, audioBase64);
       await _saveLocalCachedAudio(cacheLookupKey, audioData);
+    } else {
+      debugPrint('[_generateAudioWithCache] No audio data received from translation service.');
     }
 
     return audioData;
@@ -3693,6 +3780,13 @@ class _HomeScreenState extends State<HomeScreen> {
         );
         if (audioData == null || audioData.isEmpty) {
           continue;
+        }
+
+        if (!playedAny) {
+          if (!await _consumeUsageAllowance(inputText: _spokenRawText, outputText: text)) {
+            debugPrint('[_speakTranslatedText] Failed to consume usage allowance, aborting.');
+            return;
+          }
         }
 
         await _audioPlayer.play(BytesSource(audioData));
