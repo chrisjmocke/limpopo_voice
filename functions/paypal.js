@@ -90,7 +90,7 @@ const createPayPalOrderHttp = onRequest(
     const decodedToken = await verifyFirebaseUserFromRequest(req, res);
     if (!decodedToken) return;
 
-    const { amountCents, email, orgId, tierName, mode } = req.body || {};
+    const { amountCents, email, tierName, mode } = req.body || {};
     if (typeof amountCents !== "number" || amountCents <= 0) {
       return res.status(400).send({ error: "Invalid amount" });
     }
@@ -150,7 +150,6 @@ const createPayPalOrderHttp = onRequest(
                 currency_code: currencyCode,
                 value: amountValue,
               },
-              custom_id: typeof orgId === "string" && orgId.trim() ? orgId.trim() : undefined,
               description: typeof tierName === "string" ? `LimpopoVoice ${tierName}` : "LimpopoVoice Credits",
             },
           ],
@@ -299,6 +298,17 @@ const capturePayPalOrderHttp = onRequest(
           userId: decodedToken.uid,
         });
       }
+
+      const creditsToAdd = Math.floor(capturedCents / 100);
+      const db = admin.firestore();
+      const userRef = db.collection("users").doc(decodedToken.uid);
+      await userRef.set(
+        {
+          credits: admin.firestore.FieldValue.increment(creditsToAdd),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
 
       return res.status(200).send({
         completed: true,

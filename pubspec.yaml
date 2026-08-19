@@ -10,7 +10,6 @@ dependencies:
   flutter:
     sdk: flutter
   # Core Features
-  flutter_tts: ^4.2.2
   speech_to_text: ^7.0.0
   vibration: ^3.1.8
   # Backend & AI

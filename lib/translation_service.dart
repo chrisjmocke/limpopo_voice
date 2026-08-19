@@ -77,9 +77,11 @@ class TranslationService {
     String? voiceName,
     String ttsProvider = 'narakeet',
   }) async {
+    debugPrint('[TranslationService] Attempting to generate translation for text: "$text", targetLanguage: $targetLanguage, ttsProvider: $ttsProvider');
     _clearLastError();
     final input = text.trim();
     if (input.isEmpty || functionUrl.trim().isEmpty) {
+      debugPrint('[TranslationService] Invalid input or function URL. Input empty: ${input.isEmpty}, Function URL empty: ${functionUrl.trim().isEmpty}');
       _setLastError('invalid_input', 'Empty input or function URL');
       return null;
     }
@@ -87,23 +89,31 @@ class TranslationService {
     try {
       final headers = await _buildHeaders();
       if (headers == null) {
+        debugPrint('[TranslationService] Failed to build headers.');
         return null;
       }
+      debugPrint('[TranslationService] Headers built successfully.');
+
+      final requestBody = jsonEncode({
+        'text': input,
+        'targetLanguage': targetLanguage,
+        'skipTranslation': true,
+        'isMale': true,
+        'voiceName': voiceName,
+        'ttsProvider': ttsProvider,
+      });
+      debugPrint('[TranslationService] Request body: $requestBody');
 
       final response = await _client.post(
         Uri.parse(functionUrl),
         headers: headers,
-        body: jsonEncode({
-          'text': input,
-          'targetLanguage': targetLanguage,
-          'skipTranslation': true,
-          'isMale': true,
-          'voiceName': voiceName,
-          'ttsProvider': ttsProvider,
-        }),
+        body: requestBody,
       ).timeout(const Duration(seconds: 45));
+      debugPrint('[TranslationService] HTTP response status: ${response.statusCode}');
+      debugPrint('[TranslationService] HTTP response body: ${response.body}');
 
       if (response.statusCode == 401) {
+        debugPrint('[TranslationService] Received 401, attempting token refresh.');
         // Token may be stale/invalid after app resume; refresh once and retry.
         _setLastError('auth_unauthorized', response.body);
         await _refreshIdToken();
@@ -112,19 +122,16 @@ class TranslationService {
           debugPrint('TranslationService: Unable to rebuild headers after 401');
           return null;
         }
+        debugPrint('[TranslationService] Retrying with refreshed token.');
 
         final retryResponse = await _client.post(
           Uri.parse(functionUrl),
           headers: retryHeaders,
-          body: jsonEncode({
-            'text': input,
-            'targetLanguage': targetLanguage,
-            'skipTranslation': true,
-            'isMale': true,
-            'voiceName': voiceName,
-            'ttsProvider': ttsProvider,
-          }),
+          body: requestBody,
         ).timeout(const Duration(seconds: 45));
+
+        debugPrint('[TranslationService] Retry HTTP response status: ${retryResponse.statusCode}');
+        debugPrint('[TranslationService] Retry HTTP response body: ${retryResponse.body}');
 
         if (retryResponse.statusCode != 200) {
           debugPrint(
@@ -169,6 +176,7 @@ class TranslationService {
 
       final offensiveContent = body['offensiveContent'] as bool? ?? false;
       if (offensiveContent) {
+        debugPrint('TranslationService: Offensive content filtered.');
         _setLastError('offensive_filtered', 'Offensive content filtered');
         return null;
       }

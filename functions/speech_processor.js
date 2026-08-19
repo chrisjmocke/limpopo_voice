@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const cors = require("cors")({ origin: true });
 
 // Configuration and Constants
+const API_COST_PER_UNIT = 0.0029;
 const VOICE_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_TEXT_LENGTH = Number(process.env.MAX_TEXT_LENGTH || 600);
 const MAX_CONTENT_LENGTH_BYTES = Number(process.env.MAX_CONTENT_LENGTH_BYTES || 32 * 1024);
@@ -12,86 +13,33 @@ const AUDIO_CACHE_MAX_TEXT_LENGTH = Number(process.env.AUDIO_CACHE_MAX_TEXT_LENG
 const AUDIO_CACHE_SIGNED_URL_TTL_HOURS = Number(process.env.AUDIO_CACHE_SIGNED_URL_TTL_HOURS || 24);
 const AUDIO_CACHE_OBJECT_PREFIX = String(process.env.AUDIO_CACHE_OBJECT_PREFIX || "tts-cache").trim();
 
-const KNOWN_TTS_PROVIDERS = ["narakeet", "google", "azure", "elevenlabs"];
-const GOOGLE_NEURAL2_ROUTE_LANGUAGES = new Set([
-    "english", "dutch", "french", "german", "mandarin", "hindi", "urdu", "portuguese"
-]);
+const KNOWN_TTS_PROVIDERS = ["narakeet"];
+const NARAKEET_VOICE_ALTERNATIVES = {
+    'Afrikaans': ['Rolanda', 'Aletta'],
+    'English': ['Aletta', 'Rolanda'],
+    'isiNdebele': ['Dumisani', 'Nandi'],
+    'isiXhosa': ['Lindiwe', 'Nandi'],
+    'isiZulu': ['Nandi', 'Lindiwe'],
+    'Sepedi': ['Mpho', 'Palesa'],
+    'Sesotho': ['Palesa', 'Mpho'],
+    'Setswana': ['Bokang', 'Mpho'],
+    'siSwati': ['Nomcebo', 'Nandi'],
+    'Tshivenda': ['Mulalo', 'Dumisani'],
+    'Xitsonga': ['Basetsana', 'Lindiwe'],
+};
 
 // State
-let ttsClient = null;
-let textToSpeech = null;
-let cachedVoices = null;
-let cachedVoicesAtMs = 0;
 const audioBase64MemoryCache = new Map();
 
 // Helper Functions
-function getTtsClient() {
-    if (!ttsClient) {
-        if (!textToSpeech) {
-            textToSpeech = require("@google-cloud/text-to-speech");
-        }
-        ttsClient = new textToSpeech.TextToSpeechClient();
-    }
-    return ttsClient;
-}
-
-async function getCachedVoices() {
-    const now = Date.now();
-    if (cachedVoices && (now - cachedVoicesAtMs) < VOICE_CACHE_TTL_MS) {
-        return cachedVoices;
-    }
-    const [voicesResponse] = await getTtsClient().listVoices({});
-    cachedVoices = voicesResponse?.voices || [];
-    cachedVoicesAtMs = now;
-    return cachedVoices;
-}
-
-function voiceQualityScore(voiceName) {
-    const name = String(voiceName || "").toLowerCase();
-    if (!name) return 0;
-    if (name.includes("studio")) return 100;
-    if (name.includes("chirp")) return 95;
-    if (name.includes("neural2")) return 90;
-    if (name.includes("wavenet")) return 80;
-    if (name.includes("news")) return 70;
-    if (name.includes("standard")) return 40;
-    return 50;
-}
-
-function sortVoicesByQuality(voices) {
-    return [...voices].sort((a, b) => {
-        const scoreDiff = voiceQualityScore(b?.name) - voiceQualityScore(a?.name);
-        if (scoreDiff !== 0) return scoreDiff;
-        return String(a?.name || "").localeCompare(String(b?.name || ""));
-    });
-}
 
 function buildGenderAttempts(requestedGender) {
     const attempts = [requestedGender, "NEUTRAL", "FEMALE", "MALE"];
     return attempts.filter((v, i, arr) => typeof v === "string" && arr.indexOf(v) === i);
 }
 
-function shouldRouteToGoogleNeural2(targetLanguage) {
-    return GOOGLE_NEURAL2_ROUTE_LANGUAGES.has(String(targetLanguage || "").toLowerCase().trim());
-}
-
-function mapGoogleNeural2LanguageCode(targetLanguage) {
-    const map = {
-        English: "en-GB", French: "fr-FR", German: "de-DE", Mandarin: "cmn-CN",
-        Hindi: "hi-IN", Urdu: "ur-IN", Portuguese: "pt-PT"
-    };
-    return map[targetLanguage] || mapLanguageCode(targetLanguage);
-}
-
 function buildTtsProviderChain(requestedProvider, targetLanguage) {
-    const preferred = String(requestedProvider || process.env.TTS_PROVIDER || "narakeet").toLowerCase().trim();
-    if (shouldRouteToGoogleNeural2(targetLanguage)) {
-        return ["google", "narakeet"];
-    }
-    if (preferred === "narakeet") {
-        return ["narakeet"];
-    }
-    return [preferred, "google"].filter((v, i, arr) => KNOWN_TTS_PROVIDERS.includes(v) && arr.indexOf(v) === i);
+    return ["narakeet"];
 }
 
 function normalizeCacheText(text) {
@@ -194,140 +142,129 @@ async function putCachedNarakeetAudio({ text, targetLanguage, requestedVoiceName
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
-async function synthesizeWithNarakeet({ text, requestedVoiceName }) {
-    const narakeetApiKey = String(process.env.NARAKEET_API_KEY || "").trim();
-    const voice = String(requestedVoiceName || "Aletta").trim();
-    const failedResult = { audioContent: null, voiceLanguageUsed: null, voiceGenderUsed: null, voiceNameUsed: voice, ttsProviderUsed: "narakeet" };
-    if (!narakeetApiKey) return failedResult;
+async function attemptNarakeetSynthesis({ text, voice, narakeetApiKey }) {
     const submitUrl = `https://api.narakeet.com/text-to-speech/mp3?voice=${encodeURIComponent(voice)}`;
     const submitResp = await fetch(submitUrl, {
         method: "POST",
         headers: { "x-api-key": narakeetApiKey, "Content-Type": "text/plain", "Accept": "application/json, audio/mpeg, audio/*" },
         body: text,
     });
-    if (!submitResp.ok) return failedResult;
+    if (!submitResp.ok) {
+        const errorBody = await submitResp.text().catch(() => "Could not read error body");
+        console.error(`Narakeet initial request failed for voice ${voice}: ${submitResp.status} ${submitResp.statusText}. Body: ${errorBody}`);
+        return null;
+    }
     const submitContentType = String(submitResp.headers.get("content-type") || "").toLowerCase();
     if (submitContentType.includes("audio/")) {
         const submitAudioBuffer = Buffer.from(await submitResp.arrayBuffer());
         if (submitAudioBuffer.length) {
             return { audioContent: submitAudioBuffer.toString("base64"), voiceLanguageUsed: null, voiceGenderUsed: null, voiceNameUsed: voice, ttsProviderUsed: "narakeet" };
         }
-        return failedResult;
+        console.error("Narakeet initial audio response was empty.");
+        return null;
     }
-    let submitJson = await submitResp.json().catch(() => null);
+    let submitJson = await submitResp.json().catch((e) => {
+        console.error(`Narakeet initial JSON parse failed: ${e}`);
+        return null;
+    });
     const statusUrl = String(submitJson?.statusUrl || "").trim();
-    if (!statusUrl) return failedResult;
+    if (!statusUrl) {
+        console.error("Narakeet initial response missing statusUrl.", submitJson);
+        return null;
+    }
     for (let attempt = 0; attempt < 40; attempt++) {
         await sleep(attempt < 8 ? 250 : 500);
         const pollResp = await fetch(statusUrl, { method: "GET", headers: { "x-api-key": narakeetApiKey, "Accept": "application/json, audio/mpeg, audio/*" } });
-        if (!pollResp.ok) continue;
+        if (!pollResp.ok) {
+            console.warn(`Narakeet poll attempt ${attempt} failed for voice ${voice}: ${pollResp.status} ${pollResp.statusText}`);
+            continue;
+        }
         const pollContentType = String(pollResp.headers.get("content-type") || "").toLowerCase();
         if (pollContentType.includes("audio/")) {
             const directAudioBuffer = Buffer.from(await pollResp.arrayBuffer());
             if (directAudioBuffer.length) {
                 return { audioContent: directAudioBuffer.toString("base64"), voiceLanguageUsed: null, voiceGenderUsed: null, voiceNameUsed: voice, ttsProviderUsed: "narakeet" };
             }
+            console.error("Narakeet direct audio poll response was empty.");
             break;
         }
-        let pollJson = await pollResp.json().catch(() => null);
+        let pollJson = await pollResp.json().catch((e) => {
+            console.error(`Narakeet poll JSON parse failed: ${e}`);
+            return null;
+        });
         if (pollJson?.finished === true && pollJson?.succeeded === true) {
             const resultUrl = String(pollJson?.result || "").trim();
-            if (!resultUrl) break;
+            if (!resultUrl) {
+                console.error("Narakeet poll result missing resultUrl.", pollJson);
+                break;
+            }
             const audioResp = await fetch(resultUrl, { method: "GET", headers: { "x-api-key": narakeetApiKey, "Accept": "audio/mpeg, audio/*" } });
-            if (!audioResp.ok) break;
+            if (!audioResp.ok) {
+                console.error(`Narakeet final audio fetch failed: ${audioResp.status} ${audioResp.statusText}`);
+                break;
+            }
             const audioBuffer = Buffer.from(await audioResp.arrayBuffer());
-            if (!audioBuffer.length) break;
+            if (!audioBuffer.length) {
+                console.error("Narakeet final audio response was empty.");
+                break;
+            }
             return { audioContent: audioBuffer.toString("base64"), voiceLanguageUsed: null, voiceGenderUsed: null, voiceNameUsed: voice, ttsProviderUsed: "narakeet" };
         }
-        if (pollJson?.finished === true && !pollJson?.succeeded) break;
+        if (pollJson?.finished === true && !pollJson?.succeeded) {
+            console.error(`Narakeet synthesis failed for voice ${voice} according to poll response.`, pollJson);
+            break;
+        }
     }
+    return null;
+}
+
+async function synthesizeWithNarakeetConcurrent({ text, targetLanguage, narakeetApiKey }) {
+    const voices = NARAKEET_VOICE_ALTERNATIVES[targetLanguage] || ['Aletta'];
+    const promises = voices.map(async (voice) => {
+        const result = await attemptNarakeetSynthesis({ text, voice, narakeetApiKey });
+        if (!result) throw new Error(`Failed for ${voice}`);
+        return result;
+    });
+    
+    try {
+        return await Promise.any(promises);
+    } catch (e) {
+        console.error("All Narakeet synthesis attempts failed", e);
+        return null;
+    }
+}
+
+async function synthesizeWithNarakeet({ text, requestedVoiceName, targetLanguage }) {
+    const narakeetApiKey = String(process.env.NARAKEET_API_KEY || "").trim();
+    const failedResult = { audioContent: null, voiceLanguageUsed: null, voiceGenderUsed: null, voiceNameUsed: requestedVoiceName || 'Default', ttsProviderUsed: "narakeet" };
+    
+    if (!narakeetApiKey) return failedResult;
+    
+    // If a specific voice is requested, try that one first.
+    if (requestedVoiceName) {
+        const result = await attemptNarakeetSynthesis({ text, voice: requestedVoiceName, narakeetApiKey });
+        if (result) return result;
+    }
+    
+    // Otherwise or if the specific voice failed, try all concurrently
+    const result = await synthesizeWithNarakeetConcurrent({ text, targetLanguage, narakeetApiKey });
+    if (result) return result;
+    
+    console.error(`Narakeet synthesis failed for all tried voices for ${targetLanguage}`);
     return failedResult;
 }
 
 const ZA_FALLBACK_CODE = "en-ZA";
 
-async function synthesizeBestSpeech({ text, requestedCode, requestedGender }) {
-    const voices = await getCachedVoices();
-    const fallbackCodes = [requestedCode, ZA_FALLBACK_CODE].filter((v, i, arr) => arr.indexOf(v) === i);
-    const genderAttempts = buildGenderAttempts(requestedGender);
-    for (const code of fallbackCodes) {
-        const matchingVoices = sortVoicesByQuality(voices.filter((v) => (v.languageCodes || []).includes(code)));
-        for (const voice of matchingVoices.slice(0, 8)) {
-            for (const gender of genderAttempts) {
-                try {
-                    const [ttsResponse] = await getTtsClient().synthesizeSpeech({
-                        input: { text }, voice: { languageCode: code, name: voice.name, ssmlGender: gender },
-                        audioConfig: { audioEncoding: "MP3", speakingRate: 0.95 },
-                    });
-                    if (ttsResponse?.audioContent) {
-                        return { audioContent: ttsResponse.audioContent.toString("base64"), voiceLanguageUsed: code, voiceGenderUsed: gender, voiceNameUsed: voice.name };
-                    }
-                } catch (e) {}
-            }
-        }
-        for (const gender of genderAttempts) {
-            try {
-                const [ttsResponse] = await getTtsClient().synthesizeSpeech({
-                    input: { text }, voice: { languageCode: code, ssmlGender: gender },
-                    audioConfig: { audioEncoding: "MP3", speakingRate: 0.95 },
-                });
-                if (ttsResponse?.audioContent) {
-                    return { audioContent: ttsResponse.audioContent.toString("base64"), voiceLanguageUsed: code, voiceGenderUsed: gender, voiceNameUsed: "AUTO" };
-                }
-            } catch (e) {}
-        }
+async function synthesizeWithProviderChain({ text, targetLanguage, requestedVoiceName }) {
+    const providerChain = ["narakeet"];
+    const narakeetResult = await synthesizeWithNarakeet({ text, requestedVoiceName, targetLanguage });
+    const decorated = { ...narakeetResult, ttsProviderChain: providerChain, cacheHit: false, cacheLayer: null, cacheKey: null, audioUrl: null };
+    if (decorated.audioContent) {
+        const stored = await putCachedNarakeetAudio({ text, targetLanguage, requestedVoiceName, audioContent: decorated.audioContent });
+        decorated.cacheKey = stored.cacheKey; decorated.audioUrl = stored.audioUrl;
     }
-    return { audioContent: null, voiceLanguageUsed: requestedCode, voiceGenderUsed: requestedGender, voiceNameUsed: null };
-}
-
-async function synthesizeNeural2Speech({ text, requestedCode, requestedGender }) {
-    const voices = await getCachedVoices();
-    const genderAttempts = buildGenderAttempts(requestedGender);
-    const neural2Voices = sortVoicesByQuality(voices.filter((v) => (v.languageCodes || []).includes(requestedCode) && String(v?.name || "").toLowerCase().includes("neural2")));
-    for (const voice of neural2Voices.slice(0, 8)) {
-        for (const gender of genderAttempts) {
-            try {
-                const [ttsResponse] = await getTtsClient().synthesizeSpeech({
-                    input: { text }, voice: { languageCode: requestedCode, name: voice.name, ssmlGender: gender },
-                    audioConfig: { audioEncoding: "MP3", speakingRate: 0.95 },
-                });
-                if (ttsResponse?.audioContent) {
-                    return { audioContent: ttsResponse.audioContent.toString("base64"), voiceLanguageUsed: requestedCode, voiceGenderUsed: gender, voiceNameUsed: voice.name };
-                }
-            } catch (e) {}
-        }
-    }
-    return { audioContent: null, voiceLanguageUsed: requestedCode, voiceGenderUsed: requestedGender, voiceNameUsed: null };
-}
-
-async function synthesizeWithProviderChain({ text, targetLanguage, requestedCode, requestedGender, requestedProvider, requestedVoiceName }) {
-    const providerChain = buildTtsProviderChain(requestedProvider, targetLanguage);
-    const googleNeural2Route = shouldRouteToGoogleNeural2(targetLanguage);
-    const googleRequestedCode = googleNeural2Route ? mapGoogleNeural2LanguageCode(targetLanguage) : requestedCode;
-    let lastResult = null;
-    for (const provider of providerChain) {
-        if (provider === "narakeet") {
-            const cached = await getCachedNarakeetAudio({ text, targetLanguage, requestedVoiceName });
-            if (cached?.audioContent) {
-                return { audioContent: cached.audioContent, voiceLanguageUsed: null, voiceGenderUsed: null, voiceNameUsed: String(requestedVoiceName || "Aletta").trim(), ttsProviderUsed: "narakeet", ttsProviderChain: providerChain, cacheHit: true, cacheLayer: cached.cacheLayer, cacheKey: cached.cacheKey, audioUrl: cached.audioUrl };
-            }
-            const narakeetResult = await synthesizeWithNarakeet({ text, requestedVoiceName });
-            const decorated = { ...narakeetResult, ttsProviderUsed: "narakeet", ttsProviderChain: providerChain, cacheHit: false, cacheLayer: null, cacheKey: null, audioUrl: null };
-            if (decorated.audioContent) {
-                const stored = await putCachedNarakeetAudio({ text, targetLanguage, requestedVoiceName, audioContent: decorated.audioContent });
-                decorated.cacheKey = stored.cacheKey; decorated.audioUrl = stored.audioUrl;
-                return decorated;
-            }
-            lastResult = decorated; continue;
-        }
-        if (provider === "google") {
-            const googleResult = googleNeural2Route ? await synthesizeNeural2Speech({ text, requestedCode: googleRequestedCode, requestedGender }) : await synthesizeBestSpeech({ text, requestedCode, requestedGender });
-            const decorated = { ...googleResult, ttsProviderUsed: "google", ttsProviderChain: providerChain, cacheHit: false, cacheLayer: null, cacheKey: null, audioUrl: null };
-            if (decorated.audioContent) return decorated;
-            lastResult = decorated; continue;
-        }
-    }
-    return lastResult || { audioContent: null, voiceLanguageUsed: requestedCode, voiceGenderUsed: requestedGender, voiceNameUsed: null, ttsProviderUsed: "google", ttsProviderChain: ["google"] };
+    return decorated;
 }
 
 function mapLanguageCode(targetLanguage) {
@@ -403,6 +340,7 @@ function enforceRequestGuardrails(req, res) {
 // Handlers
 exports.handleProcessSpeech = (req, res) => {
     cors(req, res, async () => {
+        console.log("handleProcessSpeech invoked.");
         try {
             if (!enforceRequestGuardrails(req, res)) return;
             const authHeader = String(req.headers.authorization || "");
@@ -422,7 +360,7 @@ exports.handleProcessSpeech = (req, res) => {
             }
             const requestedCode = mapLanguageCode(targetLanguage);
             const requestedGender = mapGender(isMale !== false);
-            const ttsResult = await synthesizeWithProviderChain({ text: translatedText, targetLanguage, requestedCode, requestedGender, requestedProvider: ttsProvider, requestedVoiceName: voiceName });
+            const ttsResult = await synthesizeWithProviderChain({ text: translatedText, targetLanguage, requestedVoiceName: voiceName });
             res.status(200).send({ translation: translatedText, audioContent: ttsResult.audioContent, voiceLanguageUsed: ttsResult.voiceLanguageUsed, voiceGenderUsed: ttsResult.voiceGenderUsed, voiceNameUsed: ttsResult.voiceNameUsed, ttsProviderUsed: ttsResult.ttsProviderUsed, ttsProviderChain: ttsResult.ttsProviderChain, cacheHit: ttsResult.cacheHit === true, cacheLayer: ttsResult.cacheLayer || null, cacheKey: ttsResult.cacheKey || null, audioUrl: ttsResult.audioUrl || null, modelUsed, skipTranslation: shouldSkipTranslation, status: "success" });
         } catch (error) {
             console.error("Translation Error:", error);

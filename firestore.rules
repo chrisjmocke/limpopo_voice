@@ -10,24 +10,6 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == userId;
     }
 
-    function isOrgOwner() {
-      return signedIn() && resource.data.ownerUid == request.auth.uid;
-    }
-
-    function isOrgMember(orgId) {
-      return signedIn() &&
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.organizationId == orgId;
-    }
-
-    function memberSpendingExactlyOneCredit() {
-      return request.resource.data.name == resource.data.name &&
-        request.resource.data.ownerUid == resource.data.ownerUid &&
-        request.resource.data.inviteCode == resource.data.inviteCode &&
-        request.resource.data.tierType == resource.data.tierType &&
-        request.resource.data.sharedCredits == resource.data.sharedCredits - 1;
-    }
-
     // Personal user profile data: only the user may read/write.
     match /users/{userId} {
       allow read, create, update, delete: if isSelf(userId);
@@ -36,27 +18,6 @@ service cloud.firestore {
     // Optional user sub-documents keep same ownership model.
     match /users/{userId}/{document=**} {
       allow read, write: if isSelf(userId);
-    }
-
-    // Organisation pool model.
-    match /organizations/{orgId} {
-      // Any signed-in user can read to verify invite codes.
-      allow read: if signedIn();
-
-      // Only owner may create/delete full organisation records.
-      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
-      allow delete: if isOrgOwner();
-
-      // Owner has full update control.
-      // Members can only spend exactly 1 shared credit per update.
-      allow update: if isOrgOwner() || (isOrgMember(orgId) && memberSpendingExactlyOneCredit());
-    }
-
-    // Organisation activity trail (spend/top-up/settings changes).
-    match /organizations/{orgId}/activity/{eventId} {
-      allow read: if signedIn() && isOrgMember(orgId);
-      allow create: if signedIn() && isOrgMember(orgId);
-      allow update, delete: if false;
     }
 
     // Payment telemetry events. Allow only self-owned creates from client.

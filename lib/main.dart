@@ -139,55 +139,22 @@ class _CreditTier {
 
 enum _PayPalMode { sandbox, live }
 
-class _OrganizationPoolUpdate {
-  final String action;
-  final String organizationId;
-  final String organizationName;
-  final String inviteCode;
-  final int sharedCredits;
 
-  const _OrganizationPoolUpdate({
-    required this.action,
-    required this.organizationId,
-    required this.organizationName,
-    required this.inviteCode,
-    required this.sharedCredits,
-  });
-}
-
-class _PendingAccountMigration {
-  final String? organizationId;
-  final String? organizationName;
-  final String? organizationInviteCode;
-  final String role;
-
-  const _PendingAccountMigration({
-    required this.organizationId,
-    required this.organizationName,
-    required this.organizationInviteCode,
-    required this.role,
-  });
-
-  bool get hasOrganization => organizationId != null && organizationId!.isNotEmpty;
-  bool get ownsOrganization => hasOrganization && role == 'owner';
-}
 
 const _tiers = [
-  _CreditTier('Micro', 10, 'R10'),        // 10 translations
-  _CreditTier('Basic', 50, 'R50'),        // 50 translations
-  _CreditTier('Pro', 100, 'R100'),        // 100 translations
-  _CreditTier('Enterprise', 200, 'R200'),  // 200 translations
-  _CreditTier('Organisation', 500, 'R500') // 500 translations
+  _CreditTier('Tier 1', 200, 'R20'),        // 200 credits
+  _CreditTier('Tier 2', 600, 'R50'),        // 600 credits
+  _CreditTier('Tier 3', 1400, 'R100'),      // 1400 credits
 ];
 const int _usageCostCredits = 1; // 1 credit = 5 seconds per translation (capped)
+const double apiCostPerUnit = 0.0029;
 const bool _enableClientFirestoreCache = false;
 const bool _enableLocalPersistentAudioCache = true;
 const Duration _localAudioCacheTtl = Duration(days: 30);
 const int _maxLocalAudioCacheEntries = 120;
 const String _localAudioCacheIndexPrefsKey = 'local_audio_cache_index_v1';
 const String _userLearnPhrasesPrefsKey = 'user_learn_phrases_v1';
-const String _organizationTierName = 'Organisation';
-const int _organizationUsageCost = 1;
+
 
 class HistoryItem {
   final String inputLang, outputLang, original, translated;
@@ -260,6 +227,10 @@ class _HomeScreenState extends State<HomeScreen> {
       required String phonetic,
       required List<String> langs,
     }) async {
+      if (_credits <= 0) {
+        _showCreditTiers();
+        return false;
+      }
       bool duplicateFound = false;
       for (final lang in langs) {
         final key = lang;
@@ -504,19 +475,6 @@ class _HomeScreenState extends State<HomeScreen> {
     'Tshivenda': 'Mulalo',
     'Xitsonga': 'Basetsana',
   };
-  static const Set<String> _southAfricanLanguages = {
-    'Afrikaans',
-    'English',
-    'isiNdebele',
-    'isiXhosa',
-    'isiZulu',
-    'Sepedi',
-    'Sesotho',
-    'Setswana',
-    'siSwati',
-    'Tshivenda',
-    'Xitsonga',
-  };
   String _spokenText = '';
   String _translatedText = '';
   String _spokenRawText = '';
@@ -532,17 +490,12 @@ class _HomeScreenState extends State<HomeScreen> {
   _CreditTier? _pendingPayPalTier;
   double? _pendingPayPalAmount;
   _PayPalMode? _pendingPayPalMode;
-  int _credits = 6;
+  int _credits = 2000;
   String? _authUid;
   String? _authEmail;
   String? _installId;
   String? _deviceId;
-  String? _organizationId;
-  String? _organizationName;
-  String? _organizationInviteCode;
-  int? _organizationMemberCreditLimit;
-  String _organizationRole = 'personal';
-  int? _organizationSharedCredits;
+
   bool _authBusy = false;
   final List<HistoryItem> _history = [];
   String _selectedLearnLang = 'Sepedi';
@@ -551,6 +504,8 @@ class _HomeScreenState extends State<HomeScreen> {
   final Map<String, String?> _learnFocusPhoneticByLang = {};
   bool _sharingCurrentTranslation = false;
   Timer? _autocorrectTimer;
+  Timer? _talkHoldTimer;
+  double _talkHoldProgress = 0.0;
   int _localAudioCacheHits = 0;
   int _sharedAudioCacheHits = 0;
   int _remoteAudioCacheMisses = 0;
@@ -804,30 +759,16 @@ class _HomeScreenState extends State<HomeScreen> {
     return 'Signed in';
   }
 
-  Future<void> _syncAuthState(User? user, {bool reloadOrganization = true}) async {
+  Future<void> _syncAuthState(User? user) async {
     if (!mounted) {
       _authUid = user?.uid;
       _authEmail = user?.email;
-      if (user == null) {
-        _organizationId = null;
-        _organizationName = null;
-        _organizationInviteCode = null;
-        _organizationRole = 'personal';
-        _organizationSharedCredits = null;
-      }
       return;
     }
 
     setState(() {
       _authUid = user?.uid;
       _authEmail = user?.email;
-      if (user == null) {
-        _organizationId = null;
-        _organizationName = null;
-        _organizationInviteCode = null;
-        _organizationRole = 'personal';
-        _organizationSharedCredits = null;
-      }
     });
 
     if (user == null) return;
@@ -863,60 +804,9 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       });
     }
-    
-    if (reloadOrganization) {
-      await _loadOrganizationMembership();
-    }
   }
 
-  _PendingAccountMigration? _capturePendingAccountMigration() {
-    if (_organizationId == null || _organizationId!.isEmpty) {
-      return null;
-    }
 
-    return _PendingAccountMigration(
-      organizationId: _organizationId,
-      organizationName: _organizationName,
-      organizationInviteCode: _organizationInviteCode,
-      role: _organizationRole,
-    );
-  }
-
-  Future<void> _restorePendingAccountMigration(_PendingAccountMigration? migration) async {
-    if (migration == null || !migration.hasOrganization || migration.ownsOrganization) {
-      return;
-    }
-
-    final userRef = _userDocRef();
-    if (userRef == null) return;
-
-    await userRef.set({
-      'organizationId': migration.organizationId,
-      'organizationRole': migration.role,
-      'organizationInviteCode': migration.organizationInviteCode,
-      'organizationName': migration.organizationName,
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-
-    if (!mounted) return;
-    setState(() {
-      _organizationId = migration.organizationId;
-      _organizationRole = migration.role;
-      _organizationInviteCode = migration.organizationInviteCode;
-      _organizationName = migration.organizationName;
-    });
-    await _refreshOrganizationDetails();
-  }
-
-  bool _canSwitchFromGuestToExistingAccount(_PendingAccountMigration? migration) {
-    if (migration?.ownsOrganization == true) {
-      _showSnack(
-        'This guest session owns an organisation. Upgrade this same guest with Google or a new email account to keep ownership.',
-      );
-      return false;
-    }
-    return true;
-  }
 
   String _friendlyAuthError(FirebaseAuthException error) {
     switch (error.code) {
@@ -1122,7 +1012,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final auth = FirebaseAuth.instance;
     final currentUser = auth.currentUser;
-    final migration = _capturePendingAccountMigration();
 
     try {
       final googleUser = await GoogleSignIn(scopes: const ['email', 'profile']).signIn();
@@ -1145,12 +1034,8 @@ class _HomeScreenState extends State<HomeScreen> {
               e.code != 'account-exists-with-different-credential') {
             rethrow;
           }
-          if (!_canSwitchFromGuestToExistingAccount(migration)) {
-            return;
-          }
           result = await auth.signInWithCredential(credential);
-          await _syncAuthState(result.user, reloadOrganization: false);
-          await _restorePendingAccountMigration(migration);
+          await _syncAuthState(result.user);
           _showSnack('Signed in with Google.');
           return;
         }
@@ -1259,7 +1144,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final auth = FirebaseAuth.instance;
     final currentUser = auth.currentUser;
-    final migration = _capturePendingAccountMigration();
     final credential = EmailAuthProvider.credential(email: email, password: password);
 
     try {
@@ -1276,12 +1160,8 @@ class _HomeScreenState extends State<HomeScreen> {
         }
         _showSnack('Email account ready. Verification email sent.');
       } else {
-        if (currentUser != null && currentUser.isAnonymous && !_canSwitchFromGuestToExistingAccount(migration)) {
-          return;
-        }
         result = await auth.signInWithEmailAndPassword(email: email, password: password);
-        await _syncAuthState(result.user, reloadOrganization: false);
-        await _restorePendingAccountMigration(migration);
+        await _syncAuthState(result.user);
         _showSnack('Signed in with email.');
       }
     } on FirebaseAuthException catch (e) {
@@ -1315,7 +1195,6 @@ class _HomeScreenState extends State<HomeScreen> {
       await FirebaseAuth.instance.signOut();
       await _ensureSignedIn();
       await _ensureUserProfileDocument();
-      await _loadOrganizationMembership();
       _showSnack('Signed out. Continuing as guest.');
     } catch (e) {
       debugPrint('Sign-out failed: $e');
@@ -1553,7 +1432,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final payload = {
       'amountCents': (amount * 100).round(),
       'email': _authEmail ?? '',
-      'orgId': tier.name == _organizationTierName ? _organizationId : null,
       'tierName': tier.name,
       'mode': _payPalModeLabel(mode),
     };
@@ -1629,7 +1507,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final payload = {
       'orderId': orderId,
       'amountCents': (amount * 100).round(),
-      'orgId': tier.name == _organizationTierName ? _organizationId : null,
       'tierName': tier.name,
       'mode': _payPalModeLabel(mode),
     };
@@ -1750,7 +1627,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final payload = {
       'amountCents': (amount * 100).round(),
       'email': _authEmail ?? '',
-      'orgId': tier.name == _organizationTierName ? _organizationId : null,
       'callback_url': callbackUrl,
     };
 
@@ -1801,11 +1677,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return FirebaseFirestore.instance.collection('users').doc(id);
   }
 
-  String _newInviteCode() {
-    final random = Random();
-    final suffix = (1000 + random.nextInt(9000)).toString();
-    return 'LT-ORG-$suffix';
-  }
+
 
   Future<void> _ensureUserProfileDocument() async {
     final ref = _userDocRef();
@@ -1826,8 +1698,30 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final doc = await ref.get();
       if (doc.exists) {
-        final credits = (doc.data()?['credits'] as num?)?.toInt();
-        if (credits != null && credits >= 0) {
+        final rawCredits = (doc.data()?['credits'] as num?)?.toInt();
+        final nextAutoDebitAt = (doc.data()?['nextAutoDebitAt'] as Timestamp?)?.toDate();
+        final cancelledUntil = (doc.data()?['cancelledUntil'] as Timestamp?)?.toDate();
+        var credits = rawCredits ?? 0;
+
+        final now = DateTime.now();
+        final hasCancellationWindow = cancelledUntil != null && now.isBefore(cancelledUntil);
+        final shouldExpireMonthlyCredits = nextAutoDebitAt != null && !now.isBefore(nextAutoDebitAt) && !hasCancellationWindow;
+
+        if (shouldExpireMonthlyCredits) {
+          debugPrint('Monthly credit cycle expired at $nextAutoDebitAt. Clearing rollover and resetting credit balance.');
+          credits = 0;
+          await ref.set({
+            'credits': 0,
+            'creditsRollOver': false,
+            'monthlyRenewalActive': false,
+            'monthlyDebitCancelled': false,
+            'cancelledUntil': null,
+            'creditsExpiredAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
+
+        if (credits >= 0) {
           if (mounted) {
             setState(() => _credits = credits);
           } else {
@@ -1852,6 +1746,7 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       await ref.update({
         'credits': _credits,
+        'creditsRollOver': false,
         'updatedAt': FieldValue.serverTimestamp(),
       });
       debugPrint('Saved credits to Firestore: $_credits');
@@ -1860,878 +1755,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _refreshOrganizationDetails() async {
-    final orgId = _organizationId;
-    if (orgId == null || orgId.isEmpty) {
-      if (!mounted) return;
-      setState(() => _organizationSharedCredits = null);
-      return;
-    }
 
-    try {
-      final orgSnap = await FirebaseFirestore.instance
-          .collection('organizations')
-          .doc(orgId)
-          .get();
-      if (!orgSnap.exists) return;
-
-      final data = orgSnap.data() ?? <String, dynamic>{};
-      if (!mounted) return;
-      setState(() {
-        _organizationName = (data['name'] as String?) ?? _organizationName;
-        _organizationInviteCode =
-            (data['inviteCode'] as String?) ?? _organizationInviteCode;
-        _organizationSharedCredits = (data['sharedCredits'] as num?)?.toInt();
-        _organizationMemberCreditLimit = (data['memberCreditLimit'] as num?)?.toInt();
-      });
-    } catch (e) {
-      debugPrint('Organization refresh failed: $e');
-    }
-  }
-
-  Future<void> _loadOrganizationMembership() async {
-    final ref = _userDocRef();
-    if (ref == null) return;
-
-    try {
-      final snap = await ref.get();
-      final data = snap.data();
-      if (!mounted) return;
-
-      setState(() {
-        _organizationId = data?['organizationId'] as String?;
-        _organizationRole = (data?['organizationRole'] as String?) ?? 'personal';
-        _organizationName = data?['organizationName'] as String?;
-        _organizationInviteCode = data?['organizationInviteCode'] as String?;
-      });
-      await _refreshOrganizationDetails();
-    } catch (e) {
-      debugPrint('Organization membership load failed: $e');
-    }
-  }
-
-  Future<void> _joinOrganizationByCode(String codeInput) async {
-    final code = codeInput.trim().toUpperCase();
-    if (code.isEmpty) {
-      _showSnack('Enter an invite code first.');
-      return;
-    }
-
-    final userRef = _userDocRef();
-    if (userRef == null) {
-      _showSnack('Profile not ready yet. Try again in a moment.');
-      return;
-    }
-
-    try {
-      final query = await FirebaseFirestore.instance
-          .collection('organizations')
-          .where('inviteCode', isEqualTo: code)
-          .limit(1)
-          .get();
-
-      if (query.docs.isEmpty) {
-        _showSnack('Invite code not found.');
-        return;
-      }
-
-      final orgDoc = query.docs.first;
-      final orgData = orgDoc.data();
-      await userRef.set({
-        'organizationId': orgDoc.id,
-        'organizationRole': 'member',
-        'organizationInviteCode': orgData['inviteCode'],
-        'organizationName': orgData['name'],
-        'organizationMemberCreditLimit': orgData['memberCreditLimit'] ?? 0,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-
-      if (!mounted) return;
-      setState(() {
-        _organizationId = orgDoc.id;
-        _organizationRole = 'member';
-        _organizationInviteCode = orgData['inviteCode'] as String?;
-        _organizationName = orgData['name'] as String?;
-        _organizationMemberCreditLimit = (orgData['memberCreditLimit'] as num?)?.toInt() ?? 0;
-      });
-      await _refreshOrganizationDetails();
-      _showSnack('Joined ${_organizationName ?? 'organization'} successfully.');
-    } catch (e) {
-      debugPrint('Join organization failed: $e');
-      _showSnack('Could not join organization right now.');
-    }
-  }
-
-  Future<void> _showJoinOrganizationDialog() async {
-    final codeController = TextEditingController();
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        scrollable: true,
-        backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-        surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-        title: Text(
-          'Join Shared Organisation',
-          style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: codeController,
-              textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(
-                labelText: 'Invite code',
-                hintText: 'LT-ORG-1234',
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Enter the invite code shared by your organisation owner to connect to the shared credit pool.',
-              style: TextStyle(
-                fontSize: 12,
-                color: isDark ? Colors.white70 : Colors.black54,
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: Text('Cancel', style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000))),
-          ),
-          TextButton(
-            style: TextButton.styleFrom(
-              backgroundColor: const Color(0xFF000000),
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () async {
-              final code = codeController.text;
-              Navigator.of(ctx).pop();
-              await _joinOrganizationByCode(code);
-            },
-            child: const Text('Join'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _showOrganizationStatusDialog() async {
-    final orgId = _organizationId;
-    if (orgId == null || orgId.isEmpty) {
-      await _showJoinOrganizationDialog();
-      return;
-    }
-
-    await _refreshOrganizationDetails();
-    if (!mounted) return;
-
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final name = _organizationName?.trim().isNotEmpty == true
-        ? _organizationName!.trim()
-        : 'Organisation';
-    final inviteCode = _organizationInviteCode?.trim().isNotEmpty == true
-        ? _organizationInviteCode!.trim()
-        : '-';
-    final roleLabel = _organizationRole.toUpperCase();
-    final balanceLabel = _organizationSharedCredits != null
-        ? '${_organizationSharedCredits!} shared credits'
-        : 'Shared balance loading';
-
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        scrollable: true,
-        backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-        surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-        title: Text(
-          'Organisation',
-          style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              name,
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                color: isDark ? Colors.white : const Color(0xFF000000),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Role: $roleLabel',
-              style: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Pool: $balanceLabel',
-              style: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Invite code: $inviteCode',
-              style: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              _organizationRole == 'owner'
-                  ? 'Use this code to invite staff, students, patients, or colleagues into the shared pool.'
-                  : 'You are linked to this shared pool. Ask the owner if you need a new invite code or more credits.',
-              style: TextStyle(
-                fontSize: 12,
-                color: isDark ? Colors.white70 : Colors.black54,
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: inviteCode == '-'
-                ? null
-                : () async {
-                    await Clipboard.setData(ClipboardData(text: inviteCode));
-                    if (!mounted) return;
-                    _showSnack('Invite code copied.');
-                  },
-            child: Text(
-              'Copy code',
-              style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
-            ),
-          ),
-          if (_organizationRole == 'owner')
-            TextButton(
-              onPressed: () {
-                Navigator.of(ctx).pop();
-                _showManageOrganizationDialog();
-              },
-              child: Text(
-                'Manage',
-                style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
-              ),
-            ),
-          TextButton(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              _showOrganizationActivityDialog();
-            },
-            child: Text(
-              'Activity',
-              style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
-            ),
-          ),
-          TextButton(
-            style: TextButton.styleFrom(
-              backgroundColor: const Color(0xFF000000),
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<bool> _canPurchaseOrganizationTier() async {
-    final uid = _authUid;
-    if (uid == null || uid.isEmpty) {
-      _showSnack('Organisation setup unavailable. Please wait for sign-in and try again.');
-      return false;
-    }
-
-    final orgId = _organizationId;
-    if (orgId == null || orgId.isEmpty) {
-      return true;
-    }
-
-    try {
-      final orgSnap = await FirebaseFirestore.instance
-          .collection('organizations')
-          .doc(orgId)
-          .get();
-      if (!orgSnap.exists) {
-        return true;
-      }
-
-      final data = orgSnap.data() ?? <String, dynamic>{};
-      final ownerUid = (data['ownerUid'] as String?)?.trim();
-      if (ownerUid != null && ownerUid.isNotEmpty && ownerUid != uid) {
-        _showSnack('Only the organisation owner can top up the shared pool.');
-        return false;
-      }
-
-      return true;
-    } catch (e) {
-      debugPrint('Organization purchase precheck failed: $e');
-      _showSnack('Could not verify organisation access right now.');
-      return false;
-    }
-  }
-
-  Future<_OrganizationPoolUpdate?> _createOrTopUpOrganizationPool(_CreditTier tier) async {
-    final userRef = _userDocRef();
-    final uid = _authUid;
-    if (uid == null || uid.isEmpty || userRef == null) {
-      _showSnack('Organisation setup unavailable. Please wait for sign-in and try again.');
-      return null;
-    }
-
-    final db = FirebaseFirestore.instance;
-    var orgId = _organizationId;
-    final inviteCode = (_organizationInviteCode != null && _organizationInviteCode!.isNotEmpty)
-        ? _organizationInviteCode!
-        : _newInviteCode();
-    final orgName = (_organizationName != null && _organizationName!.isNotEmpty)
-        ? _organizationName!
-        : 'My Organisation';
-
-    if (orgId == null || orgId.isEmpty) {
-      orgId = db.collection('organizations').doc().id;
-    }
-
-    final orgRef = db.collection('organizations').doc(orgId);
-
-    try {
-      final update = await db.runTransaction<_OrganizationPoolUpdate>((tx) async {
-        final orgSnap = await tx.get(orgRef);
-        final now = FieldValue.serverTimestamp();
-
-        if (!orgSnap.exists) {
-          tx.set(orgRef, {
-            'name': orgName,
-            'ownerUid': uid,
-            'inviteCode': inviteCode,
-            'sharedCredits': tier.credits,
-            'tierType': 'organization',
-            'createdAt': now,
-            'updatedAt': now,
-          });
-          tx.set(userRef, {
-            'organizationId': orgId,
-            'organizationRole': 'owner',
-            'organizationInviteCode': inviteCode,
-            'organizationName': orgName,
-            'updatedAt': FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
-          return _OrganizationPoolUpdate(
-            action: 'created',
-            organizationId: orgId!,
-            organizationName: orgName,
-            inviteCode: inviteCode,
-            sharedCredits: tier.credits,
-          );
-        } else {
-          final data = orgSnap.data() ?? <String, dynamic>{};
-          final ownerUid = (data['ownerUid'] as String?)?.trim();
-          if (ownerUid != null && ownerUid.isNotEmpty && ownerUid != uid) {
-            throw StateError('organization-owner-required');
-          }
-
-          final existingName = (data['name'] as String?)?.trim();
-          final existingInviteCode = (data['inviteCode'] as String?)?.trim();
-          final resolvedName = (existingName != null && existingName.isNotEmpty)
-              ? existingName
-              : orgName;
-          final resolvedInviteCode =
-              (existingInviteCode != null && existingInviteCode.isNotEmpty)
-                  ? existingInviteCode
-                  : inviteCode;
-          final currentCredits = (data['sharedCredits'] as num?)?.toInt() ?? 0;
-          final nextCredits = currentCredits + tier.credits;
-          tx.update(orgRef, {
-            'sharedCredits': nextCredits,
-            'updatedAt': now,
-            'tierType': 'organization',
-          });
-          tx.set(userRef, {
-            'organizationId': orgId,
-            'organizationRole': 'owner',
-            'organizationInviteCode': resolvedInviteCode,
-            'organizationName': resolvedName,
-            'updatedAt': FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
-          return _OrganizationPoolUpdate(
-            action: 'topped_up',
-            organizationId: orgId!,
-            organizationName: resolvedName,
-            inviteCode: resolvedInviteCode,
-            sharedCredits: nextCredits,
-          );
-        }
-      });
-
-      if (!mounted) return null;
-      setState(() {
-        _organizationId = update.organizationId;
-        _organizationRole = 'owner';
-        _organizationInviteCode = update.inviteCode;
-        _organizationName = update.organizationName;
-        _organizationSharedCredits = update.sharedCredits;
-      });
-      await _refreshOrganizationDetails();
-      await _logOrganizationActivity(
-        organizationId: update.organizationId,
-        action: update.action == 'created' ? 'pool_created' : 'pool_topped_up',
-        creditsDelta: tier.credits,
-        creditsAfter: update.sharedCredits,
-        tierName: tier.name,
-      );
-      await _showOrganizationOwnerInfo();
-      return update;
-    } catch (e) {
-      debugPrint('Organisation top-up failed: $e');
-      if (e is StateError && e.message == 'organization-owner-required') {
-        _showSnack('Only the organisation owner can top up the shared pool.');
-      } else {
-        _showSnack('Could not top up organisation pool right now.');
-      }
-      return null;
-    }
-  }
-
-  Future<void> _showOrganizationOwnerInfo() async {
-    if (!mounted) return;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final code = _organizationInviteCode ?? '-';
-    final name = _organizationName ?? 'My Organisation';
-
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        scrollable: true,
-        backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-        surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-        title: Text(
-          'Organisation Ready',
-          style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              name,
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                color: isDark ? Colors.white : const Color(0xFF000000),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Invite code: $code',
-              style: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Share this code with co-workers or students so they can join your pool.',
-              style: TextStyle(
-                fontSize: 12,
-                color: isDark ? Colors.white70 : Colors.black54,
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () async {
-              await Clipboard.setData(ClipboardData(text: code));
-              if (!mounted) return;
-              _showSnack('Invite code copied.');
-            },
-            child: Text('Copy code', style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000))),
-          ),
-          TextButton(
-            style: TextButton.styleFrom(
-              backgroundColor: const Color(0xFF000000),
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _logOrganizationActivity({
-    required String organizationId,
-    required String action,
-    required int creditsDelta,
-    int? creditsAfter,
-    String? tierName,
-    double? amount,
-    String? note,
-    String? inputText,
-    String? outputText,
-  }) async {
-    final uid = _authUid;
-    if (uid == null || uid.isEmpty || organizationId.isEmpty) return;
-
-    try {
-      await FirebaseFirestore.instance
-          .collection('organizations')
-          .doc(organizationId)
-          .collection('activity')
-          .add({
-        'action': action,
-        'creditsDelta': creditsDelta,
-        'creditsAfter': creditsAfter,
-        'tierName': tierName,
-        'amount': amount,
-        'note': note,
-        'inputText': inputText,
-        'outputText': outputText,
-        'actorUid': uid,
-        'actorRole': _organizationRole,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-    } catch (e) {
-      debugPrint('Organization activity log failed: $e');
-    }
-  }
-
-  Future<void> _showManageOrganizationDialog() async {
-    if (_organizationId == null || _organizationId!.isEmpty || _organizationRole != 'owner') {
-      _showSnack('Only organisation owners can manage settings.');
-      return;
-    }
-
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final nameController = TextEditingController(text: _organizationName ?? 'My Organisation');
-    final creditLimitController = TextEditingController(text: (_organizationMemberCreditLimit ?? 0).toString());
-    bool regenerateInviteCode = false;
-
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setDialogState) {
-            return AlertDialog(
-              scrollable: true,
-              backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-              surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-              title: Text(
-                'Manage Organisation',
-                style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
-              ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  TextField(
-                    controller: nameController,
-                    decoration: const InputDecoration(labelText: 'Organisation name'),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: creditLimitController,
-                    decoration: const InputDecoration(labelText: 'Member credit limit (0 for unlimited)'),
-                    keyboardType: TextInputType.number,
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    'Current code: ${_organizationInviteCode ?? '-'}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: isDark ? Colors.white70 : Colors.black54,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Regenerating the code will stop the old code from being used for new joins.',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: isDark ? Colors.white70 : Colors.black54,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  CheckboxListTile(
-                    contentPadding: EdgeInsets.zero,
-                    value: regenerateInviteCode,
-                    onChanged: (value) {
-                      setDialogState(() => regenerateInviteCode = value ?? false);
-                    },
-                    title: Text(
-                      'Regenerate invite code',
-                      style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
-                    ),
-                    controlAffinity: ListTileControlAffinity.leading,
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(ctx).pop(),
-                  child: Text('Cancel', style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000))),
-                ),
-                TextButton(
-                  style: TextButton.styleFrom(
-                    backgroundColor: const Color(0xFF000000),
-                    foregroundColor: Colors.white,
-                  ),
-                  onPressed: () async {
-                    Navigator.of(ctx).pop();
-                    await _updateOrganizationSettings(
-                      nameController.text,
-                      memberCreditLimit: int.tryParse(creditLimitController.text) ?? 0,
-                      regenerateInviteCode: regenerateInviteCode,
-                    );
-                  },
-                  child: const Text('Save'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Future<void> _showOrganizationActivityDialog() async {
-    final orgId = _organizationId;
-    if (orgId == null || orgId.isEmpty) {
-      _showSnack('Join an organisation first to view activity.');
-      return;
-    }
-
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final activityStream = FirebaseFirestore.instance
-        .collection('organizations')
-        .doc(orgId)
-        .collection('activity')
-        .orderBy('createdAt', descending: true)
-        .limit(40)
-        .snapshots();
-
-    String formatTimestamp(dynamic value) {
-      if (value is Timestamp) {
-        final dt = value.toDate().toLocal();
-        final y = dt.year.toString().padLeft(4, '0');
-        final m = dt.month.toString().padLeft(2, '0');
-        final d = dt.day.toString().padLeft(2, '0');
-        final hh = dt.hour.toString().padLeft(2, '0');
-        final mm = dt.minute.toString().padLeft(2, '0');
-        return '$y-$m-$d $hh:$mm';
-      }
-      return 'Pending time';
-    }
-
-    String formatDelta(dynamic value) {
-      final amount = (value as num?)?.toInt() ?? 0;
-      return amount > 0 ? '+$amount' : amount.toString();
-    }
-
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-        surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-        title: Text(
-          'Organisation Activity',
-          style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
-        ),
-        content: SizedBox(
-          width: 520,
-          height: 380,
-          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: activityStream,
-            builder: (context, snapshot) {
-              if (snapshot.hasError) {
-                return Center(
-                  child: Text(
-                    'Could not load activity right now.',
-                    style: TextStyle(color: isDark ? Colors.white70 : Colors.black54),
-                    textAlign: TextAlign.center,
-                  ),
-                );
-              }
-
-              if (!snapshot.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
-
-              final docs = snapshot.data!.docs;
-              if (docs.isEmpty) {
-                return Center(
-                  child: Text(
-                    'No activity yet.',
-                    style: TextStyle(color: isDark ? Colors.white70 : Colors.black54),
-                  ),
-                );
-              }
-
-              return ListView.separated(
-                itemCount: docs.length,
-                separatorBuilder: (_, __) => Divider(
-                  color: isDark ? Colors.white12 : Colors.black12,
-                  height: 1,
-                ),
-                itemBuilder: (context, index) {
-                  final data = docs[index].data();
-                  final action = (data['action'] as String?) ?? 'activity';
-                  final creditsAfter = (data['creditsAfter'] as num?)?.toInt();
-                  final tierName = data['tierName'] as String?;
-                  final actorRole = (data['actorRole'] as String?) ?? 'member';
-                  final inputText = data['inputText'] as String?;
-                  final outputText = data['outputText'] as String?;
-
-                  final subtitleParts = <String>[
-                    formatTimestamp(data['createdAt']),
-                    'delta ${formatDelta(data['creditsDelta'])}',
-                    if (creditsAfter != null) 'pool $creditsAfter',
-                    'role ${actorRole.toUpperCase()}',
-                    if (tierName != null && tierName.isNotEmpty) 'tier $tierName',
-                  ];
-
-                  return ListTile(
-                    dense: true,
-                    leading: Icon(
-                      action == 'credit_spent'
-                          ? Icons.remove_circle_outline
-                          : (action == 'settings_updated'
-                              ? Icons.settings
-                              : Icons.add_circle_outline),
-                      color: isDark ? Colors.white : const Color(0xFF000000),
-                    ),
-                    title: Text(
-                      action.replaceAll('_', ' '),
-                      style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: isDark ? Colors.white : const Color(0xFF000000),
-                      ),
-                    ),
-                    subtitle: Text(
-                      subtitleParts.join(' • '),
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isDark ? Colors.white70 : Colors.black54,
-                      ),
-                    ),
-                    trailing: (action == 'credit_spent' && (inputText != null || outputText != null))
-                        ? IconButton(
-                            icon: Icon(
-                              Icons.remove_red_eye_outlined,
-                              color: isDark ? Colors.white70 : Colors.black54,
-                            ),
-                            onPressed: () => showDialog<void>(
-                              context: context,
-                              builder: (ctx) => AlertDialog(
-                                backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-                                title: const Text('Translation Details'),
-                                content: SingleChildScrollView(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      if (inputText != null) ...[
-                                        const Text('Input:', style: TextStyle(fontWeight: FontWeight.bold)),
-                                        Text(inputText),
-                                        const SizedBox(height: 10),
-                                      ],
-                                      if (outputText != null) ...[
-                                        const Text('Output:', style: TextStyle(fontWeight: FontWeight.bold)),
-                                        Text(outputText),
-                                      ],
-                                    ],
-                                  ),
-                                ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () => Navigator.of(ctx).pop(),
-                                    child: const Text('Close'),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          )
-                        : null,
-                  );
-                },
-              );
-            },
-          ),
-        ),
-        actions: [
-          TextButton(
-            style: TextButton.styleFrom(
-              backgroundColor: const Color(0xFF000000),
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _updateOrganizationSettings(
-    String newName, {
-    int? memberCreditLimit,
-    required bool regenerateInviteCode,
-  }) async {
-    final orgId = _organizationId;
-    if (orgId == null || orgId.isEmpty || _organizationRole != 'owner') {
-      _showSnack('Only organisation owners can update settings.');
-      return;
-    }
-
-    final orgRef = FirebaseFirestore.instance.collection('organizations').doc(orgId);
-    final trimmedName = newName.trim().isEmpty ? (_organizationName ?? 'My Organisation') : newName.trim();
-    final updatedCode = regenerateInviteCode ? _newInviteCode() : _organizationInviteCode;
-
-    try {
-      final updateData = <String, dynamic>{
-        'name': trimmedName,
-        'inviteCode': updatedCode,
-        'updatedAt': FieldValue.serverTimestamp(),
-      };
-      if (memberCreditLimit != null) {
-        updateData['memberCreditLimit'] = memberCreditLimit;
-      }
-      await orgRef.update(updateData);
-
-      final userRef = _userDocRef();
-      if (userRef != null) {
-        final userData = <String, dynamic>{
-          'organizationName': trimmedName,
-          'organizationInviteCode': updatedCode,
-          'updatedAt': FieldValue.serverTimestamp(),
-        };
-        if (memberCreditLimit != null) {
-          userData['organizationMemberCreditLimit'] = memberCreditLimit;
-        }
-        await userRef.set(userData, SetOptions(merge: true));
-      }
-
-      if (!mounted) return;
-      setState(() {
-        _organizationName = trimmedName;
-        _organizationInviteCode = updatedCode;
-        if (memberCreditLimit != null) {
-          _organizationMemberCreditLimit = memberCreditLimit;
-        }
-      });
-
-      _showSnack('Organisation settings updated.');
-      await _logOrganizationActivity(
-        organizationId: orgId,
-        action: 'settings_updated',
-        creditsDelta: 0,
-        creditsAfter: _organizationSharedCredits,
-        note: regenerateInviteCode ? 'name_changed_and_code_regenerated' : 'name_changed',
-      );
-    } catch (e) {
-      debugPrint('Organization settings update failed: $e');
-      _showSnack('Could not update organisation settings right now.');
-    }
-  }
 
   Future<void> _getAndStoreDeviceId() async {
     try {
@@ -2875,24 +1899,21 @@ class _HomeScreenState extends State<HomeScreen> {
         debugPrint('Install ID $installId registered for first free trial use');
       }
 
-      // If anonymous user and device already used trial, set credits to 0
-      // Only do this if they are at the starting balance (6), to avoid resetting
-      // someone who is mid-trial and just restarted the app.
-      if (_isAnonymousUser()) {
-        final deviceUsedTrial = await _hasDeviceUsedFreeTrial();
-        if (deviceUsedTrial && _credits == 6) {
-          debugPrint('Anonymous user on device that already used trial. Setting credits to 0.');
-          if (mounted) {
-            setState(() => _credits = 0);
-          } else {
-            _credits = 0;
-          }
-          unawaited(_updateCreditsInFirestore());
+      // If a device has already used the free trial, reset the starting balance to 0
+      // for any user on that device. Only do this if they are at the starting
+      // balance (6), to avoid resetting someone who is mid-trial and just restarted.
+      final deviceUsedTrial = await _hasDeviceUsedFreeTrial();
+      if (deviceUsedTrial && _credits == 6) {
+        debugPrint('User on device that already used trial. Setting credits to 0.');
+        if (mounted) {
+          setState(() => _credits = 0);
+        } else {
+          _credits = 0;
         }
+        unawaited(_updateCreditsInFirestore());
       }
 
       await _ensureUserProfileDocument();
-      await _loadOrganizationMembership();
     } catch (e) {
       debugPrint('Error checking install ID: $e');
     }
@@ -3344,6 +2365,20 @@ class _HomeScreenState extends State<HomeScreen> {
       _showSnack('Microphone not available');
       return;
     }
+    _talkHoldTimer?.cancel();
+    _talkHoldProgress = 0.0;
+    final start = DateTime.now();
+    _talkHoldTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+      if (!mounted) return;
+      final elapsed = DateTime.now().difference(start).inMilliseconds;
+      final progress = (elapsed / 5000).clamp(0.0, 1.0);
+      setState(() => _talkHoldProgress = progress);
+      if (progress >= 1.0) {
+        _talkHoldTimer?.cancel();
+        _stopListening();
+      }
+    });
+
     setState(() {
       _isTalking = true;
       _showHintText = false;
@@ -3372,8 +2407,15 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _stopListening() async {
+    _talkHoldTimer?.cancel();
+    _talkHoldTimer = null;
+    _talkHoldProgress = 0.0;
     await _speech.stop();
-    setState(() => _isTalking = false);
+    if (mounted) {
+      setState(() => _isTalking = false);
+    } else {
+      _isTalking = false;
+    }
   }
 
   Future<bool> _consumeUsageAllowance({
@@ -3381,63 +2423,6 @@ class _HomeScreenState extends State<HomeScreen> {
     String? inputText,
     String? outputText,
   }) async {
-    final orgId = _organizationId;
-    if (orgId != null && orgId.isNotEmpty) {
-      try {
-        final orgRef = FirebaseFirestore.instance.collection('organizations').doc(orgId);
-        final remainingCredits = await FirebaseFirestore.instance.runTransaction<int?>((tx) async {
-          final snap = await tx.get(orgRef);
-          if (!snap.exists) return null;
-          final current = (snap.data()?['sharedCredits'] as num?)?.toInt() ?? 0;
-          if (current < _organizationUsageCost) {
-            return -1;
-          }
-          final updated = current - _organizationUsageCost;
-          tx.update(orgRef, {
-            'sharedCredits': updated,
-            'updatedAt': FieldValue.serverTimestamp(),
-          });
-          return updated;
-        });
-
-        if (remainingCredits == null) {
-          if (!silent) _showSnack('Organisation not found.');
-          return false;
-        }
-        if (remainingCredits < 0) {
-          if (!silent) {
-            _showSnack('Organisation pool is empty. Please top up.');
-            _showCreditTiers();
-          }
-          return false;
-        }
-
-        if (mounted) {
-          setState(() => _organizationSharedCredits = remainingCredits);
-        }
-        await _logOrganizationActivity(
-          organizationId: orgId,
-          action: 'credit_spent',
-          creditsDelta: -_organizationUsageCost,
-          creditsAfter: remainingCredits,
-          note: 'translation',
-          inputText: inputText,
-          outputText: outputText,
-        );
-        debugPrint('Deducted $_organizationUsageCost from Org Pool. Remaining: $remainingCredits');
-        if (!silent) {
-          _showSnack(
-            'Used $_organizationUsageCost credits from Organisation Pool | $remainingCredits remaining',
-          );
-        }
-        return true;
-      } catch (e) {
-        debugPrint('Organisation pool debit failed: $e');
-        if (!silent) _showSnack('Could not use organisation pool.');
-        return false;
-      }
-    }
-
     // Check if user is trying to use free trial credits and device already used them
     if (_credits == 6) {
       final alreadyUsed = await _hasDeviceUsedFreeTrial();
@@ -3506,8 +2491,6 @@ class _HomeScreenState extends State<HomeScreen> {
             phonetic: _phoneticText));
 
     // 3. Audio Handling
-    final provider = _ttsProviderForLanguage(_selectedOutputLang);
-    final voiceName = _voiceNameForLanguage(_selectedOutputLang);
     final safeForSpeech = _silenceProfanityForSpeech(result);
     
     if (safeForSpeech.isEmpty) return;
@@ -3670,6 +2653,10 @@ class _HomeScreenState extends State<HomeScreen> {
     required String text,
     required bool isUserPhrase,
   }) async {
+    if (_credits <= 0) {
+      _showCreditTiers();
+      return;
+    }
     final assetPath = _learnAudioAssetPath(language, text);
     if (assetPath != null) {
       try {
@@ -3883,6 +2870,19 @@ class _HomeScreenState extends State<HomeScreen> {
         _spokenLang = '';
         _translatedLang = '';
       });
+
+  void _editSpokenText() {
+    final textToEdit = _spokenRawText.isNotEmpty ? _spokenRawText : _spokenText;
+    if (textToEdit.isNotEmpty) {
+      setState(() {
+        _tttController.text = textToEdit;
+        _spokenText = '';
+        _spokenRawText = '';
+      });
+      FocusScope.of(context).requestFocus(_inputFocusNode);
+      _showSnack('Edit mode activated. You can now edit the text.');
+    }
+  }
 
   Future<void> _shareCurrentTranslationPackage() async {
     final inputDisplay = _spokenText.trim();
@@ -4118,6 +3118,14 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _openCreditsIfNeededForTab(String tabName) {
+    if (_credits <= 0) {
+      _showCreditTiers();
+      return;
+    }
+    setState(() => _activeTab = tabName);
+  }
+
   void _showCreditTiers() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     showModalBottomSheet(
@@ -4191,9 +3199,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   Chip(
                     label: Text(
-                      _organizationId != null && _organizationId!.isNotEmpty
-                          ? 'Org Pool: ${_organizationSharedCredits ?? 0} credits'
-                          : 'Balance: $_credits translations',
+                      'Balance: $_credits translations',
                       style: TextStyle(
                         color: isDark ? Colors.white : const Color(0xFF000000),
                         fontWeight: FontWeight.bold,
@@ -4203,6 +3209,42 @@ class _HomeScreenState extends State<HomeScreen> {
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   ),
                 ],
+              ),
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: isDark ? Colors.white10 : const Color(0xFFF5F5F5),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Your plan renews automatically every month.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isDark ? Colors.white70 : Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: _cancelMonthlyDebit,
+                        style: TextButton.styleFrom(
+                          foregroundColor: isDark ? Colors.white : Colors.black,
+                          backgroundColor: isDark ? Colors.black : Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: const Text('Pause renewals'),
+                      ),
+                    ),
+                  ],
+                ),
               ),
               const SizedBox(height: 16),
               ..._tiers.map((tier) => Padding(
@@ -4236,9 +3278,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                           const SizedBox(width: 8),
                           Text(
-                            tier.name == _organizationTierName
-                                ? '${tier.credits} credits'
-                                : '${tier.credits} translations',
+                            '${tier.credits} translations',
                             style: const TextStyle(color: Colors.white70),
                           ),
                           const SizedBox(width: 8),
@@ -4301,9 +3341,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    tier.name == _organizationTierName
-                        ? '${tier.name} • ${tier.credits} credits • ${tier.price}'
-                        : '${tier.name} • ${tier.credits} translations • ${tier.price}',
+                    '${tier.name} • ${tier.credits} translations • ${tier.price}',
                     style: TextStyle(
                       fontSize: 13,
                       color: isDark ? Colors.white70 : Colors.black54,
@@ -4389,6 +3427,44 @@ class _HomeScreenState extends State<HomeScreen> {
     return double.tryParse(cleaned) ?? 0;
   }
 
+  DateTime _addOneMonth(DateTime date) {
+    var year = date.year;
+    var month = date.month + 1;
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+
+    final lastDayOfMonth = DateTime(year, month + 1, 0).day;
+    final safeDay = date.day > lastDayOfMonth ? lastDayOfMonth : date.day;
+
+    return DateTime(year, month, safeDay, date.hour, date.minute, date.second,
+        date.millisecond, date.microsecond);
+  }
+
+  String _formatShortDate(DateTime date) {
+    return '${date.day}/${date.month}/${date.year}';
+  }
+
+  Future<void> _cancelMonthlyDebit() async {
+    final ref = _userDocRef();
+    if (ref == null) {
+      _showSnack('You must be signed in to cancel the debit order.');
+      return;
+    }
+
+    final now = DateTime.now();
+    final keepUntil = now.add(const Duration(days: 30));
+
+    await ref.set({
+      'monthlyDebitCancelled': true,
+      'cancelledUntil': Timestamp.fromDate(keepUntil),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    _showSnack('Debit cancelled. Your current credits stay active until ${_formatShortDate(keepUntil)}.');
+  }
+
   bool _allowPaystackSandboxSimulation() {
     final raw = (dotenv.env['PAYSTACK_SANDBOX_BYPASS'] ?? '').trim().toLowerCase();
     final enabledByEnv = raw == '1' || raw == 'true' || raw == 'yes' || raw == 'on';
@@ -4404,30 +3480,41 @@ class _HomeScreenState extends State<HomeScreen> {
   }) async {
     if (!mounted) return;
 
-    if (tier.name == _organizationTierName) {
-      final orgUpdate = await _createOrTopUpOrganizationPool(tier);
-      if (orgUpdate == null) return;
-      _showSnack(
-        orgUpdate.action == 'created'
-            ? 'Organisation created with ${tier.credits} shared credits (${tier.name}) [$sourceLabel].'
-            : 'Organisation pool topped up: ${tier.credits} credits (${tier.name}) [$sourceLabel].',
-      );
+    final ref = _userDocRef();
+    final now = DateTime.now();
+    final monthlyRenewalAt = _addOneMonth(now);
+
+    setState(() => _credits = tier.credits);
+
+    if (ref != null) {
+      await ref.set({
+        'credits': tier.credits,
+        'chargeCycleStartedAt': Timestamp.fromDate(now),
+        'nextAutoDebitAt': Timestamp.fromDate(monthlyRenewalAt),
+        'monthlyRenewalActive': true,
+        'monthlyDebitCancelled': false,
+        'cancelledUntil': null,
+        'creditsRollOver': false,
+        'lastTierName': tier.name,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
     } else {
-      setState(() => _credits += tier.credits);
-      // Save updated credits to Firestore after purchase
       unawaited(_updateCreditsInFirestore());
-      _showSnack('Credits added: ${tier.credits} translations (${tier.name}) [$sourceLabel].');
     }
+
+    _showSnack('Monthly bundle activated: ${tier.credits} translations (${tier.name}) [$sourceLabel].');
 
     try {
       await FirebaseFirestore.instance.collection('payment_events').add({
         'userId': _authUid,
-        'organizationId': _organizationId,
         'tierName': tier.name,
         'secondsAdded': tier.credits,
         'amountPaid': amount,
         'status': status,
         'reference': reference,
+        'chargeCycleStartedAt': Timestamp.fromDate(now),
+        'nextAutoDebitAt': Timestamp.fromDate(monthlyRenewalAt),
+        'creditsRollOver': false,
         'createdAt': FieldValue.serverTimestamp(),
       });
     } catch (_) {
@@ -4447,18 +3534,6 @@ class _HomeScreenState extends State<HomeScreen> {
       reference: ref,
       sourceLabel: 'Paystack Sandbox',
     );
-  }
-
-  Future<void> _waitForInteractiveView() async {
-    for (int i = 0; i < 12; i++) {
-      if (!mounted) return;
-      final state = WidgetsBinding.instance.lifecycleState;
-      if (state == null || state == AppLifecycleState.resumed) {
-        await WidgetsBinding.instance.endOfFrame;
-        return;
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-    }
   }
 
   Future<dynamic> _launchPaystackWithViewRetry(String accessCode) async {
@@ -4500,11 +3575,6 @@ class _HomeScreenState extends State<HomeScreen> {
   void _startPaystackTierPayment(_CreditTier tier) async {
     final paymentReady = await _ensurePaymentReadyAccount();
     if (!paymentReady) return;
-
-    if (tier.name == _organizationTierName) {
-      final allowed = await _canPurchaseOrganizationTier();
-      if (!allowed) return;
-    }
 
     final amount = _tierAmountFromPrice(tier.price);
 
@@ -4593,11 +3663,6 @@ class _HomeScreenState extends State<HomeScreen> {
   void _startPayPalTierPayment(_CreditTier tier) async {
     final paymentReady = await _ensurePaymentReadyAccount();
     if (!paymentReady) return;
-
-    if (tier.name == _organizationTierName) {
-      final allowed = await _canPurchaseOrganizationTier();
-      if (!allowed) return;
-    }
 
     final mode = _payPalModeFromEnv();
     if (mode == null) {
@@ -4800,19 +3865,27 @@ class _HomeScreenState extends State<HomeScreen> {
             // - If on History and swipe right: go to Translate
             // - If on Learn and swipe right: go to History if not empty, else go to Translate
             if (_activeTab == 'translate' && details.primaryVelocity != null && details.primaryVelocity! < -200) {
-              if (_history.isNotEmpty) {
+              if (_credits <= 0) {
+                _showCreditTiers();
+              } else if (_history.isNotEmpty) {
                 setState(() => _activeTab = 'history');
               } else {
                 setState(() => _activeTab = 'learn');
               }
             } else if (_activeTab == 'history' && details.primaryVelocity != null) {
               if (details.primaryVelocity! < -200) {
-                setState(() => _activeTab = 'learn');
+                if (_credits <= 0) {
+                  _showCreditTiers();
+                } else {
+                  setState(() => _activeTab = 'learn');
+                }
               } else if (details.primaryVelocity! > 200) {
                 setState(() => _activeTab = 'translate');
               }
             } else if (_activeTab == 'learn' && details.primaryVelocity != null && details.primaryVelocity! > 200) {
-              if (_history.isNotEmpty) {
+              if (_credits <= 0) {
+                _showCreditTiers();
+              } else if (_history.isNotEmpty) {
                 setState(() => _activeTab = 'history');
               } else {
                 setState(() => _activeTab = 'translate');
@@ -4922,9 +3995,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         } else if (value == 'translate') {
                           setState(() => _activeTab = 'translate');
                         } else if (value == 'history') {
-                          setState(() => _activeTab = 'history');
+                          _openCreditsIfNeededForTab('history');
                         } else if (value == 'learn') {
-                          setState(() => _activeTab = 'learn');
+                          _openCreditsIfNeededForTab('learn');
                         } else if (value == 'theme') {
                           widget.onToggleTheme();
                         }
@@ -4949,9 +4022,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 borderRadius: BorderRadius.circular(999),
                               ),
                               child: Text(
-                                _organizationId != null && _organizationId!.isNotEmpty
-                                    ? '${_organizationSharedCredits ?? 0}'
-                                    : '$_credits',
+                                '$_credits',
                                 style: TextStyle(
                                   fontSize: 12,
                                   fontWeight: FontWeight.w700,
@@ -5055,77 +4126,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                   },
                                 ),
                                 ListTile(
-                                  leading: Icon(Icons.groups, color: isDark ? Colors.white : Colors.black),
-                                  title: Text(
-                                    _organizationId != null && _organizationId!.isNotEmpty
-                                        ? 'Organisation'
-                                        : 'Join Organisation',
-                                    style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
-                                  ),
-                                  subtitle: Text(
-                                    _organizationId != null && _organizationId!.isNotEmpty
-                                        ? '${_organizationName ?? 'Organisation'} • ${_organizationRole.toUpperCase()} • ${_organizationSharedCredits ?? 0} credits'
-                                        : 'Use invite code to join a shared pool',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: isDark ? Colors.white70 : Colors.black54,
-                                    ),
-                                  ),
-                                  onTap: () {
-                                    Navigator.pop(context);
-                                    if (_organizationId != null && _organizationId!.isNotEmpty) {
-                                      _showOrganizationStatusDialog();
-                                    } else {
-                                      _showJoinOrganizationDialog();
-                                    }
-                                  },
-                                ),
-                                if (_organizationId != null && _organizationId!.isNotEmpty)
-                                  ListTile(
-                                    leading: Icon(Icons.history, color: isDark ? Colors.white : Colors.black),
-                                    title: Text(
-                                      'Organisation Activity',
-                                      style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
-                                    ),
-                                    subtitle: Text(
-                                      'View recent pool top-ups and spend',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: isDark ? Colors.white70 : Colors.black54,
-                                      ),
-                                    ),
-                                    onTap: () {
-                                      Navigator.pop(context);
-                                      _showOrganizationActivityDialog();
-                                    },
-                                  ),
-                                if (_organizationRole == 'owner')
-                                  ListTile(
-                                    leading: Icon(Icons.manage_accounts, color: isDark ? Colors.white : Colors.black),
-                                    title: Text(
-                                      'Manage Organisation',
-                                      style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
-                                    ),
-                                    subtitle: Text(
-                                      'Rename or regenerate invite code',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: isDark ? Colors.white70 : Colors.black54,
-                                      ),
-                                    ),
-                                    onTap: () {
-                                      Navigator.pop(context);
-                                      _showManageOrganizationDialog();
-                                    },
-                                  ),
-                                ListTile(
-                                  leading: Icon(Icons.info_outline,
-                                      color: isDark ? Colors.white : Colors.black),
-                                  title: Text('Disclaimer',
-                                      style: TextStyle(
-                                          color: isDark
-                                              ? Colors.white
-                                              : const Color(0xFF000000))),
+                                  leading: Icon(Icons.info_outline, color: isDark ? Colors.white : Colors.black),
+                                  title: Text('Disclaimer', style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000))),
                                   onTap: () {
                                     Navigator.pop(context);
                                     _showDisclaimerInfo();
@@ -5169,7 +4171,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 Expanded(
                   child: GestureDetector(
-                    onTap: () => setState(() => _activeTab = 'history'),
+                    onTap: () => _openCreditsIfNeededForTab('history'),
                     child: Container(
                       alignment: Alignment.center,
                       child: Text(
@@ -5187,7 +4189,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 Expanded(
                   child: GestureDetector(
-                    onTap: () => setState(() => _activeTab = 'learn'),
+                    onTap: () => _openCreditsIfNeededForTab('learn'),
                     child: Container(
                       alignment: Alignment.centerRight,
                       child: Text(
@@ -5365,6 +4367,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     onTap: () {
                       FocusScope.of(context).requestFocus(_inputFocusNode);
                     },
+                    onLongPress: _editSpokenText,
                     child: Container(
                       width: double.infinity,
                       height: boxHeight,
@@ -5621,6 +4624,10 @@ class _HomeScreenState extends State<HomeScreen> {
                           icon: const Icon(Icons.school, size: 10),
                           label: const Text('Send to Learn', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
                           onPressed: () async {
+                            if (_credits <= 0) {
+                              _showCreditTiers();
+                              return;
+                            }
                             final sent = await _sendToLearnMultipleLangs(
                               translated: _translatedText,
                               original: _spokenText.isNotEmpty ? _spokenText : _tttController.text,
@@ -5697,39 +4704,54 @@ class _HomeScreenState extends State<HomeScreen> {
                         GestureDetector(
                           onTapDown: (_) => _startListening(),
                           onTapUp: (_) => _stopListening(),
-                          onTapCancel: () {},
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 150),
-                            width: _isTalking ? 130 : 120,
-                            height: _isTalking ? 130 : 120,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: _isTalking ? Colors.red : Colors.green,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: (_isTalking ? Colors.red : Colors.green)
-                                      .withValues(alpha: 0.4),
-                                  blurRadius: _isTalking ? 20 : 10,
-                                  spreadRadius: _isTalking ? 4 : 2,
-                                )
-                              ],
-                            ),
-                            child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(_isTalking ? Icons.mic : Icons.mic_none,
-                                      color: Colors.white, size: 40),
-                                  const SizedBox(height: 4),
-                                  if (_showTalkHintText)
-                                    Text(
-                                      _isTalking ? 'LISTENING' : 'HOLD TO TALK',
-                                      style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.bold,
-                                          letterSpacing: 0.5),
-                                    ),
-                                ]),
+                          onTapCancel: () => _stopListening(),
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              SizedBox(
+                                width: _isTalking ? 130 : 120,
+                                height: _isTalking ? 130 : 120,
+                                child: CircularProgressIndicator(
+                                  value: _isTalking ? _talkHoldProgress : 0.0,
+                                  strokeWidth: 4,
+                                  backgroundColor: Colors.white.withValues(alpha: 0.22),
+                                  valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                                ),
+                              ),
+                              AnimatedContainer(
+                                duration: const Duration(milliseconds: 150),
+                                width: _isTalking ? 110 : 100,
+                                height: _isTalking ? 110 : 100,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: _isTalking ? Colors.red : Colors.green,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: (_isTalking ? Colors.red : Colors.green)
+                                          .withValues(alpha: 0.4),
+                                      blurRadius: _isTalking ? 20 : 10,
+                                      spreadRadius: _isTalking ? 4 : 2,
+                                    )
+                                  ],
+                                ),
+                                child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(_isTalking ? Icons.mic : Icons.mic_none,
+                                          color: Colors.white, size: 40),
+                                      const SizedBox(height: 4),
+                                      if (_showTalkHintText)
+                                        Text(
+                                          _isTalking ? 'LISTENING' : 'HOLD TO TALK',
+                                          style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                              letterSpacing: 0.5),
+                                        ),
+                                    ]),
+                              ),
+                            ],
                           ),
                         ),
                         if (isDark)
@@ -6071,6 +5093,10 @@ class _HomeScreenState extends State<HomeScreen> {
                               icon: const Icon(Icons.school, size: 10),
                               label: const Text('Send to Learn', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
                               onPressed: () async {
+                                if (_credits <= 0) {
+                                  _showCreditTiers();
+                                  return;
+                                }
                                 await _sendHistoryToLearn(item);
                               },
                             ),

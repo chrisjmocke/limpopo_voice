@@ -27,12 +27,19 @@ exports.ttsProviderReadiness = onRequest((req, res) => {
 });
 
 // Paystack & PayPal functions
-const paystack = require("./paystack");
-const paypal = require("./paypal");
+exports.createPaystackTransaction = onRequest({ region: "africa-south1", secrets: ["PAYSTACK_SECRET_KEY"] }, (req, res) => {
+    return require("./paystack").createPaystackTransaction(req, res);
+});
+exports.createPaystackTransactionHttp = onRequest({ region: "africa-south1", secrets: ["PAYSTACK_SECRET_KEY"] }, (req, res) => {
+    return require("./paystack").createPaystackTransactionHttp(req, res);
+});
+exports.paystackWebhook = onRequest({ region: "africa-south1", secrets: ["PAYSTACK_SECRET_KEY"] }, (req, res) => {
+    return require("./paystack").paystackWebhook(req, res);
+});
 
-exports.createPaystackTransaction = paystack.createPaystackTransaction;
-exports.createPaystackTransactionHttp = paystack.createPaystackTransactionHttp;
-exports.paystackWebhook = paystack.paystackWebhook;
-
-exports.createPayPalOrderHttp = paypal.createPayPalOrderHttp;
-exports.capturePayPalOrderHttp = paypal.capturePayPalOrderHttp;
+exports.createPayPalOrderHttp = onRequest({ region: "africa-south1", secrets: ["PAYPAL_CLIENT_ID", "PAYPAL_SECRET"] }, (req, res) => {
+    return require("./paypal").createPayPalOrderHttp(req, res);
+});
+exports.capturePayPalOrderHttp = onRequest({ region: "africa-south1", secrets: ["PAYPAL_CLIENT_ID", "PAYPAL_SECRET"] }, (req, res) => {
+    return require("./paypal").capturePayPalOrderHttp(req, res);
+});

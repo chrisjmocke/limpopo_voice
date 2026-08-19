@@ -29,7 +29,7 @@ const createPaystackTransaction = onCall(
       throw new HttpsError("unauthenticated", "User must be signed in");
     }
 
-    const { amountCents, email, orgId, callback_url } = request.data || {};
+    const { amountCents, email, callback_url } = request.data || {};
     if (typeof amountCents !== "number" || amountCents <= 0) {
       throw new HttpsError("invalid-argument", "Invalid amount");
     }
@@ -49,7 +49,6 @@ const createPaystackTransaction = onCall(
       callback_url: typeof callback_url === "string" ? callback_url : undefined,
       metadata: {
         userId: request.auth.uid,
-        orgId: typeof orgId === "string" && orgId.trim() ? orgId.trim() : null,
       },
     };
 
@@ -103,7 +102,7 @@ const createPaystackTransactionHttp = onRequest(
       return res.status(401).send({ error: "Unauthorized" });
     }
 
-    const { amountCents, email, orgId, callback_url } = req.body || {};
+    const { amountCents, email, callback_url } = req.body || {};
     if (typeof amountCents !== "number" || amountCents <= 0) {
       return res.status(400).send({ error: "Invalid amount" });
     }
@@ -130,7 +129,6 @@ const createPaystackTransactionHttp = onRequest(
           callback_url: typeof callback_url === "string" ? callback_url : undefined,
           metadata: {
             userId: decodedToken.uid,
-            orgId: typeof orgId === "string" && orgId.trim() ? orgId.trim() : null,
           },
         }),
       });
@@ -172,8 +170,6 @@ const paystackWebhook = onRequest(
     }
 
     const secretKey = getPaystackSecret();
-    // In Firebase Functions v2, req.rawBody is the preferred way to get the original body for signature verification.
-    // Reconstructing it with JSON.stringify is unreliable due to potential whitespace/key-order differences.
     const rawBody = req.rawBody;
     if (!rawBody) {
       console.error("Missing rawBody in webhook request. Signature verification might fail.");
@@ -194,7 +190,6 @@ const paystackWebhook = onRequest(
     const data = event.data || {};
     const metadata = data.metadata || {};
     const userId = metadata.userId;
-    const orgId = metadata.orgId;
 
     if (!userId) {
       console.error("Missing userId in webhook metadata");
@@ -205,11 +200,8 @@ const paystackWebhook = onRequest(
     const creditsToAdd = Math.floor(amount / 100);
 
     const db = admin.firestore();
-    const batch = db.batch();
-
     const userRef = db.collection("users").doc(String(userId));
-    batch.set(
-      userRef,
+    await userRef.set(
       {
         credits: admin.firestore.FieldValue.increment(creditsToAdd),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -217,20 +209,7 @@ const paystackWebhook = onRequest(
       { merge: true },
     );
 
-    if (typeof orgId === "string" && orgId.trim()) {
-      const orgRef = db.collection("organizations").doc(orgId.trim());
-      batch.set(
-        orgRef,
-        {
-          sharedCredits: admin.firestore.FieldValue.increment(creditsToAdd),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true },
-      );
-    }
-
-    await batch.commit();
-    console.log(`Added ${creditsToAdd} credits to user ${userId}${orgId ? ` and org ${orgId}` : ""}`);
+    console.log(`Added ${creditsToAdd} credits to user ${userId}`);
     return res.status(200).send("OK");
   },
 );
