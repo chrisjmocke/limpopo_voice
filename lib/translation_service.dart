@@ -174,6 +174,14 @@ class TranslationService {
         return null;
       }
 
+      final errorMessage = body['error']?.toString();
+      final errorDetails = body['details']?.toString();
+      if (errorMessage != null && errorMessage.isNotEmpty) {
+        debugPrint('TranslationService: Backend error response: $errorMessage | $errorDetails');
+        _setLastError('backend_error', errorDetails ?? errorMessage);
+        return null;
+      }
+
       final offensiveContent = body['offensiveContent'] as bool? ?? false;
       if (offensiveContent) {
         debugPrint('TranslationService: Offensive content filtered.');
@@ -184,7 +192,7 @@ class TranslationService {
       final audioBase64 = body['audioContent'] as String?;
       if (audioBase64 == null || audioBase64.isEmpty) {
         debugPrint('TranslationService: No audioContent in response');
-        _setLastError('missing_audio', 'No audioContent in response');
+        _setLastError('missing_audio', errorDetails ?? 'No audioContent in response');
         return null;
       }
 

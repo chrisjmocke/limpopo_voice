@@ -361,6 +361,18 @@ exports.handleProcessSpeech = (req, res) => {
             const requestedCode = mapLanguageCode(targetLanguage);
             const requestedGender = mapGender(isMale !== false);
             const ttsResult = await synthesizeWithProviderChain({ text: translatedText, targetLanguage, requestedVoiceName: voiceName });
+            if (!ttsResult?.audioContent) {
+                console.error("Speech synthesis unavailable: Narakeet returned no audioContent.");
+                return res.status(503).send({
+                    error: "Speech synthesis unavailable",
+                    details: "Narakeet is unavailable or not configured. Check the function secret and deployment.",
+                    provider: "narakeet",
+                    status: "error",
+                    translation: translatedText,
+                    modelUsed: modelUsed || null,
+                    skipTranslation: shouldSkipTranslation,
+                });
+            }
             res.status(200).send({ translation: translatedText, audioContent: ttsResult.audioContent, voiceLanguageUsed: ttsResult.voiceLanguageUsed, voiceGenderUsed: ttsResult.voiceGenderUsed, voiceNameUsed: ttsResult.voiceNameUsed, ttsProviderUsed: ttsResult.ttsProviderUsed, ttsProviderChain: ttsResult.ttsProviderChain, cacheHit: ttsResult.cacheHit === true, cacheLayer: ttsResult.cacheLayer || null, cacheKey: ttsResult.cacheKey || null, audioUrl: ttsResult.audioUrl || null, modelUsed, skipTranslation: shouldSkipTranslation, status: "success" });
         } catch (error) {
             console.error("Translation Error:", error);
