@@ -22,7 +22,9 @@ exports.liveHealthCheck = onRequest({ secrets: ["GEMINI_API_KEY"] }, (req, res) 
     return require("./speech_processor").handleLiveHealthCheck(req, res);
 });
 
-exports.ttsProviderReadiness = onRequest((req, res) => {
+exports.ttsProviderReadiness = onRequest({
+    secrets: ["NARAKEET_API_KEY"],
+}, (req, res) => {
     return require("./speech_processor").handleTtsProviderReadiness(req, res);
 });
 

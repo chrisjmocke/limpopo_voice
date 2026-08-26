@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 class TranslationService {
   final String functionUrl;
   final http.Client _client = http.Client();
+  static Future<User?>? _anonymousSignInFuture;
 
   String? _lastErrorCode;
   String? _lastErrorDetails;
@@ -28,10 +29,32 @@ class TranslationService {
     _lastErrorDetails = null;
   }
 
+  Future<User?> _ensureAuthenticatedUser() async {
+    final existingUser = FirebaseAuth.instance.currentUser;
+    if (existingUser != null) {
+      debugPrint('[TranslationService] Existing Firebase user: ${existingUser.uid}, email=${existingUser.email}');
+      return existingUser;
+    }
+
+    if (_anonymousSignInFuture != null) {
+      debugPrint('[TranslationService] Reusing in-flight anonymous sign-in.');
+      return _anonymousSignInFuture!;
+    }
+
+    debugPrint('[TranslationService] Starting anonymous Firebase sign-in.');
+    _anonymousSignInFuture = FirebaseAuth.instance
+        .signInAnonymously()
+        .then((credential) => credential.user)
+        .whenComplete(() => _anonymousSignInFuture = null);
+
+    final user = await _anonymousSignInFuture!;
+    debugPrint('[TranslationService] Anonymous Firebase user ready: ${user?.uid}, email=${user?.email}');
+    return user;
+  }
+
   Future<void> _refreshIdToken() async {
     try {
-      User? user = FirebaseAuth.instance.currentUser;
-      user ??= (await FirebaseAuth.instance.signInAnonymously()).user;
+      final user = await _ensureAuthenticatedUser();
       if (user == null) return;
       _cachedIdToken = await user.getIdToken(true);
       _idTokenFetchedAt = DateTime.now();
@@ -49,8 +72,7 @@ class TranslationService {
   }
 
   Future<Map<String, String>?> _buildHeaders() async {
-    User? user = FirebaseAuth.instance.currentUser;
-    user ??= (await FirebaseAuth.instance.signInAnonymously()).user;
+    final user = await _ensureAuthenticatedUser();
     if (user == null) {
       debugPrint('TranslationService: No Firebase user available');
       _setLastError('auth_unavailable', 'No Firebase user available');
@@ -60,15 +82,97 @@ class TranslationService {
     final now = DateTime.now();
     if (_cachedIdToken == null ||
         now.difference(_idTokenFetchedAt) > const Duration(minutes: 45)) {
+      debugPrint('[TranslationService] Fetching fresh Firebase ID token for uid=${user.uid}');
       _cachedIdToken = await user.getIdToken();
       _idTokenFetchedAt = now;
     }
+
+    debugPrint('[TranslationService] Token ready for uid=${user.uid}, length=${(_cachedIdToken ?? '').length}');
 
     final headers = <String, String>{
       'Content-Type': 'application/json',
       'Authorization': 'Bearer ${_cachedIdToken ?? ''}',
     };
     return headers;
+  }
+
+  Map<String, dynamic> buildRequestBody({
+    required String text,
+    required String targetLanguage,
+    String? voiceName,
+    String ttsProvider = 'narakeet',
+    bool isMale = true,
+    bool skipTranslation = false,
+  }) {
+    return {
+      'text': text.trim(),
+      'targetLanguage': targetLanguage,
+      'skipTranslation': skipTranslation,
+      'isMale': isMale,
+      'voiceName': voiceName,
+      'ttsProvider': ttsProvider,
+    };
+  }
+
+  Future<String?> translateText(
+    String text,
+    String targetLanguage, {
+    String? voiceName,
+    String ttsProvider = 'narakeet',
+  }) async {
+    final input = text.trim();
+    if (input.isEmpty || functionUrl.trim().isEmpty) {
+      _setLastError('invalid_input', 'Empty input or function URL');
+      return null;
+    }
+
+    try {
+      final headers = await _buildHeaders();
+      if (headers == null) return null;
+
+      final requestBody = jsonEncode(buildRequestBody(
+        text: input,
+        targetLanguage: targetLanguage,
+        voiceName: voiceName,
+        ttsProvider: ttsProvider,
+        isMale: true,
+      ));
+
+      final response = await _client.post(
+        Uri.parse(functionUrl),
+        headers: headers,
+        body: requestBody,
+      ).timeout(const Duration(seconds: 45));
+
+      if (response.statusCode != 200) {
+        _setLastError('function_http_error', '${response.statusCode}: ${response.body}');
+        return null;
+      }
+
+      final body = jsonDecode(response.body);
+      if (body is! Map<String, dynamic>) {
+        _setLastError('invalid_response', 'Unexpected response format');
+        return null;
+      }
+
+      final errorMessage = body['error']?.toString();
+      if (errorMessage != null && errorMessage.isNotEmpty) {
+        _setLastError('backend_error', body['details']?.toString() ?? errorMessage);
+        return null;
+      }
+
+      final translated = body['translation']?.toString();
+      if (translated == null || translated.trim().isEmpty) {
+        _setLastError('missing_translation', 'No translation in response payload');
+        return null;
+      }
+
+      _clearLastError();
+      return translated.trim();
+    } catch (e) {
+      _setLastError('exception', e.toString());
+      return null;
+    }
   }
 
   Future<Uint8List?> generateTranslation(
@@ -94,14 +198,14 @@ class TranslationService {
       }
       debugPrint('[TranslationService] Headers built successfully.');
 
-      final requestBody = jsonEncode({
-        'text': input,
-        'targetLanguage': targetLanguage,
-        'skipTranslation': true,
-        'isMale': true,
-        'voiceName': voiceName,
-        'ttsProvider': ttsProvider,
-      });
+      final requestBodyMap = buildRequestBody(
+        text: input,
+        targetLanguage: targetLanguage,
+        voiceName: voiceName,
+        ttsProvider: ttsProvider,
+        isMale: true,
+      );
+      final requestBody = jsonEncode(requestBodyMap);
       debugPrint('[TranslationService] Request body: $requestBody');
 
       final response = await _client.post(

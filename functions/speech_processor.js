@@ -14,18 +14,20 @@ const AUDIO_CACHE_SIGNED_URL_TTL_HOURS = Number(process.env.AUDIO_CACHE_SIGNED_U
 const AUDIO_CACHE_OBJECT_PREFIX = String(process.env.AUDIO_CACHE_OBJECT_PREFIX || "tts-cache").trim();
 
 const KNOWN_TTS_PROVIDERS = ["narakeet"];
+const SAFE_NARAKEET_VOICES = ['Aletta', 'Rolanda'];
 const NARAKEET_VOICE_ALTERNATIVES = {
-    'Afrikaans': ['Rolanda', 'Aletta'],
+    'Afrikaans': ['Aletta', 'Rolanda'],
     'English': ['Aletta', 'Rolanda'],
-    'isiNdebele': ['Dumisani', 'Nandi'],
-    'isiXhosa': ['Lindiwe', 'Nandi'],
-    'isiZulu': ['Nandi', 'Lindiwe'],
-    'Sepedi': ['Mpho', 'Palesa'],
-    'Sesotho': ['Palesa', 'Mpho'],
-    'Setswana': ['Bokang', 'Mpho'],
-    'siSwati': ['Nomcebo', 'Nandi'],
-    'Tshivenda': ['Mulalo', 'Dumisani'],
-    'Xitsonga': ['Basetsana', 'Lindiwe'],
+    'isiNdebele': ['Aletta', 'Rolanda'],
+    'isiXhosa': ['Aletta', 'Rolanda'],
+    'isiZulu': ['Aletta', 'Rolanda'],
+    'Sepedi': ['Aletta', 'Rolanda'],
+    'Sesotho': ['Aletta', 'Rolanda'],
+    'Setswana': ['Aletta', 'Rolanda'],
+    'siSwati': ['Aletta', 'Rolanda'],
+    'Tshivenda': ['Aletta', 'Rolanda'],
+    'Xitsonga': ['Aletta', 'Rolanda'],
+    default: ['Aletta', 'Rolanda'],
 };
 
 // State
@@ -142,11 +144,23 @@ async function putCachedNarakeetAudio({ text, targetLanguage, requestedVoiceName
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
+async function fetchNarakeetProtectedUrl(url, narakeetApiKey, acceptType = "application/octet-stream") {
+    const headers = {
+        "x-api-key": narakeetApiKey,
+        Accept: acceptType,
+    };
+    return fetch(url, { method: "GET", headers });
+}
+
 async function attemptNarakeetSynthesis({ text, voice, narakeetApiKey }) {
     const submitUrl = `https://api.narakeet.com/text-to-speech/mp3?voice=${encodeURIComponent(voice)}`;
     const submitResp = await fetch(submitUrl, {
         method: "POST",
-        headers: { "x-api-key": narakeetApiKey, "Content-Type": "text/plain", "Accept": "application/json, audio/mpeg, audio/*" },
+        headers: {
+            "x-api-key": narakeetApiKey,
+            "Content-Type": "text/plain; charset=utf-8",
+            "Accept": "application/octet-stream",
+        },
         body: text,
     });
     if (!submitResp.ok) {
@@ -154,8 +168,9 @@ async function attemptNarakeetSynthesis({ text, voice, narakeetApiKey }) {
         console.error(`Narakeet initial request failed for voice ${voice}: ${submitResp.status} ${submitResp.statusText}. Body: ${errorBody}`);
         return null;
     }
+
     const submitContentType = String(submitResp.headers.get("content-type") || "").toLowerCase();
-    if (submitContentType.includes("audio/")) {
+    if (submitContentType.includes("audio/") || submitContentType.includes("mpeg") || submitContentType.includes("octet-stream")) {
         const submitAudioBuffer = Buffer.from(await submitResp.arrayBuffer());
         if (submitAudioBuffer.length) {
             return { audioContent: submitAudioBuffer.toString("base64"), voiceLanguageUsed: null, voiceGenderUsed: null, voiceNameUsed: voice, ttsProviderUsed: "narakeet" };
@@ -163,6 +178,7 @@ async function attemptNarakeetSynthesis({ text, voice, narakeetApiKey }) {
         console.error("Narakeet initial audio response was empty.");
         return null;
     }
+
     let submitJson = await submitResp.json().catch((e) => {
         console.error(`Narakeet initial JSON parse failed: ${e}`);
         return null;
@@ -172,15 +188,17 @@ async function attemptNarakeetSynthesis({ text, voice, narakeetApiKey }) {
         console.error("Narakeet initial response missing statusUrl.", submitJson);
         return null;
     }
+
     for (let attempt = 0; attempt < 40; attempt++) {
         await sleep(attempt < 8 ? 250 : 500);
-        const pollResp = await fetch(statusUrl, { method: "GET", headers: { "x-api-key": narakeetApiKey, "Accept": "application/json, audio/mpeg, audio/*" } });
+        const pollResp = await fetchNarakeetProtectedUrl(statusUrl, narakeetApiKey);
         if (!pollResp.ok) {
             console.warn(`Narakeet poll attempt ${attempt} failed for voice ${voice}: ${pollResp.status} ${pollResp.statusText}`);
             continue;
         }
+
         const pollContentType = String(pollResp.headers.get("content-type") || "").toLowerCase();
-        if (pollContentType.includes("audio/")) {
+        if (pollContentType.includes("audio/") || pollContentType.includes("mpeg") || pollContentType.includes("octet-stream")) {
             const directAudioBuffer = Buffer.from(await pollResp.arrayBuffer());
             if (directAudioBuffer.length) {
                 return { audioContent: directAudioBuffer.toString("base64"), voiceLanguageUsed: null, voiceGenderUsed: null, voiceNameUsed: voice, ttsProviderUsed: "narakeet" };
@@ -188,6 +206,7 @@ async function attemptNarakeetSynthesis({ text, voice, narakeetApiKey }) {
             console.error("Narakeet direct audio poll response was empty.");
             break;
         }
+
         let pollJson = await pollResp.json().catch((e) => {
             console.error(`Narakeet poll JSON parse failed: ${e}`);
             return null;
@@ -198,7 +217,7 @@ async function attemptNarakeetSynthesis({ text, voice, narakeetApiKey }) {
                 console.error("Narakeet poll result missing resultUrl.", pollJson);
                 break;
             }
-            const audioResp = await fetch(resultUrl, { method: "GET", headers: { "x-api-key": narakeetApiKey, "Accept": "audio/mpeg, audio/*" } });
+            const audioResp = await fetchNarakeetProtectedUrl(resultUrl, narakeetApiKey);
             if (!audioResp.ok) {
                 console.error(`Narakeet final audio fetch failed: ${audioResp.status} ${audioResp.statusText}`);
                 break;
@@ -219,17 +238,18 @@ async function attemptNarakeetSynthesis({ text, voice, narakeetApiKey }) {
 }
 
 async function synthesizeWithNarakeetConcurrent({ text, targetLanguage, narakeetApiKey }) {
-    const voices = NARAKEET_VOICE_ALTERNATIVES[targetLanguage] || ['Aletta'];
-    const promises = voices.map(async (voice) => {
+    const voices = NARAKEET_VOICE_ALTERNATIVES[targetLanguage] || NARAKEET_VOICE_ALTERNATIVES.default || SAFE_NARAKEET_VOICES;
+    const uniqueVoices = [...new Set(voices.filter(Boolean))];
+    const promises = uniqueVoices.map(async (voice) => {
         const result = await attemptNarakeetSynthesis({ text, voice, narakeetApiKey });
         if (!result) throw new Error(`Failed for ${voice}`);
         return result;
     });
-    
+
     try {
         return await Promise.any(promises);
     } catch (e) {
-        console.error("All Narakeet synthesis attempts failed", e);
+        console.error("All Narakeet synthesis attempts failed", { targetLanguage, voices: uniqueVoices, error: e?.message || e });
         return null;
     }
 }
@@ -237,19 +257,21 @@ async function synthesizeWithNarakeetConcurrent({ text, targetLanguage, narakeet
 async function synthesizeWithNarakeet({ text, requestedVoiceName, targetLanguage }) {
     const narakeetApiKey = String(process.env.NARAKEET_API_KEY || "").trim();
     const failedResult = { audioContent: null, voiceLanguageUsed: null, voiceGenderUsed: null, voiceNameUsed: requestedVoiceName || 'Default', ttsProviderUsed: "narakeet" };
-    
+
     if (!narakeetApiKey) return failedResult;
-    
-    // If a specific voice is requested, try that one first.
-    if (requestedVoiceName) {
-        const result = await attemptNarakeetSynthesis({ text, voice: requestedVoiceName, narakeetApiKey });
+
+    const safeFallbackVoices = NARAKEET_VOICE_ALTERNATIVES[targetLanguage] || NARAKEET_VOICE_ALTERNATIVES.default || SAFE_NARAKEET_VOICES;
+    const orderedVoices = [...new Set([requestedVoiceName, ...safeFallbackVoices].filter(Boolean))];
+
+    for (const voice of orderedVoices) {
+        const result = await attemptNarakeetSynthesis({ text, voice, narakeetApiKey });
         if (result) return result;
+        console.warn(`Narakeet voice failed, retrying with safe fallback: ${voice}`);
     }
-    
-    // Otherwise or if the specific voice failed, try all concurrently
+
     const result = await synthesizeWithNarakeetConcurrent({ text, targetLanguage, narakeetApiKey });
     if (result) return result;
-    
+
     console.error(`Narakeet synthesis failed for all tried voices for ${targetLanguage}`);
     return failedResult;
 }

@@ -17,7 +17,6 @@ import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'translation_service.dart';
@@ -25,20 +24,59 @@ import 'firebase_options.dart';
 
 // const _paystackChannel = MethodChannel('com.limpopovoice.translate/paystack');
 
+Future<void> _loadEnvFile() async {
+  const candidates = ["lib/.env", ".env"];
+  for (final candidate in candidates) {
+    try {
+      final file = File(candidate);
+      if (!await file.exists()) continue;
+      await dotenv.load(fileName: candidate);
+      debugPrint('Loaded environment from $candidate');
+      return;
+    } catch (e) {
+      debugPrint('Env load error for $candidate: $e');
+    }
+  }
+  debugPrint('No environment file found in project root or lib/.env');
+}
+
+String safeDotEnvString(String key) {
+  try {
+    return (dotenv.env[key] ?? '').trim();
+  } catch (_) {
+    return '';
+  }
+}
+
+String getGoogleServerClientId() {
+  final configured = safeDotEnvString('GOOGLE_SERVER_CLIENT_ID');
+  if (configured.isNotEmpty) {
+    return configured;
+  }
+  return '587321848459-20tm9s1lago28llbmvat4a2mgcfeusjl.apps.googleusercontent.com';
+}
+
+GoogleSignIn buildGoogleSignInClient() {
+  return GoogleSignIn(
+    serverClientId: getGoogleServerClientId(),
+    scopes: const ['email', 'profile'],
+  );
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
   try {
-    await Firebase.initializeApp(
-        options: DefaultFirebaseOptions.currentPlatform);
+    if (Firebase.apps.isEmpty) {
+      await Firebase.initializeApp(
+          options: DefaultFirebaseOptions.currentPlatform);
+    }
+    debugPrint('Firebase initialized successfully');
   } catch (e) {
     debugPrint("Firebase init error: $e");
   }
 
-  try {
-    await dotenv.load(fileName: ".env");
-  } catch (e) {
-    debugPrint("Env load error: $e");
-  }
+  await _loadEnvFile();
   runApp(const LetsTalkApp());
 }
 
@@ -137,14 +175,10 @@ class _CreditTier {
   const _CreditTier(this.name, this.credits, this.price);
 }
 
-enum _PayPalMode { sandbox, live }
-
-
-
 const _tiers = [
-  _CreditTier('Tier 1', 200, 'R20'),        // 200 credits
-  _CreditTier('Tier 2', 600, 'R50'),        // 600 credits
-  _CreditTier('Tier 3', 1400, 'R100'),      // 1400 credits
+  _CreditTier('Tier 1', 100, 'R19.99'),    // 100 credits
+  _CreditTier('Tier 2', 300, 'R49.99'),    // 300 credits
+  _CreditTier('Tier 3', 700, 'R99.99'),    // 700 credits
 ];
 const int _usageCostCredits = 1; // 1 credit = 5 seconds per translation (capped)
 const double apiCostPerUnit = 0.0029;
@@ -157,6 +191,88 @@ const String _userLearnPhrasesPrefsKey = 'user_learn_phrases_v1';
 
 bool get isFirestoreCacheActive => _enableClientFirestoreCache && true;
 
+enum AppUiLanguage { english, afrikaans }
+
+String localizedUiText(String key, AppUiLanguage language) {
+  const english = <String, String>{
+    'translate': 'Translate',
+    'history': 'History',
+    'learn': 'Learn',
+    'about': 'About',
+    'close': 'Close',
+    'user': 'User',
+    'sign_in': 'Sign In',
+    'sign_out': 'Sign Out',
+    'share_app': 'Share App',
+    'credits': 'Credits',
+    'disclaimer': 'Disclaimer',
+    'language': 'Language',
+    'english': 'English',
+    'afrikaans': 'Afrikaans',
+    'menu': 'Menu',
+    'credit_packages': 'Credit Packages',
+    'balance': 'Balance',
+    'translations': 'translations',
+    'cancel_renewals': 'Cancel renewals',
+    'choose_payment_gateway': 'Choose Payment Gateway',
+    'share': 'Share',
+    'new_translation': 'New Translation',
+    'send_to_learn': 'Send to Learn',
+    'hold_to_talk': 'HOLD TO TALK',
+    'continue_with_google': 'Continue with Google',
+    'create_email_account': 'Create email account',
+    'sign_in_with_email': 'Sign in with email',
+    'create_account': 'Create',
+    'cancel': 'Cancel',
+    'email': 'Email',
+    'password': 'Password',
+    'continue': 'Continue',
+    'signed_in_with_google': 'Signed in with Google.',
+    'signed_in_with_email': 'Signed in with email.',
+    'signed_out_guest': 'Signed out. Continuing as guest.',
+  };
+
+  const afrikaans = <String, String>{
+    'translate': 'Vertaal',
+    'history': 'Geskiedenis',
+    'learn': 'Leer',
+    'about': 'Oor ons',
+    'close': 'Sluit',
+    'user': 'Gebruiker',
+    'sign_in': 'Meld aan',
+    'sign_out': 'Meld af',
+    'share_app': 'Deel app',
+    'credits': 'Krediete',
+    'disclaimer': 'Vrywaring',
+    'language': 'Taal',
+    'english': 'Engels',
+    'afrikaans': 'Afrikaans',
+    'menu': 'Kieslys',
+    'credit_packages': 'Kredietpakette',
+    'balance': 'Balans',
+    'translations': 'vertalings',
+    'cancel_renewals': 'Kanselleer hernuwing',
+    'choose_payment_gateway': 'Kies betaalpoort',
+    'share': 'Deel',
+    'new_translation': 'Nuwe vertaling',
+    'send_to_learn': 'Stuur na Leer',
+    'hold_to_talk': 'HOU OM TE PRAAT',
+    'continue_with_google': 'Gaan voort met Google',
+    'create_email_account': 'Skep e-posrekening',
+    'sign_in_with_email': 'Meld met e-pos aan',
+    'create_account': 'Skep',
+    'cancel': 'Kanselleer',
+    'email': 'E-pos',
+    'password': 'Wagwoord',
+    'continue': 'Gaan voort',
+    'signed_in_with_google': 'Aangemeld met Google.',
+    'signed_in_with_email': 'Aangemeld met e-pos.',
+    'signed_out_guest': 'Afgemeld. Gaan voort as gas.',
+  };
+
+  final lookup = language == AppUiLanguage.afrikaans ? afrikaans : english;
+  return lookup[key] ?? english[key] ?? key;
+}
 
 class HistoryItem {
   final String inputLang, outputLang, original, translated;
@@ -402,6 +518,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String _activeTab = 'translate';
+  AppUiLanguage _uiLanguage = AppUiLanguage.english;
   final stt.SpeechToText _speech = stt.SpeechToText();
   late final TranslationService _translationService;
   late final AudioPlayer _audioPlayer;
@@ -489,11 +606,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _tttController = TextEditingController();
   bool _showHintText = true;
   bool _showTalkHintText = true;
-  String? _pendingPayPalOrderId;
-  _CreditTier? _pendingPayPalTier;
-  double? _pendingPayPalAmount;
-  _PayPalMode? _pendingPayPalMode;
-  int _credits = 6;
+  int _credits = 10;
   String? _authUid;
   String? _authEmail;
   String? _installId;
@@ -599,7 +712,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String _translationFunctionUrl() {
-    final configured = (dotenv.env['TRANSLATE_FUNCTION_URL'] ?? '').trim();
+    final configured = safeDotEnvString('TRANSLATE_FUNCTION_URL');
     if (configured.isNotEmpty) {
       return configured;
     }
@@ -625,6 +738,12 @@ class _HomeScreenState extends State<HomeScreen> {
     _selectedInputLang = _normalizeLanguageLabel(_selectedInputLang);
     _selectedOutputLang = _normalizeLanguageLabel(_selectedOutputLang);
     _selectedLearnLang = _normalizeLanguageLabel(_selectedLearnLang);
+    if (_selectedInputLang.isEmpty) {
+      _selectedInputLang = 'English';
+    }
+    if (_selectedOutputLang.isEmpty) {
+      _selectedOutputLang = 'Sepedi';
+    }
     if (!_inputLangs.contains(_selectedInputLang)) {
       _selectedInputLang = _inputLangs.first;
     }
@@ -846,7 +965,7 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
         surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
         title: Text(
-          'Sign In',
+          localizedUiText('sign_in', _uiLanguage),
           style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
         ),
         content: Column(
@@ -875,7 +994,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         _signInWithGoogle();
                       },
                 icon: const Icon(Icons.login),
-                label: const Text('Continue with Google'),
+                label: Text(localizedUiText('continue_with_google', _uiLanguage)),
               ),
             ),
             const SizedBox(height: 10),
@@ -889,7 +1008,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         _showEmailAuthDialog(createAccount: true);
                       },
                 icon: const Icon(Icons.email_outlined),
-                label: const Text('Create email account'),
+                label: Text(localizedUiText('create_email_account', _uiLanguage)),
               ),
             ),
             const SizedBox(height: 8),
@@ -902,7 +1021,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         Navigator.of(ctx).pop();
                         _showEmailAuthDialog(createAccount: false);
                       },
-                child: const Text('Sign in with email'),
+                child: Text(localizedUiText('sign_in_with_email', _uiLanguage)),
               ),
             ),
           ],
@@ -936,7 +1055,9 @@ class _HomeScreenState extends State<HomeScreen> {
             backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
             surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
             title: Text(
-              createAccount ? 'Create Email Account' : 'Email Sign In',
+              createAccount
+                  ? localizedUiText('create_email_account', _uiLanguage)
+                  : localizedUiText('sign_in_with_email', _uiLanguage),
               style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
             ),
             content: Column(
@@ -947,7 +1068,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   controller: emailController,
                   keyboardType: TextInputType.emailAddress,
                   autofillHints: const [AutofillHints.email],
-                  decoration: const InputDecoration(labelText: 'Email'),
+                  decoration: InputDecoration(labelText: localizedUiText('email', _uiLanguage)),
                 ),
                 const SizedBox(height: 10),
                 TextField(
@@ -955,7 +1076,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   obscureText: obscurePassword,
                   autofillHints: const [AutofillHints.password],
                   decoration: InputDecoration(
-                    labelText: 'Password',
+                    labelText: localizedUiText('password', _uiLanguage),
                     suffixIcon: IconButton(
                       onPressed: () {
                         setDialogState(() => obscurePassword = !obscurePassword);
@@ -979,7 +1100,7 @@ class _HomeScreenState extends State<HomeScreen> {
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(ctx).pop(),
-                child: Text('Cancel', style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000))),
+                child: Text(localizedUiText('cancel', _uiLanguage), style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000))),
               ),
               TextButton(
                 style: TextButton.styleFrom(
@@ -996,7 +1117,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           createAccount: createAccount,
                         );
                       },
-                child: Text(createAccount ? 'Create' : 'Sign In'),
+                child: Text(createAccount ? localizedUiText('create_account', _uiLanguage) : localizedUiText('sign_in', _uiLanguage)),
               ),
             ],
           ),
@@ -1017,7 +1138,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final currentUser = auth.currentUser;
 
     try {
-      final googleUser = await GoogleSignIn(scopes: const ['email', 'profile']).signIn();
+      final googleUser = await buildGoogleSignInClient().signIn();
       if (googleUser == null) {
         return;
       }
@@ -1105,7 +1226,9 @@ class _HomeScreenState extends State<HomeScreen> {
       final msg = (e.message ?? '').toLowerCase();
       final details = (e.details?.toString() ?? '').toLowerCase();
       if (msg.contains('developer_error') || details.contains('developer_error')) {
-        _showSnack('Google sign-in config error. Enable Google provider in Firebase and refresh android/app/google-services.json.');
+        _showSnack(
+          'Google sign-in is not configured for this app. Check the Firebase Google provider, the Android SHA-1, and refresh android/app/google-services.json.',
+        );
       } else {
         _showSnack('Google sign-in failed: ${e.code}');
       }
@@ -1165,7 +1288,7 @@ class _HomeScreenState extends State<HomeScreen> {
       } else {
         result = await auth.signInWithEmailAndPassword(email: email, password: password);
         await _syncAuthState(result.user);
-        _showSnack('Signed in with email.');
+        _showSnack(localizedUiText('signed_in_with_email', _uiLanguage));
       }
     } on FirebaseAuthException catch (e) {
       _showSnack(_friendlyAuthError(e));
@@ -1198,7 +1321,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await FirebaseAuth.instance.signOut();
       await _ensureSignedIn();
       await _ensureUserProfileDocument();
-      _showSnack('Signed out. Continuing as guest.');
+      _showSnack(localizedUiText('signed_out_guest', _uiLanguage));
     } catch (e) {
       debugPrint('Sign-out failed: $e');
       _showSnack('Could not sign out right now.');
@@ -1337,7 +1460,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       // Request Google sign-in with profile scope to refresh token
-      final googleUser = await GoogleSignIn(scopes: const ['email', 'profile']).signIn();
+      final googleUser = await buildGoogleSignInClient().signIn();
       
       if (googleUser != null) {
         debugPrint('📸 Got Google user profile data');
@@ -1367,240 +1490,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String _paystackInitUrl() {
-    final configured = (dotenv.env['PAYSTACK_INIT_URL'] ?? '').trim();
+    final configured = safeDotEnvString('PAYSTACK_INIT_URL');
     if (configured.isNotEmpty) {
       return configured;
     }
     return 'https://africa-south1-limpopo-voice-prod.cloudfunctions.net/createPaystackTransactionHttp';
-  }
-
-  _PayPalMode? _payPalModeFromEnv() {
-    final raw = (dotenv.env['PAYPAL_MODE'] ?? '').trim().toLowerCase();
-    if (raw == 'sandbox') return _PayPalMode.sandbox;
-    if (raw == 'live') return _PayPalMode.live;
-    return null;
-  }
-
-  String _payPalModeLabel(_PayPalMode mode) {
-    return mode == _PayPalMode.live ? 'live' : 'sandbox';
-  }
-
-  String? _payPalCreateOrderUrl(_PayPalMode mode) {
-    final envKey = mode == _PayPalMode.live
-        ? 'PAYPAL_CREATE_ORDER_URL_LIVE'
-        : 'PAYPAL_CREATE_ORDER_URL_SANDBOX';
-    final configured = (dotenv.env[envKey] ?? '').trim();
-    if (configured.isNotEmpty) {
-      return configured;
-    }
-    return null;
-  }
-
-  String? _payPalCaptureOrderUrl(_PayPalMode mode) {
-    final envKey = mode == _PayPalMode.live
-        ? 'PAYPAL_CAPTURE_ORDER_URL_LIVE'
-        : 'PAYPAL_CAPTURE_ORDER_URL_SANDBOX';
-    final configured = (dotenv.env[envKey] ?? '').trim();
-    if (configured.isNotEmpty) {
-      return configured;
-    }
-    return null;
-  }
-
-  bool _allowPayPalSandboxSimulation() {
-    final raw = (dotenv.env['PAYPAL_SANDBOX_BYPASS'] ?? '').trim().toLowerCase();
-    final enabledByEnv = raw == '1' || raw == 'true' || raw == 'yes' || raw == 'on';
-    return kDebugMode || enabledByEnv;
-  }
-
-  Future<Map<String, String>?> _requestPayPalOrder(
-    _CreditTier tier,
-    double amount,
-    _PayPalMode mode,
-  ) async {
-    final headers = await _buildAuthorizedJsonHeaders();
-    if (headers == null) {
-      _showSnack('Could not authenticate PayPal request.');
-      return null;
-    }
-
-    final endpoint = _payPalCreateOrderUrl(mode);
-    if (endpoint == null || endpoint.isEmpty) {
-      _showSnack(
-        'Missing ${mode == _PayPalMode.live ? 'PAYPAL_CREATE_ORDER_URL_LIVE' : 'PAYPAL_CREATE_ORDER_URL_SANDBOX'} in .env',
-      );
-      return null;
-    }
-
-    final payload = {
-      'amountCents': (amount * 100).round(),
-      'email': _authEmail ?? '',
-      'tierName': tier.name,
-      'mode': _payPalModeLabel(mode),
-    };
-
-    final uri = Uri.parse(endpoint);
-    http.Response response;
-
-    try {
-      response = await http
-          .post(uri, headers: headers, body: jsonEncode(payload))
-          .timeout(const Duration(seconds: 30));
-    } catch (e) {
-      debugPrint('PayPal create order request failed: $e');
-      return null;
-    }
-
-    if (response.statusCode == 401) {
-      final refreshedHeaders = await _buildAuthorizedJsonHeaders(forceRefresh: true);
-      if (refreshedHeaders == null) return null;
-      try {
-        response = await http
-            .post(uri, headers: refreshedHeaders, body: jsonEncode(payload))
-            .timeout(const Duration(seconds: 30));
-      } catch (e) {
-        debugPrint('PayPal create order retry failed: $e');
-        return null;
-      }
-    }
-
-    if (response.statusCode != 200) {
-      debugPrint('PayPal create order HTTP ${response.statusCode}: ${response.body}');
-      return null;
-    }
-
-    try {
-      final body = jsonDecode(response.body);
-      if (body is! Map<String, dynamic>) return null;
-      final orderId = (body['order_id'] as String?)?.trim();
-      final approvalUrl = (body['approval_url'] as String?)?.trim();
-      if (approvalUrl == null || approvalUrl.isEmpty || orderId == null || orderId.isEmpty) {
-        return null;
-      }
-      return {
-        'order_id': orderId,
-        'approval_url': approvalUrl,
-      };
-    } catch (e) {
-      debugPrint('PayPal create order response parse failed: $e');
-      return null;
-    }
-  }
-
-  Future<Map<String, dynamic>?> _requestPayPalCapture(
-    _CreditTier tier,
-    double amount,
-    String orderId,
-    _PayPalMode mode,
-  ) async {
-    final headers = await _buildAuthorizedJsonHeaders();
-    if (headers == null) {
-      _showSnack('Could not authenticate PayPal capture request.');
-      return null;
-    }
-
-    final endpoint = _payPalCaptureOrderUrl(mode);
-    if (endpoint == null || endpoint.isEmpty) {
-      _showSnack(
-        'Missing ${mode == _PayPalMode.live ? 'PAYPAL_CAPTURE_ORDER_URL_LIVE' : 'PAYPAL_CAPTURE_ORDER_URL_SANDBOX'} in .env',
-      );
-      return null;
-    }
-
-    final payload = {
-      'orderId': orderId,
-      'amountCents': (amount * 100).round(),
-      'tierName': tier.name,
-      'mode': _payPalModeLabel(mode),
-    };
-
-    final uri = Uri.parse(endpoint);
-    http.Response response;
-
-    try {
-      response = await http
-          .post(uri, headers: headers, body: jsonEncode(payload))
-          .timeout(const Duration(seconds: 30));
-    } catch (e) {
-      debugPrint('PayPal capture request failed: $e');
-      return null;
-    }
-
-    if (response.statusCode == 401) {
-      final refreshedHeaders = await _buildAuthorizedJsonHeaders(forceRefresh: true);
-      if (refreshedHeaders == null) return null;
-      try {
-        response = await http
-            .post(uri, headers: refreshedHeaders, body: jsonEncode(payload))
-            .timeout(const Duration(seconds: 30));
-      } catch (e) {
-        debugPrint('PayPal capture retry failed: $e');
-        return null;
-      }
-    }
-
-    if (response.statusCode != 200) {
-      debugPrint('PayPal capture HTTP ${response.statusCode}: ${response.body}');
-      return null;
-    }
-
-    try {
-      final body = jsonDecode(response.body);
-      return body is Map<String, dynamic> ? body : null;
-    } catch (e) {
-      debugPrint('PayPal capture response parse failed: $e');
-      return null;
-    }
-  }
-
-  Future<bool> _capturePendingPayPalOrder() async {
-    final orderId = _pendingPayPalOrderId;
-    final tier = _pendingPayPalTier;
-    final amount = _pendingPayPalAmount;
-    final mode = _pendingPayPalMode;
-    if (orderId == null || tier == null || amount == null || mode == null) {
-      return false;
-    }
-
-    final captureResult = await _requestPayPalCapture(tier, amount, orderId, mode);
-    if (captureResult == null) {
-      return false;
-    }
-
-    final completed = captureResult['completed'] == true;
-    if (!completed) {
-      _showSnack('PayPal order not approved yet. Complete checkout in browser first.');
-      return false;
-    }
-
-    final reference =
-        (captureResult['capture_id'] as String?)?.trim().isNotEmpty == true
-            ? (captureResult['capture_id'] as String).trim()
-            : orderId;
-
-    await _completeTierPurchase(
-      tier,
-      amount: amount,
-      status: 'completed_${_payPalModeLabel(mode)}_paypal',
-      reference: reference,
-      sourceLabel: 'PayPal ${_payPalModeLabel(mode)}',
-    );
-
-    if (mounted) {
-      setState(() {
-        _pendingPayPalOrderId = null;
-        _pendingPayPalTier = null;
-        _pendingPayPalAmount = null;
-        _pendingPayPalMode = null;
-      });
-    } else {
-      _pendingPayPalOrderId = null;
-      _pendingPayPalTier = null;
-      _pendingPayPalAmount = null;
-      _pendingPayPalMode = null;
-    }
-
-    return true;
   }
 
   Future<Map<String, String>?> _buildAuthorizedJsonHeaders({bool forceRefresh = false}) async {
@@ -1721,14 +1615,14 @@ class _HomeScreenState extends State<HomeScreen> {
           return;
         }
 
-        debugPrint('Credits document does not exist for user: $_authUid. Granting starter balance of 6.');
+        debugPrint('Credits document does not exist for user: $_authUid. Granting starter balance of 10.');
         if (mounted) {
-          setState(() => _credits = 6);
+          setState(() => _credits = 10);
         } else {
-          _credits = 6;
+          _credits = 10;
         }
         await ref.set({
-          'credits': 6,
+          'credits': 10,
           'free_trial_consumed': false,
           'creditsRollOver': false,
           'updatedAt': FieldValue.serverTimestamp(),
@@ -1737,10 +1631,10 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       final rawCredits = (doc.data()?['credits'] as num?)?.toInt();
-      var credits = rawCredits ?? 6;
+      var credits = rawCredits ?? 10;
 
       if (deviceUsedTrial || freeTrialConsumed) {
-        if (credits > 6) {
+        if (credits > 10) {
           debugPrint('Free trial already consumed. Keeping purchased credits intact for $_authUid.');
         } else {
           debugPrint('Free trial already consumed. Resetting credits to 0 for user $_authUid.');
@@ -1759,11 +1653,11 @@ class _HomeScreenState extends State<HomeScreen> {
         }, SetOptions(merge: true));
       }
 
-      if (isKnownTestUid && credits != 6) {
-        debugPrint('Resetting known test UID credits from $credits back to 6.');
-        credits = 6;
+      if (isKnownTestUid && credits != 10) {
+        debugPrint('Resetting known test UID credits from $credits back to 10.');
+        credits = 10;
         await ref.set({
-          'credits': 6,
+          'credits': 10,
           'free_trial_consumed': false,
           'creditsRollOver': false,
           'monthlyRenewalActive': false,
@@ -1972,14 +1866,14 @@ class _HomeScreenState extends State<HomeScreen> {
         debugPrint('Install ID $installId registered for first free trial use');
       }
 
-      // If a device or user has already consumed the free trial, the free 6 must
+      // If a device or user has already consumed the free trial, the free 10 must
       // stay depleted even if the user switches between guest and signed-in state.
       final deviceUsedTrial = await _hasDeviceUsedFreeTrial();
       final ref = _userDocRef();
       final userDoc = ref == null ? null : await ref.get();
       final userFreeTrialConsumed = userDoc != null && userDoc.exists && userDoc.data()?['free_trial_consumed'] == true;
-      if ((deviceUsedTrial || userFreeTrialConsumed) && _credits <= 6) {
-        final nextCredits = _credits > 6 ? _credits : 0;
+      if ((deviceUsedTrial || userFreeTrialConsumed) && _credits <= 10) {
+        final nextCredits = _credits > 10 ? _credits : 0;
         debugPrint('User/device already used free trial. Enforcing credits to $nextCredits.');
         if (mounted) {
           setState(() => _credits = nextCredits);
@@ -2214,7 +2108,16 @@ class _HomeScreenState extends State<HomeScreen> {
       final docId = '${sourceText.toLowerCase().trim()}_$targetLang';
       final doc = await _firestore.collection('translation_cache').doc(docId).get();
       if (doc.exists && doc.data() != null) {
-        return doc.data()!['translated_text'] as String?;
+        final cached = doc.data()!['translated_text'] as String?;
+        if (cached != null && cached.trim().isNotEmpty) {
+          final normalizedSource = sourceText.trim();
+          final normalizedCached = cached.trim();
+          if (normalizedCached == normalizedSource) {
+            debugPrint('Ignoring stale translation cache entry that matches the source text for $docId');
+            return null;
+          }
+          return normalizedCached;
+        }
       }
     } catch (e) {
       if (!_isFirestorePermissionDenied(e)) {
@@ -2319,7 +2222,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _grantStarterCreditsAfterDisclaimer() async {
     final ref = _userDocRef();
     if (ref == null) {
-      if (mounted) setState(() => _credits = 6);
+      if (mounted) setState(() => _credits = 10);
       return;
     }
 
@@ -2330,7 +2233,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final deviceUsedTrial = await _hasDeviceUsedFreeTrial();
 
       if (alreadyUsedFreeTrial || deviceUsedTrial) {
-        final enforcedCredits = existingCredits > 6 ? existingCredits : 0;
+        final enforcedCredits = existingCredits > 10 ? existingCredits : 0;
         await ref.set({
           'credits': enforcedCredits,
           'free_trial_consumed': true,
@@ -2350,9 +2253,9 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      if (!doc.exists || existingCredits < 6) {
+      if (!doc.exists || existingCredits < 10) {
         await ref.set({
-          'credits': 6,
+          'credits': 10,
           'free_trial_consumed': false,
           'creditsRollOver': false,
           'monthlyRenewalActive': false,
@@ -2364,13 +2267,13 @@ class _HomeScreenState extends State<HomeScreen> {
         }, SetOptions(merge: true));
       }
     } catch (e) {
-      debugPrint('Failed to grant starter 6 credits after disclaimer: $e');
+      debugPrint('Failed to grant starter 10 credits after disclaimer: $e');
     }
 
     if (mounted) {
-      setState(() => _credits = 6);
+      setState(() => _credits = 10);
     } else {
-      _credits = 6;
+      _credits = 10;
     }
   }
 
@@ -2387,94 +2290,106 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (accepted && starterGranted) {
       // Disclaimer is always shown on launch, but the free-credit reward is only granted once.
-      setState(() => _showCreditsInHeader = true);
-    } else {
-      setState(() => _showCreditsInHeader = false);
+      if (mounted) {
+        setState(() => _showCreditsInHeader = true);
+      }
+      return;
     }
 
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF000000),
-        surfaceTintColor: const Color(0xFF000000),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(18),
-          side: const BorderSide(color: Color(0xFFF7F7F7), width: 2.5),
-        ),
-        title: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final wordmarkWidth = (constraints.maxWidth * 0.9).clamp(220.0, 320.0);
-                return Center(
-                  child: SizedBox(
-                    width: wordmarkWidth,
-                    child: _buildHeaderWordmark(true),
+    if (mounted) {
+      setState(() => _showCreditsInHeader = false);
+      _showDisclaimerDialog();
+    }
+  }
+
+  void _showDisclaimerDialog() {
+    if (!mounted) return;
+
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF000000),
+          surfaceTintColor: const Color(0xFF000000),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: const BorderSide(color: Color(0xFFF7F7F7), width: 2.5),
+          ),
+          title: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final wordmarkWidth = (constraints.maxWidth * 0.9).clamp(220.0, 320.0);
+                  return Center(
+                    child: SizedBox(
+                      width: wordmarkWidth,
+                      child: _buildHeaderWordmark(true),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Disclaimer',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white),
+              ),
+            ],
+          ),
+          content: const SingleChildScrollView(
+            child: Text(
+              _disclaimerText,
+              style: TextStyle(color: Colors.white),
+            ),
+          ),
+          actionsAlignment: MainAxisAlignment.end,
+          actions: [
+            Builder(
+              builder: (ctx2) {
+                return TextButton(
+                  style: TextButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
                   ),
+                  onPressed: () async {
+                    final navigator = Navigator.of(ctx);
+                    navigator.pop();
+
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setBool('disclaimerAcceptedV7', true);
+
+                    final alreadyGranted = prefs.getBool('freeStarterCreditsShownV1') ?? false;
+                    if (!alreadyGranted) {
+                      await prefs.setBool('freeStarterCreditsShownV1', true);
+                      await _grantStarterCreditsAfterDisclaimer();
+                      if (mounted) {
+                        messenger?.showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'You received 10 free credits.',
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        );
+                      }
+                    }
+
+                    if (mounted) {
+                      setState(() => _showCreditsInHeader = true);
+                    }
+                  },
+                  child: const Text('Accept and Close', style: TextStyle(color: Colors.black)),
                 );
               },
             ),
-            const SizedBox(height: 8),
-            const Text(
-              'Disclaimer',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white),
-            ),
           ],
         ),
-        content: const SingleChildScrollView(
-          child: Text(
-            _disclaimerText,
-            style: TextStyle(color: Colors.white),
-          ),
-        ),
-        actionsAlignment: MainAxisAlignment.end,
-        actions: [
-          Builder(
-            builder: (ctx2) {
-              return TextButton(
-                style: TextButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: Colors.black,
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                ),
-                onPressed: () async {
-                  final navigator = Navigator.of(ctx);
-                  navigator.pop();
-
-                  final prefs = await SharedPreferences.getInstance();
-                  final messenger = ScaffoldMessenger.maybeOf(ctx);
-                  await prefs.setBool('disclaimerAcceptedV7', true);
-
-                  final alreadyGranted = prefs.getBool('freeStarterCreditsShownV1') ?? false;
-                  if (!alreadyGranted) {
-                    await prefs.setBool('freeStarterCreditsShownV1', true);
-                    await _grantStarterCreditsAfterDisclaimer();
-                    if (mounted) {
-                      messenger?.showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'You received 6 free credits.',
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                      );
-                    }
-                  }
-
-                  if (mounted) {
-                    setState(() => _showCreditsInHeader = true);
-                  }
-                },
-                child: const Text('Accept and Close', style: TextStyle(color: Colors.black)),
-              );
-            },
-          ),
-        ],
       ),
     );
   }
@@ -2585,7 +2500,7 @@ class _HomeScreenState extends State<HomeScreen> {
     String? outputText,
   }) async {
     // Check if user is trying to use free trial credits and device already used them
-    if (_credits == 6) {
+    if (_credits == 10) {
       final alreadyUsed = await _hasDeviceUsedFreeTrial();
       if (alreadyUsed) {
         debugPrint('Device trial already used. Resetting local credits to 0.');
@@ -2613,8 +2528,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // Mark device as used free trial when consuming the first free credit, and
       // permanently lock the trial once it is exhausted so the same user/device cannot
-      // receive a fresh 6-credit grant after switching between guest and signed-in sessions.
-      if (_credits < 6) {
+      // receive a fresh 10-credit grant after switching between guest and signed-in sessions.
+      if (_credits < 10) {
         await _markDeviceAsUsedFreeTrial();
         final ref = _userDocRef();
         if (ref != null) {
@@ -2636,7 +2551,7 @@ class _HomeScreenState extends State<HomeScreen> {
           }, SetOptions(merge: true));
         }
         if (!silent) {
-          _showSnack('Your 6 free credits are used up. Please choose a package to continue.');
+          _showSnack('Your 10 free credits are used up. Please choose a package to continue.');
         }
         _showCreditTiers();
         return false;
@@ -2726,6 +2641,23 @@ class _HomeScreenState extends State<HomeScreen> {
       return cached;
     }
 
+    try {
+      final backendTranslation = await _translationService.translateText(
+        input,
+        _selectedOutputLang,
+        voiceName: _voiceNameForLanguage(_selectedOutputLang),
+        ttsProvider: _ttsProviderForLanguage(_selectedOutputLang),
+      );
+
+      if (backendTranslation != null && backendTranslation.trim().isNotEmpty) {
+        _phoneticText = '';
+        await _saveCacheTranslation(input, _selectedOutputLang, backendTranslation.trim());
+        return backendTranslation.trim();
+      }
+    } catch (_) {
+      debugPrint('UI translation backend fallback failed for: $input');
+    }
+
     final uri = Uri.parse(
       'https://translate.googleapis.com/translate_a/single?client=gtx&sl=$source&tl=$target&dt=t&q=${Uri.encodeQueryComponent(input)}',
     );
@@ -2759,18 +2691,32 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _speakText(String text, String language) async {
-    debugPrint('[_speakText] Attempting to speak text: "$text" in language: $language');
+  bool _shouldAbortTts(String text, {required String context}) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) {
+      debugPrint('[$context] Abort: empty input for TTS.');
+      return true;
+    }
     if (_containsProfanity(text)) {
-      debugPrint('[_speakText] Profanity detected, aborting speech.');
-      return;
+      debugPrint('[$context] Abort: profanity detected for TTS.');
+      return true;
     }
 
     final safeForSpeech = _silenceProfanityForSpeech(text);
     if (safeForSpeech.trim().isEmpty) {
-      debugPrint('[_speakText] Safe text is empty, aborting speech.');
+      debugPrint('[$context] Abort: sanitized text is empty after profanity filtering.');
+      return true;
+    }
+    return false;
+  }
+
+  Future<void> _speakText(String text, String language) async {
+    debugPrint('[_speakText] Attempting to speak text: "$text" in language: $language');
+    if (_shouldAbortTts(text, context: 'speakText')) {
       return;
     }
+
+    final safeForSpeech = _silenceProfanityForSpeech(text);
 
     try {
       final provider = _ttsProviderForLanguage(language);
@@ -2915,28 +2861,31 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _speakTranslatedText(String text) async {
-    if (_containsProfanity(text)) {
+    if (_shouldAbortTts(text, context: 'speakTranslatedText')) {
       return;
     }
 
     final safeForSpeech = _silenceProfanityForSpeech(text);
-    if (safeForSpeech.trim().isEmpty) {
-      return;
-    }
-
     final Stopwatch ttsStopwatch = Stopwatch()..start();
 
     try {
       final provider = _ttsProviderForLanguage(_selectedOutputLang);
       final voiceName = _voiceNameForLanguage(_selectedOutputLang);
       final chunks = _buildRealtimeSpeechChunks(safeForSpeech);
+      debugPrint('[_speakTranslatedText] selected provider=$provider voice=$voiceName chunks=${chunks.length} sentenceLength=${safeForSpeech.length}');
       if (chunks.isEmpty) {
+        debugPrint('[_speakTranslatedText] No speech chunks generated for sanitized text.');
         _showSnack(_speechServiceUnavailableMessage());
         return;
       }
 
       final chunkRequests = chunks
-          .map((chunk) {
+          .asMap()
+          .entries
+          .map((entry) {
+            final index = entry.key;
+            final chunk = entry.value;
+            debugPrint('[_speakTranslatedText] scheduling chunk $index/${chunks.length}: ${chunk.length} chars');
             return _generateAudioWithCache(
               chunk,
               _selectedOutputLang,
@@ -3033,10 +2982,15 @@ class _HomeScreenState extends State<HomeScreen> {
   void _submitTTT() {
     final t = _tttController.text.trim();
     if (t.isEmpty) return;
-    
+    if (_isTranslating) {
+      debugPrint('[_submitTTT] Ignoring duplicate submit while a translation is already running.');
+      _showSnack('Please wait for the current translation to finish.');
+      return;
+    }
+
     // Dismiss keyboard immediately
     FocusScope.of(context).unfocus();
-    
+
     setState(() {
       _spokenRawText = t;
       _spokenText = _maskProfanityForDisplay(t);
@@ -3585,38 +3539,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: isDark ? Colors.white10 : Colors.black,
-                        foregroundColor: Colors.white,
-                        minimumSize: const Size(double.infinity, 108),
-                        padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 20),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                      ),
-                      onPressed: () async {
-                        Navigator.pop(ctx);
-                        await Future<void>.delayed(const Duration(milliseconds: 120));
-                        if (!mounted) return;
-                        _showSnack('PayPal is coming soon.');
-                      },
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Image.asset('assets/paypal.png', width: 46, height: 46),
-                          const SizedBox(width: 16),
-                          const Text(
-                            'Coming soon',
-                            style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
                     ],
                   ),
                 ),
@@ -3672,7 +3594,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   bool _allowPaystackSandboxSimulation() {
-    final raw = (dotenv.env['PAYSTACK_SANDBOX_BYPASS'] ?? '').trim().toLowerCase();
+    final raw = safeDotEnvString('PAYSTACK_SANDBOX_BYPASS').toLowerCase();
     final enabledByEnv = raw == '1' || raw == 'true' || raw == 'yes' || raw == 'on';
     return kDebugMode || enabledByEnv;
   }
@@ -3784,10 +3706,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final amount = _tierAmountFromPrice(tier.price);
 
-    String? accessCode = dotenv.env['PAYSTACK_TEST_ACCESS_CODE'];
-    accessCode = (accessCode != null && accessCode.trim().isNotEmpty)
-        ? accessCode.trim()
-        : await _requestPaystackAccessCode(tier, amount, callbackUrl: 'https://standard.paystack.co/close');
+    String? accessCode = safeDotEnvString('PAYSTACK_TEST_ACCESS_CODE');
+    accessCode = (accessCode.isNotEmpty) ? accessCode : await _requestPaystackAccessCode(tier, amount, callbackUrl: 'https://standard.paystack.co/close');
 
     if (accessCode == null || accessCode.isEmpty) {
       if (_allowPaystackSandboxSimulation()) {
@@ -3852,106 +3772,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _simulatePayPalSandboxPayment(
-    _CreditTier tier,
-    double amount,
-  ) async {
-    final ref = 'SIM-PAYPAL-${DateTime.now().millisecondsSinceEpoch}';
-    await _completeTierPurchase(
-      tier,
-      amount: amount,
-      status: 'completed_sandbox_paypal_simulated',
-      reference: ref,
-      sourceLabel: 'PayPal Sandbox',
-    );
-  }
-
-  void _startPayPalTierPayment(_CreditTier tier) async {
-    final paymentReady = await _ensurePaymentReadyAccount();
-    if (!paymentReady) return;
-
-    final mode = _payPalModeFromEnv();
-    if (mode == null) {
-      _showSnack("PAYPAL_MODE must be set to 'sandbox' or 'live'.");
-      return;
-    }
-
-    if (_pendingPayPalOrderId != null) {
-      final pendingMode = _pendingPayPalMode;
-      if (pendingMode != null && pendingMode != mode) {
-        _showSnack(
-          'Pending PayPal order is ${_payPalModeLabel(pendingMode)}. Set PAYPAL_MODE to match before capture.',
-        );
-        return;
-      }
-      _showSnack('Attempting to finalize pending PayPal order...');
-      final finalized = await _capturePendingPayPalOrder();
-      if (finalized) {
-        return;
-      }
-      _showSnack('Pending PayPal order not completed yet.');
-      return;
-    }
-
-    final amount = _tierAmountFromPrice(tier.price);
-    final orderData = await _requestPayPalOrder(tier, amount, mode);
-    final approvalUrl = orderData?['approval_url'];
-    final orderId = orderData?['order_id'];
-
-    if (approvalUrl == null || approvalUrl.isEmpty || orderId == null || orderId.isEmpty) {
-      if (mode == _PayPalMode.sandbox && _allowPayPalSandboxSimulation()) {
-        try {
-          _showSnack(
-            'PayPal sandbox backend unavailable. Running simulated sandbox payment.',
-          );
-          await _simulatePayPalSandboxPayment(tier, amount);
-        } catch (e) {
-          debugPrint('PayPal sandbox simulation error: $e');
-          _showSnack('PayPal sandbox simulation failed: ${e.toString()}');
-        }
-      } else {
-        _showSnack(
-          mode == _PayPalMode.live
-              ? 'Could not create PayPal live order.'
-              : 'Could not create PayPal sandbox order.',
-        );
-      }
-      return;
-    }
-
-    final uri = Uri.tryParse(approvalUrl);
-    if (uri == null) {
-      _showSnack('Invalid PayPal approval URL returned by backend.');
-      return;
-    }
-
-    try {
-      final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
-      if (!launched) {
-        _showSnack('Could not open PayPal checkout.');
-        return;
-      }
-      if (mounted) {
-        setState(() {
-          _pendingPayPalOrderId = orderId;
-          _pendingPayPalTier = tier;
-          _pendingPayPalAmount = amount;
-          _pendingPayPalMode = mode;
-        });
-      } else {
-        _pendingPayPalOrderId = orderId;
-        _pendingPayPalTier = tier;
-        _pendingPayPalAmount = amount;
-        _pendingPayPalMode = mode;
-      }
-      _showSnack(
-        'PayPal ${_payPalModeLabel(mode)} checkout opened. After approval, tap PayPal again to finalize crediting.',
-      );
-    } catch (e) {
-      debugPrint('PayPal launch error: $e');
-      _showSnack('Could not open PayPal checkout: ${e.toString()}');
-    }
-  }
   Widget _buildHeaderWordmark(bool isDark) {
     final titleColor = isDark ? Colors.white : const Color(0xFF1F2D40);
     final subtitleColor = isDark ? Colors.white70 : const Color(0xFF2C3A4B);
@@ -4127,7 +3947,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     alignment: Alignment.centerLeft,
                     child: PopupMenuButton<String>(
                       icon: Icon(Icons.menu, color: isDark ? Colors.white : Colors.black),
-                      tooltip: 'Menu',
+                      tooltip: localizedUiText('menu', _uiLanguage),
                       color: isDark ? const Color(0xFF222222) : Colors.white,
                       surfaceTintColor: isDark ? const Color(0xFF222222) : Colors.white,
                       itemBuilder: (context) => [
@@ -4137,7 +3957,27 @@ class _HomeScreenState extends State<HomeScreen> {
                             children: [
                               Icon(Icons.info_outline, size: 18, color: isDark ? Colors.white : Colors.black),
                               const SizedBox(width: 12),
-                              Text('About', style: TextStyle(color: isDark ? Colors.white : Colors.black)),
+                              Text(localizedUiText('about', _uiLanguage), style: TextStyle(color: isDark ? Colors.white : Colors.black)),
+                            ],
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'language_english',
+                          child: Row(
+                            children: [
+                              Icon(Icons.language, size: 18, color: isDark ? Colors.white : Colors.black),
+                              const SizedBox(width: 12),
+                              Text(localizedUiText('english', _uiLanguage), style: TextStyle(color: isDark ? Colors.white : Colors.black)),
+                            ],
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'language_afrikaans',
+                          child: Row(
+                            children: [
+                              Icon(Icons.language, size: 18, color: isDark ? Colors.white : Colors.black),
+                              const SizedBox(width: 12),
+                              Text(localizedUiText('afrikaans', _uiLanguage), style: TextStyle(color: isDark ? Colors.white : Colors.black)),
                             ],
                           ),
                         ),
@@ -4147,7 +3987,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             children: [
                               Icon(Icons.translate, size: 18, color: isDark ? Colors.white : Colors.black),
                               const SizedBox(width: 12),
-                              Text('Translate', style: TextStyle(color: isDark ? Colors.white : Colors.black)),
+                              Text(localizedUiText('translate', _uiLanguage), style: TextStyle(color: isDark ? Colors.white : Colors.black)),
                             ],
                           ),
                         ),
@@ -4157,7 +3997,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             children: [
                               Icon(Icons.history, size: 18, color: isDark ? Colors.white : Colors.black),
                               const SizedBox(width: 12),
-                              Text('History', style: TextStyle(color: isDark ? Colors.white : Colors.black)),
+                              Text(localizedUiText('history', _uiLanguage), style: TextStyle(color: isDark ? Colors.white : Colors.black)),
                             ],
                           ),
                         ),
@@ -4167,7 +4007,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             children: [
                               Icon(Icons.school, size: 18, color: isDark ? Colors.white : Colors.black),
                               const SizedBox(width: 12),
-                              Text('Learn', style: TextStyle(color: isDark ? Colors.white : Colors.black)),
+                              Text(localizedUiText('learn', _uiLanguage), style: TextStyle(color: isDark ? Colors.white : Colors.black)),
                             ],
                           ),
                         ),
@@ -4177,9 +4017,11 @@ class _HomeScreenState extends State<HomeScreen> {
                           showDialog(
                             context: context,
                             builder: (ctx) => AlertDialog(
-                              title: const Text('About'),
-                              content: const Text(
-                                "'Let’s Talk' helps you instantly translate South African languages out loud. Just speak slowly and clearly while pressing the 'Talk' button, then instantly share translations with friends, save phrases to your Learn tab for practice, and easily manage your translation history."
+                              title: Text(localizedUiText('about', _uiLanguage)),
+                              content: Text(
+                                _uiLanguage == AppUiLanguage.afrikaans
+                                    ? "'Let’s Talk' help jou om Suid-Afrikaanse tale onmiddellik hardop te vertaal. Praat net stadig en duidelik terwyl jy die 'Praat'-knoppie druk, deel dan dadelik vertalings met vriende, stoor frases onder Jou Leer-oefening, en bestuur maklik jou vertaalgeskiedenis."
+                                    : "'Let’s Talk' helps you instantly translate South African languages out loud. Just speak slowly and clearly while pressing the 'Talk' button, then instantly share translations with friends, save phrases to your Learn tab for practice, and easily manage your translation history."
                               ),
                               actions: [
                                 Builder(
@@ -4191,13 +4033,17 @@ class _HomeScreenState extends State<HomeScreen> {
                                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                                       ),
                                       onPressed: () => Navigator.of(ctx).pop(),
-                                      child: const Text('Close'),
+                                      child: Text(localizedUiText('close', _uiLanguage)),
                                     );
                                   },
                                 ),
                               ],
                             ),
                           );
+                        } else if (value == 'language_english') {
+                          setState(() => _uiLanguage = AppUiLanguage.english);
+                        } else if (value == 'language_afrikaans') {
+                          setState(() => _uiLanguage = AppUiLanguage.afrikaans);
                         } else if (value == 'translate') {
                           setState(() => _activeTab = 'translate');
                         } else if (value == 'history') {
@@ -4948,7 +4794,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                       const SizedBox(height: 4),
                                       if (_showTalkHintText)
                                         Text(
-                                          _isTalking ? 'LISTENING' : 'HOLD TO TALK',
+                                          _isTalking
+                                              ? 'LISTENING'
+                                              : localizedUiText('hold_to_talk', _uiLanguage),
                                           style: const TextStyle(
                                               color: Colors.white,
                                               fontSize: 10,
@@ -4991,7 +4839,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 size: 28,
                                 color: Colors.black,
                               ),
-                              tooltip: 'New Translation',
+                              tooltip: localizedUiText('new_translation', _uiLanguage),
                               padding: const EdgeInsets.all(12),
                             ),
                           ),

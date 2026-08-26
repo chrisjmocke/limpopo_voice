@@ -1,4 +1,10 @@
-Set-Location "C:\Users\BOK\limpopo_voice"
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$root = 'C:\Users\BOK\limpopo_voice'
+$KeyFile = Join-Path $root 'narakeet_key.txt'
+
+Set-Location $root
 
 $key = Read-Host "Paste new Narakeet API key"
 if ([string]::IsNullOrWhiteSpace($key)) {
@@ -6,20 +12,26 @@ if ([string]::IsNullOrWhiteSpace($key)) {
   exit 1
 }
 
-Set-Content -Path .\narakeet_key.txt -NoNewline -Value $key
+$key = $key.Trim()
+Set-Content -Path $KeyFile -NoNewline -Value $key
 
-Get-Item .\narakeet_key.txt | Select-Object Name, Length | Format-Table -AutoSize
+if (-not (Test-Path $KeyFile)) {
+  Write-Error "Failed to create temporary key file at $KeyFile"
+  exit 1
+}
 
-firebase functions:secrets:set NARAKEET_API_KEY --data-file .\narakeet_key.txt
+Get-Item $KeyFile | Select-Object Name, Length | Format-Table -AutoSize
+
+firebase functions:secrets:set NARAKEET_API_KEY --data-file $KeyFile
 if ($LASTEXITCODE -ne 0) {
-  Remove-Item .\narakeet_key.txt -ErrorAction SilentlyContinue
+  Remove-Item $KeyFile -ErrorAction SilentlyContinue
   exit $LASTEXITCODE
 }
 
 firebase deploy --only functions:processSpeech
 $deployExit = $LASTEXITCODE
 
-Remove-Item .\narakeet_key.txt -ErrorAction SilentlyContinue
+Remove-Item $KeyFile -ErrorAction SilentlyContinue
 
 if ($deployExit -ne 0) { exit $deployExit }
 

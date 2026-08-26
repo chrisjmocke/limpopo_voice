@@ -18,7 +18,6 @@ if (hasKeystoreProperties) {
 }
 
 android {
-    // 🔥 Add this line exactly as requested:
     ndkVersion = "28.2.13676358"
 
     namespace = "com.limpopovoice.translate"
