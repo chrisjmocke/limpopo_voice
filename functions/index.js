@@ -28,7 +28,7 @@ exports.ttsProviderReadiness = onRequest({
     return require("./speech_processor").handleTtsProviderReadiness(req, res);
 });
 
-// Paystack & PayPal functions
+// Paystack functions
 exports.createPaystackTransaction = onRequest({ region: "africa-south1", secrets: ["PAYSTACK_SECRET_KEY"] }, (req, res) => {
     return require("./paystack").createPaystackTransaction(req, res);
 });
@@ -37,11 +37,4 @@ exports.createPaystackTransactionHttp = onRequest({ region: "africa-south1", sec
 });
 exports.paystackWebhook = onRequest({ region: "africa-south1", secrets: ["PAYSTACK_SECRET_KEY"] }, (req, res) => {
     return require("./paystack").paystackWebhook(req, res);
-});
-
-exports.createPayPalOrderHttp = onRequest({ region: "africa-south1", secrets: ["PAYPAL_CLIENT_ID", "PAYPAL_SECRET"] }, (req, res) => {
-    return require("./paypal").createPayPalOrderHttp(req, res);
-});
-exports.capturePayPalOrderHttp = onRequest({ region: "africa-south1", secrets: ["PAYPAL_CLIENT_ID", "PAYPAL_SECRET"] }, (req, res) => {
-    return require("./paypal").capturePayPalOrderHttp(req, res);
 });

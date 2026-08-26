@@ -1727,31 +1727,37 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _getAndStoreDeviceId() async {
     try {
       if (_deviceId != null && _deviceId!.isNotEmpty) {
-        return; // Already retrieved
+        return; // Already in memory
       }
 
       final prefs = await SharedPreferences.getInstance();
       const deviceIdKey = 'device_id_v1';
-      
+
       String? deviceId = prefs.getString(deviceIdKey);
+
       if (deviceId == null || deviceId.isEmpty) {
-        // Get hardware device ID
         final deviceInfo = DeviceInfoPlugin();
-        
-        if (Platform.isAndroid) {
-          final androidInfo = await deviceInfo.androidInfo;
-          deviceId = androidInfo.id; // Android ID (persists across uninstalls on most devices)
-        } else if (Platform.isIOS) {
-          final iosInfo = await deviceInfo.iosInfo;
-          deviceId = iosInfo.identifierForVendor; // iOS identifier (persists for same vendor)
-        } else {
-          deviceId = _generateUUID(); // Fallback for other platforms
+
+        try {
+          if (Platform.isAndroid) {
+            final androidInfo = await deviceInfo.androidInfo;
+            deviceId = androidInfo.id; // Scoped Android ID
+          } else if (Platform.isIOS) {
+            final iosInfo = await deviceInfo.iosInfo;
+            deviceId = iosInfo.identifierForVendor; // iOS Vendor ID
+          }
+        } catch (e) {
+          debugPrint('Hardware ID lookup failed, using fallback: $e');
         }
-        
-        if (deviceId != null && deviceId.isNotEmpty) {
-          await prefs.setString(deviceIdKey, deviceId);
-          debugPrint('Stored device ID: $deviceId');
+
+        // Fallback if platform lookup failed or returned empty/null
+        if (deviceId == null || deviceId.isEmpty) {
+          deviceId = _generateUUID();
         }
+
+        // Persist locally
+        await prefs.setString(deviceIdKey, deviceId);
+        debugPrint('Stored device ID: $deviceId');
       }
 
       if (mounted) {
@@ -1760,7 +1766,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _deviceId = deviceId;
       }
     } catch (e) {
-      debugPrint('Failed to get device ID: $e');
+      debugPrint('Failed to initialize device ID: $e');
     } finally {
       if (!_deviceIdCompleter.isCompleted) {
         _deviceIdCompleter.complete();

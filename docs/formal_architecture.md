@@ -23,11 +23,11 @@ componentDiagram
 
 ### 2.1 Frontend (Flutter App)
 - **Directory**: `lib/`
-- **Responsibility**: Provides the user interface, handles user authentication (via Firebase Auth), manages local state (e.g., `_isListening`, `_credits`), handles speech-to-text input, renders translation results, and facilitates payment flows (Paystack/PayPal).
+- **Responsibility**: Provides the user interface, handles user authentication (via Firebase Auth), manages local state (e.g., `_isListening`, `_credits`), handles speech-to-text input, renders translation results, and facilitates payment flows (Paystack).
 
 ### 2.2 Backend (Cloud Functions)
 - **Directory**: `functions/`
-- **Responsibility**: Hosted on Google Cloud (region: `africa-south1`). Handles secure API calls to external services (Gemini, Narakeet, Paystack, PayPal) to protect API keys. Manages credit deduction logic and transaction verification.
+- **Responsibility**: Hosted on Google Cloud (region: `africa-south1`). Handles secure API calls to external services (Gemini, Narakeet, Paystack) to protect API keys. Manages credit deduction logic and transaction verification.
 
 ### 2.3 Services & Infrastructure
 - **Firebase Auth**: Manages anonymous and authenticated user sessions.
@@ -59,5 +59,5 @@ componentDiagram
 - **Organization Security**: Organization data is protected with ownership checks (`isOrgOwner`) and strict constraints on credit spending for members (`memberSpendingExactlyOneCredit`).
 
 ### 4.3 Sensitive Data Handling
-- API keys (Gemini, Narakeet, Paystack, PayPal) are stored securely in **Firebase Secrets Manager** and are never exposed in the client-side code.
+- API keys (Gemini, Narakeet, Paystack) are stored securely in **Firebase Secrets Manager** and are never exposed in the client-side code.
 - Cloud Functions access these secrets at runtime, ensuring they are not leaked in source code or deployment logs.
