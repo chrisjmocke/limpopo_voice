@@ -10,17 +10,17 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == userId;
     }
 
-    // Personal user profile data: only the user may read/write.
+    // Personal user profile data
     match /users/{userId} {
       allow read, create, update, delete: if isSelf(userId);
     }
 
-    // Optional user sub-documents keep same ownership model.
+    // User sub-documents
     match /users/{userId}/{document=**} {
       allow read, write: if isSelf(userId);
     }
 
-    // Payment telemetry events. Allow only self-owned creates from client.
+    // Payment telemetry events (Write-only for owner, tamper-proof)
     match /payment_events/{eventId} {
       allow create: if signedIn() &&
         request.resource.data.userId == request.auth.uid &&
@@ -28,17 +28,23 @@ service cloud.firestore {
       allow read, update, delete: if false;
     }
 
-    // Global device tracking for free trial abuse prevention.
+    // Global device tracking (Prevent client overwrites/deletes)
     match /global_device_installs/{deviceId} {
-      allow read, write: if signedIn();
+      allow read: if signedIn();
+      // Allow creation only if document does not exist yet (prevents overwrite)
+      allow create: if signedIn() && !exists(/databases/$(database)/documents/global_device_installs/$(deviceId));
+      allow update, delete: if false;
     }
 
-    // Shared caches for translations and audio.
+    // Shared caches (Read-only for clients; writes managed by server/Cloud Functions)
     match /cache_translations/{cacheKey} {
-      allow read, write: if signedIn();
+      allow read: if signedIn();
+      allow write: if false; // Cloud Functions with Admin SDK handle writes
     }
+    
     match /cache_audio/{cacheKey} {
-      allow read, write: if signedIn();
+      allow read: if signedIn();
+      allow write: if false; // Cloud Functions with Admin SDK handle writes
     }
   }
 }
