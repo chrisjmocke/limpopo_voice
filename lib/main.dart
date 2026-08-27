@@ -105,10 +105,13 @@ class _LetsTalkAppState extends State<LetsTalkApp> {
           primary: const Color(0xFF66BB6A), // Lighter green
           secondary: const Color(0xFFA5D6A7), // Even lighter green
           brightness: Brightness.dark,
-          surface: const Color(0xFF03070D), // Same as headerwordmark darkest color
-          surfaceContainerHighest: const Color(0xFF0D1A2A), // Headerwordmark middle color
+          surface:
+              const Color(0xFF03070D), // Same as headerwordmark darkest color
+          surfaceContainerHighest:
+              const Color(0xFF0D1A2A), // Headerwordmark middle color
         ),
-        scaffoldBackgroundColor: const Color(0xFF03070D), // Pure black from headerwordmark
+        scaffoldBackgroundColor:
+            const Color(0xFF03070D), // Pure black from headerwordmark
         canvasColor: const Color(0xFF03070D), // Same as scaffold
         useMaterial3: true,
       ),
@@ -176,11 +179,12 @@ class _CreditTier {
 }
 
 const _tiers = [
-  _CreditTier('Tier 1', 100, 'R19.99'),    // 100 credits
-  _CreditTier('Tier 2', 300, 'R49.99'),    // 300 credits
-  _CreditTier('Tier 3', 700, 'R99.99'),    // 700 credits
+  _CreditTier('Tier 1', 100, 'R19.99'), // 100 credits
+  _CreditTier('Tier 2', 300, 'R49.99'), // 300 credits
+  _CreditTier('Tier 3', 700, 'R99.99'), // 700 credits
 ];
-const int _usageCostCredits = 1; // 1 credit = 5 seconds per translation (capped)
+const int _usageCostCredits =
+    1; // 1 credit = 5 seconds per translation (capped)
 const double apiCostPerUnit = 0.0029;
 const bool _enableClientFirestoreCache = true;
 const bool _enableLocalPersistentAudioCache = true;
@@ -291,117 +295,127 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-          final FocusNode _inputFocusNode = FocusNode();
-      Future<void> _deleteUserPhrase(int idx) async {
-        final sure = await _confirmDeleteLearnPhrase();
-        if (sure) {
-          setState(() {
-            final lang = _selectedLearnLang;
-            final list = _userLearnPhrasesByLang[lang];
-            if (list != null && idx < list.length) {
-              list.removeAt(idx);
-              _userLearnPhrasesByLang[lang] = List.from(list);
-            }
-          });
-          await _persistUserLearnPhrases();
-        }
-      }
-
-      Future<bool> _confirmDeleteLearnPhrase() async {
-        final result = await showDialog<bool>(
-          context: context,
-          builder: (ctx) {
-            final isDark = Theme.of(ctx).brightness == Brightness.dark;
-            return AlertDialog(
-              title: const Text('Are you sure?'),
-              content: const Text('Delete this phrase from Learn?'),
-              backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-              surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(ctx).pop(false),
-                  child: Text('Cancel', style: TextStyle(color: isDark ? Colors.white : Color(0xFF000000))),
-                ),
-                TextButton(
-                  style: TextButton.styleFrom(
-                    backgroundColor: const Color(0xFF000000),
-                    foregroundColor: Colors.white,
-                  ),
-                  onPressed: () => Navigator.of(ctx).pop(true),
-                  child: const Text('Clear', style: TextStyle(color: Colors.white)),
-                ),
-              ],
-            );
-          },
-        );
-        return result == true;
-      }
-    final Map<String, List<Map<String, String>>> _userLearnPhrasesByLang = {};
-    final Map<String, Uint8List> _hotAudioCache = {};
-    final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-
-    Future<bool> _sendToLearnMultipleLangs({
-      required String translated,
-      required String original,
-      required String phonetic,
-      required List<String> langs,
-    }) async {
-      if (_credits <= 0) {
-        _showCreditTiers();
-        return false;
-      }
-      bool duplicateFound = false;
-      for (final lang in langs) {
-        final key = lang;
-        final phraseList = (_userLearnPhrasesByLang[key] ?? []);
-        if (phraseList.any((p) => p['text'] == translated)) {
-          duplicateFound = true;
-          break;
-        }
-      }
-      if (duplicateFound) {
-        await showDialog(
-          context: context,
-          builder: (ctx) {
-            final isDark = Theme.of(ctx).brightness == Brightness.dark;
-            return AlertDialog(
-              title: const Text('Duplicate'),
-              content: const Text('This phrase already exists in Learn.'),
-              backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-              surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(ctx).pop(),
-                  child: Text('Cancel', style: TextStyle(color: isDark ? Colors.white : Color(0xFF000000))),
-                ),
-              ],
-            );
-          },
-        );
-        return false;
-      }
+  final FocusNode _inputFocusNode = FocusNode();
+  Future<void> _deleteUserPhrase(int idx) async {
+    final sure = await _confirmDeleteLearnPhrase();
+    if (sure) {
       setState(() {
-        for (final lang in langs) {
-          final key = lang;
-          final phraseList = (_userLearnPhrasesByLang[key] ?? []).toList();
-          phraseList.insert(0, {
-            'text': translated,
-            'en': original,
-            if (phonetic.isNotEmpty) 'phonetic': phonetic,
-          });
-          while (phraseList.length > 5) {
-            phraseList.removeLast();
-          }
-          _userLearnPhrasesByLang[key] = phraseList;
-          _learnFocusTextByLang[lang] = translated;
-          _learnFocusMeaningByLang[lang] = original;
-          _learnFocusPhoneticByLang[lang] = phonetic.isEmpty ? null : phonetic;
+        final lang = _selectedLearnLang;
+        final list = _userLearnPhrasesByLang[lang];
+        if (list != null && idx < list.length) {
+          list.removeAt(idx);
+          _userLearnPhrasesByLang[lang] = List.from(list);
         }
       });
       await _persistUserLearnPhrases();
-      _showSnack('Sentence sent to selected languages (max 5 per language)');
-      return true;
     }
+  }
+
+  Future<bool> _confirmDeleteLearnPhrase() async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        return AlertDialog(
+          title: const Text('Are you sure?'),
+          content: const Text('Delete this phrase from Learn?'),
+          backgroundColor:
+              isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+          surfaceTintColor:
+              isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: Text('Cancel',
+                  style: TextStyle(
+                      color: isDark ? Colors.white : Color(0xFF000000))),
+            ),
+            TextButton(
+              style: TextButton.styleFrom(
+                backgroundColor: const Color(0xFF000000),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Clear', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
+    return result == true;
+  }
+
+  final Map<String, List<Map<String, String>>> _userLearnPhrasesByLang = {};
+  final Map<String, Uint8List> _hotAudioCache = {};
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  Future<bool> _sendToLearnMultipleLangs({
+    required String translated,
+    required String original,
+    required String phonetic,
+    required List<String> langs,
+  }) async {
+    if (_credits <= 0) {
+      _showCreditTiers();
+      return false;
+    }
+    bool duplicateFound = false;
+    for (final lang in langs) {
+      final key = lang;
+      final phraseList = (_userLearnPhrasesByLang[key] ?? []);
+      if (phraseList.any((p) => p['text'] == translated)) {
+        duplicateFound = true;
+        break;
+      }
+    }
+    if (duplicateFound) {
+      await showDialog(
+        context: context,
+        builder: (ctx) {
+          final isDark = Theme.of(ctx).brightness == Brightness.dark;
+          return AlertDialog(
+            title: const Text('Duplicate'),
+            content: const Text('This phrase already exists in Learn.'),
+            backgroundColor:
+                isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+            surfaceTintColor:
+                isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: Text('Cancel',
+                    style: TextStyle(
+                        color: isDark ? Colors.white : Color(0xFF000000))),
+              ),
+            ],
+          );
+        },
+      );
+      return false;
+    }
+    setState(() {
+      for (final lang in langs) {
+        final key = lang;
+        final phraseList = (_userLearnPhrasesByLang[key] ?? []).toList();
+        phraseList.insert(0, {
+          'text': translated,
+          'en': original,
+          if (phonetic.isNotEmpty) 'phonetic': phonetic,
+        });
+        while (phraseList.length > 5) {
+          phraseList.removeLast();
+        }
+        _userLearnPhrasesByLang[key] = phraseList;
+        _learnFocusTextByLang[lang] = translated;
+        _learnFocusMeaningByLang[lang] = original;
+        _learnFocusPhoneticByLang[lang] = phonetic.isEmpty ? null : phonetic;
+      }
+    });
+    await _persistUserLearnPhrases();
+    _showSnack('Sentence sent to selected languages (max 5 per language)');
+    return true;
+  }
+
   static const List<String> _offensiveWords = [
     'fuck',
     'fucking',
@@ -473,9 +487,8 @@ class _HomeScreenState extends State<HomeScreen> {
     caseSensitive: false,
   );
 
-  static final List<RegExp> _offensiveFlexibleRegexes = _offensiveWords
-      .map(_buildFlexibleOffensiveRegex)
-      .toList(growable: false);
+  static final List<RegExp> _offensiveFlexibleRegexes =
+      _offensiveWords.map(_buildFlexibleOffensiveRegex).toList(growable: false);
 
   static RegExp _buildFlexibleOffensiveRegex(String word) {
     final compact = word.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
@@ -491,7 +504,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   static const String _disclaimerText =
-    "\"Let's Talk' uses advanced speech and language technology to provide translations. However, automated translation is not perfect. 'Let's Talk' is not responsible for any inaccurate, misleading, or offensive translations generated by the system. By using this app, you agree to use these translations at your own risk.";
+      "\"Let's Talk' uses advanced speech and language technology to provide translations. However, automated translation is not perfect. 'Let's Talk' is not responsible for any inaccurate, misleading, or offensive translations generated by the system. By using this app, you agree to use these translations at your own risk.";
 
   Future<void> _showDisclaimerInfo() async {
     if (!mounted) return;
@@ -522,7 +535,8 @@ class _HomeScreenState extends State<HomeScreen> {
   final stt.SpeechToText _speech = stt.SpeechToText();
   late final TranslationService _translationService;
   late final AudioPlayer _audioPlayer;
-  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _creditsSubscription;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
+      _creditsSubscription;
   final Completer<void> _deviceIdCompleter = Completer<void>();
   bool _speechAvailable = false;
   bool _isTalking = false;
@@ -817,8 +831,9 @@ class _HomeScreenState extends State<HomeScreen> {
       final payload = <String, List<Map<String, String>>>{};
       _userLearnPhrasesByLang.forEach((lang, phrases) {
         if (phrases.isEmpty) return;
-        payload[lang] =
-            phrases.map((p) => Map<String, String>.from(p)).toList(growable: false);
+        payload[lang] = phrases
+            .map((p) => Map<String, String>.from(p))
+            .toList(growable: false);
       });
       await prefs.setString(_userLearnPhrasesPrefsKey, jsonEncode(payload));
     } catch (e) {
@@ -828,18 +843,19 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadLearnSentences() async {
     try {
-      final jsonString = await rootBundle.loadString('assets/learn_sentences.json');
+      final jsonString =
+          await rootBundle.loadString('assets/learn_sentences.json');
       final jsonData = jsonDecode(jsonString) as Map<String, dynamic>;
       final sentences = jsonData['sentences'] as List<dynamic>? ?? [];
-      
+
       setState(() {
         _learnSentences.clear();
         for (final item in sentences) {
           if (item is Map<String, dynamic>) {
             final language = item['language'] as String? ?? '';
             final sentenceList = (item['sentences'] as List<dynamic>? ?? [])
-              .map((s) => s.toString())
-              .toList();
+                .map((s) => s.toString())
+                .toList();
             if (language.isNotEmpty) {
               _learnSentences[language] = sentenceList;
             }
@@ -873,10 +889,13 @@ class _HomeScreenState extends State<HomeScreen> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return 'Not signed in';
     if (user.isAnonymous) return 'Guest session';
-    final providerIds = user.providerData.map((item) => item.providerId).toSet();
+    final providerIds =
+        user.providerData.map((item) => item.providerId).toSet();
     if (providerIds.contains('google.com')) return 'Google account';
     if (providerIds.contains('password')) {
-      return user.emailVerified ? 'Email account' : 'Email account - verify inbox';
+      return user.emailVerified
+          ? 'Email account'
+          : 'Email account - verify inbox';
     }
     return 'Signed in';
   }
@@ -903,7 +922,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     // Refresh Google profile data if missing
-    if (!user.isAnonymous && (user.photoURL == null || user.photoURL!.isEmpty)) {
+    if (!user.isAnonymous &&
+        (user.photoURL == null || user.photoURL!.isEmpty)) {
       debugPrint('User has no photoURL, attempting to refresh from Google');
       unawaited(_refreshGoogleProfileData());
     }
@@ -927,8 +947,6 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     }
   }
-
-
 
   String _friendlyAuthError(FirebaseAuthException error) {
     switch (error.code) {
@@ -962,11 +980,14 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         scrollable: true,
-        backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-        surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+        backgroundColor:
+            isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+        surfaceTintColor:
+            isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
         title: Text(
           localizedUiText('sign_in', _uiLanguage),
-          style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
+          style:
+              TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -994,7 +1015,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         _signInWithGoogle();
                       },
                 icon: const Icon(Icons.login),
-                label: Text(localizedUiText('continue_with_google', _uiLanguage)),
+                label:
+                    Text(localizedUiText('continue_with_google', _uiLanguage)),
               ),
             ),
             const SizedBox(height: 10),
@@ -1008,7 +1030,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         _showEmailAuthDialog(createAccount: true);
                       },
                 icon: const Icon(Icons.email_outlined),
-                label: Text(localizedUiText('create_email_account', _uiLanguage)),
+                label:
+                    Text(localizedUiText('create_email_account', _uiLanguage)),
               ),
             ),
             const SizedBox(height: 8),
@@ -1041,7 +1064,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _showEmailAuthDialog({required bool createAccount}) async {
-    final emailController = TextEditingController(text: (_authEmail ?? '').trim());
+    final emailController =
+        TextEditingController(text: (_authEmail ?? '').trim());
     final passwordController = TextEditingController();
     final isDark = Theme.of(context).brightness == Brightness.dark;
     bool obscurePassword = true;
@@ -1052,13 +1076,16 @@ class _HomeScreenState extends State<HomeScreen> {
         return StatefulBuilder(
           builder: (ctx, setDialogState) => AlertDialog(
             scrollable: true,
-            backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-            surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+            backgroundColor:
+                isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+            surfaceTintColor:
+                isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
             title: Text(
               createAccount
                   ? localizedUiText('create_email_account', _uiLanguage)
                   : localizedUiText('sign_in_with_email', _uiLanguage),
-              style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
+              style: TextStyle(
+                  color: isDark ? Colors.white : const Color(0xFF000000)),
             ),
             content: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1068,7 +1095,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   controller: emailController,
                   keyboardType: TextInputType.emailAddress,
                   autofillHints: const [AutofillHints.email],
-                  decoration: InputDecoration(labelText: localizedUiText('email', _uiLanguage)),
+                  decoration: InputDecoration(
+                      labelText: localizedUiText('email', _uiLanguage)),
                 ),
                 const SizedBox(height: 10),
                 TextField(
@@ -1079,9 +1107,12 @@ class _HomeScreenState extends State<HomeScreen> {
                     labelText: localizedUiText('password', _uiLanguage),
                     suffixIcon: IconButton(
                       onPressed: () {
-                        setDialogState(() => obscurePassword = !obscurePassword);
+                        setDialogState(
+                            () => obscurePassword = !obscurePassword);
                       },
-                      icon: Icon(obscurePassword ? Icons.visibility : Icons.visibility_off),
+                      icon: Icon(obscurePassword
+                          ? Icons.visibility
+                          : Icons.visibility_off),
                     ),
                   ),
                 ),
@@ -1100,7 +1131,10 @@ class _HomeScreenState extends State<HomeScreen> {
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(ctx).pop(),
-                child: Text(localizedUiText('cancel', _uiLanguage), style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000))),
+                child: Text(localizedUiText('cancel', _uiLanguage),
+                    style: TextStyle(
+                        color:
+                            isDark ? Colors.white : const Color(0xFF000000))),
               ),
               TextButton(
                 style: TextButton.styleFrom(
@@ -1117,7 +1151,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           createAccount: createAccount,
                         );
                       },
-                child: Text(createAccount ? localizedUiText('create_account', _uiLanguage) : localizedUiText('sign_in', _uiLanguage)),
+                child: Text(createAccount
+                    ? localizedUiText('create_account', _uiLanguage)
+                    : localizedUiText('sign_in', _uiLanguage)),
               ),
             ],
           ),
@@ -1163,20 +1199,20 @@ class _HomeScreenState extends State<HomeScreen> {
           _showSnack('Signed in with Google.');
           return;
         }
-        
+
         // Update user profile with Google account details
         if (result.user != null) {
           try {
             final photoUrl = googleUser.photoUrl;
             final displayName = googleUser.displayName;
-            
+
             if (displayName != null && displayName.isNotEmpty) {
               await result.user!.updateDisplayName(displayName);
             }
             if (photoUrl != null && photoUrl.isNotEmpty) {
               await result.user!.updatePhotoURL(photoUrl);
             }
-            
+
             // Reload user to get updated profile data
             await result.user!.reload();
           } catch (e) {
@@ -1192,11 +1228,11 @@ class _HomeScreenState extends State<HomeScreen> {
         try {
           final photoUrl = googleUser.photoUrl;
           final displayName = googleUser.displayName;
-          
+
           debugPrint('🔵 GOOGLE SIGN-IN SUCCESS');
           debugPrint('Google user photo URL: $photoUrl');
           debugPrint('Google user display name: $displayName');
-          
+
           if (displayName != null && displayName.isNotEmpty) {
             await result.user!.updateDisplayName(displayName);
             debugPrint('✅ Updated display name: $displayName');
@@ -1208,7 +1244,7 @@ class _HomeScreenState extends State<HomeScreen> {
           } else {
             debugPrint('⚠️ WARNING: photoUrl is null or empty!');
           }
-          
+
           // Reload user to get updated profile data
           await result.user!.reload();
           final reloadedUser = FirebaseAuth.instance.currentUser;
@@ -1225,14 +1261,16 @@ class _HomeScreenState extends State<HomeScreen> {
     } on PlatformException catch (e) {
       final msg = (e.message ?? '').toLowerCase();
       final details = (e.details?.toString() ?? '').toLowerCase();
-      if (msg.contains('developer_error') || details.contains('developer_error')) {
+      if (msg.contains('developer_error') ||
+          details.contains('developer_error')) {
         _showSnack(
           'Google sign-in is not configured for this app. Check the Firebase Google provider, the Android SHA-1, and refresh android/app/google-services.json.',
         );
       } else {
         _showSnack('Google sign-in failed: ${e.code}');
       }
-      debugPrint('Google sign-in platform error: code=${e.code}, message=${e.message}, details=${e.details}');
+      debugPrint(
+          'Google sign-in platform error: code=${e.code}, message=${e.message}, details=${e.details}');
     } catch (e) {
       debugPrint('Google sign-in failed: $e');
       _showSnack('Google sign-in failed. Please try again.');
@@ -1270,7 +1308,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final auth = FirebaseAuth.instance;
     final currentUser = auth.currentUser;
-    final credential = EmailAuthProvider.credential(email: email, password: password);
+    final credential =
+        EmailAuthProvider.credential(email: email, password: password);
 
     try {
       UserCredential result;
@@ -1278,7 +1317,8 @@ class _HomeScreenState extends State<HomeScreen> {
         if (currentUser != null && currentUser.isAnonymous) {
           result = await currentUser.linkWithCredential(credential);
         } else {
-          result = await auth.createUserWithEmailAndPassword(email: email, password: password);
+          result = await auth.createUserWithEmailAndPassword(
+              email: email, password: password);
         }
         await _syncAuthState(result.user);
         if (result.user != null && !(result.user!.emailVerified)) {
@@ -1286,7 +1326,8 @@ class _HomeScreenState extends State<HomeScreen> {
         }
         _showSnack('Email account ready. Verification email sent.');
       } else {
-        result = await auth.signInWithEmailAndPassword(email: email, password: password);
+        result = await auth.signInWithEmailAndPassword(
+            email: email, password: password);
         await _syncAuthState(result.user);
         _showSnack(localizedUiText('signed_in_with_email', _uiLanguage));
       }
@@ -1385,12 +1426,12 @@ class _HomeScreenState extends State<HomeScreen> {
   ImageProvider? _getUserProfileImage() {
     final user = FirebaseAuth.instance.currentUser;
     debugPrint('📸 _getUserProfileImage called for: ${user?.email}');
-    
+
     if (user != null && user.photoURL != null && user.photoURL!.isNotEmpty) {
       debugPrint('✅ Using Firebase photoURL: ${user.photoURL}');
       return NetworkImage(user.photoURL!);
     }
-    
+
     debugPrint('⚠️ No photoURL from Firebase');
     return null;
   }
@@ -1401,9 +1442,9 @@ class _HomeScreenState extends State<HomeScreen> {
     debugPrint('Current user: ${user?.email}');
     debugPrint('User photoURL: ${user?.photoURL}');
     debugPrint('User displayName: ${user?.displayName}');
-    
+
     final photoProvider = _getUserProfileImage();
-    
+
     if (photoProvider == null) {
       debugPrint('No photo provider - showing default icon');
       return CircleAvatar(
@@ -1442,8 +1483,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _refreshGoogleProfileData() async {
     final user = FirebaseAuth.instance.currentUser;
-    final providerIds = user?.providerData.map((item) => item.providerId).toSet() ?? {};
-    
+    final providerIds =
+        user?.providerData.map((item) => item.providerId).toSet() ?? {};
+
     // Only refresh for Google-authenticated users
     if (!providerIds.contains('google.com')) {
       debugPrint('Not a Google account, skipping profile refresh');
@@ -1461,26 +1503,27 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       // Request Google sign-in with profile scope to refresh token
       final googleUser = await buildGoogleSignInClient().signIn();
-      
+
       if (googleUser != null) {
         debugPrint('📸 Got Google user profile data');
         debugPrint('Google photo URL: ${googleUser.photoUrl}');
         debugPrint('Google display name: ${googleUser.displayName}');
-        
+
         if (googleUser.photoUrl != null && googleUser.photoUrl!.isNotEmpty) {
           await user?.updatePhotoURL(googleUser.photoUrl);
           await _cacheUserPhotoUrl(googleUser.photoUrl);
           debugPrint('✅ Updated photoURL: ${googleUser.photoUrl}');
         }
-        
-        if (googleUser.displayName != null && googleUser.displayName!.isNotEmpty) {
+
+        if (googleUser.displayName != null &&
+            googleUser.displayName!.isNotEmpty) {
           await user?.updateDisplayName(googleUser.displayName);
           debugPrint('✅ Updated displayName: ${googleUser.displayName}');
         }
-        
+
         await user?.reload();
         debugPrint('✅ Profile refresh complete');
-        
+
         // Trigger rebuild
         if (mounted) setState(() {});
       }
@@ -1497,7 +1540,8 @@ class _HomeScreenState extends State<HomeScreen> {
     return 'https://africa-south1-limpopo-voice-prod.cloudfunctions.net/createPaystackTransactionHttp';
   }
 
-  Future<Map<String, String>?> _buildAuthorizedJsonHeaders({bool forceRefresh = false}) async {
+  Future<Map<String, String>?> _buildAuthorizedJsonHeaders(
+      {bool forceRefresh = false}) async {
     try {
       User? user = FirebaseAuth.instance.currentUser;
       user ??= (await FirebaseAuth.instance.signInAnonymously()).user;
@@ -1514,7 +1558,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<String?> _requestPaystackAccessCode(_CreditTier tier, double amount, {String? callbackUrl}) async {
+  Future<String?> _requestPaystackAccessCode(_CreditTier tier, double amount,
+      {String? callbackUrl}) async {
     final headers = await _buildAuthorizedJsonHeaders();
     if (headers == null) {
       _showSnack('Could not authenticate payment request.');
@@ -1540,7 +1585,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     if (response.statusCode == 401) {
-      final refreshedHeaders = await _buildAuthorizedJsonHeaders(forceRefresh: true);
+      final refreshedHeaders =
+          await _buildAuthorizedJsonHeaders(forceRefresh: true);
       if (refreshedHeaders == null) return null;
       try {
         response = await http
@@ -1561,7 +1607,9 @@ class _HomeScreenState extends State<HomeScreen> {
       final body = jsonDecode(response.body);
       if (body is! Map<String, dynamic>) return null;
       final accessCode = body['access_code'] as String?;
-      return (accessCode != null && accessCode.trim().isNotEmpty) ? accessCode.trim() : null;
+      return (accessCode != null && accessCode.trim().isNotEmpty)
+          ? accessCode.trim()
+          : null;
     } catch (e) {
       debugPrint('Paystack init response parse failed: $e');
       return null;
@@ -1573,8 +1621,6 @@ class _HomeScreenState extends State<HomeScreen> {
     if (id == null || id.isEmpty) return null;
     return FirebaseFirestore.instance.collection('users').doc(id);
   }
-
-
 
   Future<void> _ensureUserProfileDocument() async {
     final ref = _userDocRef();
@@ -1589,120 +1635,39 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadCreditsFromFirestore() async {
-    final ref = _userDocRef();
-    if (ref == null) return;
-
     try {
-      final doc = await ref.get();
-      final isKnownTestUid = _authUid == '13zquwePsqZnmNZa6scDg9ElMJp1';
-      final deviceUsedTrial = await _hasDeviceUsedFreeTrial();
-      final freeTrialConsumed = doc.exists && doc.data()?['free_trial_consumed'] == true;
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
 
-      if (!doc.exists) {
-        if (deviceUsedTrial) {
-          debugPrint('Device already used free trial. Preventing new starter grant for user: $_authUid');
-          if (mounted) {
-            setState(() => _credits = 0);
-          } else {
-            _credits = 0;
-          }
-          await ref.set({
-            'credits': 0,
-            'free_trial_consumed': true,
-            'creditsRollOver': false,
-            'updatedAt': FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
-          return;
-        }
+      final docRef =
+          FirebaseFirestore.instance.collection('users').doc(user.uid);
+      final doc = await docRef.get();
 
-        debugPrint('Credits document does not exist for user: $_authUid. Granting starter balance of 10.');
-        if (mounted) {
-          setState(() => _credits = 10);
-        } else {
-          _credits = 10;
-        }
-        await ref.set({
-          'credits': 10,
-          'free_trial_consumed': false,
-          'creditsRollOver': false,
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-        return;
-      }
+      int credits = 0;
 
-      final rawCredits = (doc.data()?['credits'] as num?)?.toInt();
-      var credits = rawCredits ?? 10;
-
-      if (deviceUsedTrial || freeTrialConsumed) {
-        if (credits > 10) {
-          debugPrint('Free trial already consumed. Keeping purchased credits intact for $_authUid.');
-        } else {
-          debugPrint('Free trial already consumed. Resetting credits to 0 for user $_authUid.');
-          credits = 0;
-        }
-        await ref.set({
-          'credits': credits,
-          'free_trial_consumed': true,
-          'creditsRollOver': false,
-          'monthlyRenewalActive': false,
-          'monthlyDebitCancelled': false,
-          'cancelledUntil': null,
-          'nextAutoDebitAt': null,
-          'lastTierName': null,
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      }
-
-      if (isKnownTestUid && credits != 10) {
-        debugPrint('Resetting known test UID credits from $credits back to 10.');
-        credits = 10;
-        await ref.set({
-          'credits': 10,
-          'free_trial_consumed': false,
-          'creditsRollOver': false,
-          'monthlyRenewalActive': false,
-          'monthlyDebitCancelled': false,
-          'cancelledUntil': null,
-          'nextAutoDebitAt': null,
-          'lastTierName': null,
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      }
-
-      final nextAutoDebitAt = (doc.data()?['nextAutoDebitAt'] as Timestamp?)?.toDate();
-      final cancelledUntil = (doc.data()?['cancelledUntil'] as Timestamp?)?.toDate();
-
-      final now = DateTime.now();
-      final hasCancellationWindow = cancelledUntil != null && now.isBefore(cancelledUntil);
-      final shouldExpireMonthlyCredits = nextAutoDebitAt != null && !now.isBefore(nextAutoDebitAt) && !hasCancellationWindow;
-
-      if (shouldExpireMonthlyCredits) {
-        debugPrint('Monthly credit cycle expired at $nextAutoDebitAt. Clearing rollover and resetting credit balance.');
-        credits = 0;
-        await ref.set({
-          'credits': 0,
-          'free_trial_consumed': true,
-          'creditsRollOver': false,
-          'monthlyRenewalActive': false,
-          'monthlyDebitCancelled': false,
-          'cancelledUntil': null,
-          'creditsExpiredAt': FieldValue.serverTimestamp(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      }
-
-      if (credits >= 0) {
-        if (mounted) {
-          setState(() => _credits = credits);
-        } else {
-          _credits = credits;
-        }
-        debugPrint('Loaded credits from Firestore: $_credits');
+      if (doc.exists) {
+        final data = doc.data() ?? {};
+        credits = data['credits'] ?? 0;
       } else {
-        debugPrint('Credits document exists but credits field is missing or invalid: ${doc.data()}');
+        // Create initial document structure if it doesn't exist
+        await docRef.set({
+          'credits': 0,
+          'monthlyRenewalActive': false,
+          'monthlyDebitCancelled': false,
+          'cancelledUntil': null,
+          'nextAutoDebitAt': null,
+          'lastTierName': null,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+
+      if (mounted) {
+        setState(() => _credits = credits);
+      } else {
+        _credits = credits;
       }
     } catch (e) {
-      debugPrint('Failed to load credits: $e');
+      debugPrint('Error loading credits from Firestore: $e');
     }
   }
 
@@ -1721,8 +1686,6 @@ class _HomeScreenState extends State<HomeScreen> {
       debugPrint('Failed to save credits: $e');
     }
   }
-
-
 
   Future<void> _getAndStoreDeviceId() async {
     try {
@@ -1786,8 +1749,9 @@ class _HomeScreenState extends State<HomeScreen> {
       final db = FirebaseFirestore.instance;
       final docRef = db.collection('global_device_installs').doc(_deviceId);
       final docSnapshot = await docRef.get();
-      
-      return docSnapshot.exists && docSnapshot.data()?['used_free_trial'] == true;
+
+      return docSnapshot.exists &&
+          docSnapshot.data()?['used_free_trial'] == true;
     } catch (e) {
       debugPrint('Failed to check device free trial status: $e');
       return false;
@@ -1805,13 +1769,17 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final db = FirebaseFirestore.instance;
       final docRef = db.collection('global_device_installs').doc(_deviceId);
-      
+
       await docRef.set({
         'used_free_trial': true,
         'first_seen': FieldValue.serverTimestamp(),
         'last_seen': FieldValue.serverTimestamp(),
         'device_info': {
-          'platform': Platform.isAndroid ? 'android' : Platform.isIOS ? 'ios' : 'unknown',
+          'platform': Platform.isAndroid
+              ? 'android'
+              : Platform.isIOS
+                  ? 'ios'
+                  : 'unknown',
         }
       }, SetOptions(merge: true)).catchError((e) {
         debugPrint('Failed to mark device as used free trial: $e');
@@ -1825,7 +1793,7 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       // Get device ID (persists across uninstalls)
       await _getAndStoreDeviceId();
-      
+
       await _ensureSignedIn();
       final uid = _authUid;
       if (uid == null || uid.isEmpty) {
@@ -1835,7 +1803,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final prefs = await SharedPreferences.getInstance();
       const installIdKey = 'lets_talk_install_id_v1';
-      
+
       String? installId = prefs.getString(installIdKey);
       if (installId == null) {
         installId = _generateUUID();
@@ -1851,15 +1819,16 @@ class _HomeScreenState extends State<HomeScreen> {
         _installId = installId;
       }
 
-        final db = FirebaseFirestore.instance;
-        final docRef = db
+      final db = FirebaseFirestore.instance;
+      final docRef = db
           .collection('users')
           .doc(uid)
           .collection('device_installs')
           .doc(installId);
       final docSnapshot = await docRef.get();
-      
-      if (docSnapshot.exists && docSnapshot.data()?['used_free_trial'] == true) {
+
+      if (docSnapshot.exists &&
+          docSnapshot.data()?['used_free_trial'] == true) {
         debugPrint('Install ID $installId already used free trial');
       } else {
         await docRef.set({
@@ -1877,10 +1846,13 @@ class _HomeScreenState extends State<HomeScreen> {
       final deviceUsedTrial = await _hasDeviceUsedFreeTrial();
       final ref = _userDocRef();
       final userDoc = ref == null ? null : await ref.get();
-      final userFreeTrialConsumed = userDoc != null && userDoc.exists && userDoc.data()?['free_trial_consumed'] == true;
+      final userFreeTrialConsumed = userDoc != null &&
+          userDoc.exists &&
+          userDoc.data()?['free_trial_consumed'] == true;
       if ((deviceUsedTrial || userFreeTrialConsumed) && _credits <= 10) {
         final nextCredits = _credits > 10 ? _credits : 0;
-        debugPrint('User/device already used free trial. Enforcing credits to $nextCredits.');
+        debugPrint(
+            'User/device already used free trial. Enforcing credits to $nextCredits.');
         if (mounted) {
           setState(() => _credits = nextCredits);
         } else {
@@ -2078,7 +2050,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _saveLocalCachedAudio(String cacheKey, Uint8List audioData) async {
+  Future<void> _saveLocalCachedAudio(
+      String cacheKey, Uint8List audioData) async {
     if (!_enableLocalPersistentAudioCache || audioData.isEmpty) return;
     final dir = await _getLocalAudioCacheDir();
     if (dir == null) return;
@@ -2109,17 +2082,20 @@ class _HomeScreenState extends State<HomeScreen> {
         msg.contains('missing or insufficient permissions');
   }
 
-  Future<String?> _getCachedTranslationFromFirestore(String sourceText, String targetLang) async {
+  Future<String?> _getCachedTranslationFromFirestore(
+      String sourceText, String targetLang) async {
     try {
       final docId = '${sourceText.toLowerCase().trim()}_$targetLang';
-      final doc = await _firestore.collection('translation_cache').doc(docId).get();
+      final doc =
+          await _firestore.collection('translation_cache').doc(docId).get();
       if (doc.exists && doc.data() != null) {
         final cached = doc.data()!['translated_text'] as String?;
         if (cached != null && cached.trim().isNotEmpty) {
           final normalizedSource = sourceText.trim();
           final normalizedCached = cached.trim();
           if (normalizedCached == normalizedSource) {
-            debugPrint('Ignoring stale translation cache entry that matches the source text for $docId');
+            debugPrint(
+                'Ignoring stale translation cache entry that matches the source text for $docId');
             return null;
           }
           return normalizedCached;
@@ -2133,7 +2109,8 @@ class _HomeScreenState extends State<HomeScreen> {
     return null;
   }
 
-  Future<void> _saveTranslationToFirestore(String sourceText, String targetLang, String translatedText) async {
+  Future<void> _saveTranslationToFirestore(
+      String sourceText, String targetLang, String translatedText) async {
     try {
       final docId = '${sourceText.toLowerCase().trim()}_$targetLang';
       await _firestore.collection('translation_cache').doc(docId).set({
@@ -2149,10 +2126,12 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<String?> _getCachedAudioFromFirestore(String text, String voiceId) async {
+  Future<String?> _getCachedAudioFromFirestore(
+      String text, String voiceId) async {
     try {
       final docId = '${text.toLowerCase().trim()}_$voiceId';
-      final doc = await _firestore.collection('tts_audio_cache').doc(docId).get();
+      final doc =
+          await _firestore.collection('tts_audio_cache').doc(docId).get();
 
       if (doc.exists && doc.data() != null) {
         return doc.data()!['audio_url'] as String?;
@@ -2165,7 +2144,8 @@ class _HomeScreenState extends State<HomeScreen> {
     return null;
   }
 
-  Future<void> _saveAudioToFirestore(String text, String voiceId, String audioUrl) async {
+  Future<void> _saveAudioToFirestore(
+      String text, String voiceId, String audioUrl) async {
     try {
       final docId = '${text.toLowerCase().trim()}_$voiceId';
       await _firestore.collection('tts_audio_cache').doc(docId).set({
@@ -2185,16 +2165,19 @@ class _HomeScreenState extends State<HomeScreen> {
     return _getCachedTranslationFromFirestore(text, language);
   }
 
-  Future<void> _saveCacheTranslation(String text, String language, String translation) async {
+  Future<void> _saveCacheTranslation(
+      String text, String language, String translation) async {
     await _saveTranslationToFirestore(text, language, translation);
   }
 
-  Future<String?> _getCachedAudio(String text, String language, String voice) async {
+  Future<String?> _getCachedAudio(
+      String text, String language, String voice) async {
     final voiceKey = '$language|$voice';
     return _getCachedAudioFromFirestore(text, voiceKey);
   }
 
-  Future<void> _saveCacheAudio(String text, String language, String voice, String audioBase64) async {
+  Future<void> _saveCacheAudio(
+      String text, String language, String voice, String audioBase64) async {
     final voiceKey = '$language|$voice';
     await _saveAudioToFirestore(text, voiceKey, audioBase64);
   }
@@ -2222,7 +2205,6 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e) {
       debugPrint('Audio release mode setup failed: $e');
     }
-
   }
 
   Future<void> _grantStarterCreditsAfterDisclaimer() async {
@@ -2235,7 +2217,8 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final doc = await ref.get();
       final existingCredits = (doc.data()?['credits'] as num?)?.toInt() ?? 0;
-      final alreadyUsedFreeTrial = doc.exists && doc.data()?['free_trial_consumed'] == true;
+      final alreadyUsedFreeTrial =
+          doc.exists && doc.data()?['free_trial_consumed'] == true;
       final deviceUsedTrial = await _hasDeviceUsedFreeTrial();
 
       if (alreadyUsedFreeTrial || deviceUsedTrial) {
@@ -2329,7 +2312,8 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               LayoutBuilder(
                 builder: (context, constraints) {
-                  final wordmarkWidth = (constraints.maxWidth * 0.9).clamp(220.0, 320.0);
+                  final wordmarkWidth =
+                      (constraints.maxWidth * 0.9).clamp(220.0, 320.0);
                   return Center(
                     child: SizedBox(
                       width: wordmarkWidth,
@@ -2360,8 +2344,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: TextButton.styleFrom(
                     backgroundColor: Colors.white,
                     foregroundColor: Colors.black,
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(6)),
                   ),
                   onPressed: () async {
                     final navigator = Navigator.of(ctx);
@@ -2370,27 +2356,19 @@ class _HomeScreenState extends State<HomeScreen> {
                     final prefs = await SharedPreferences.getInstance();
                     await prefs.setBool('disclaimerAcceptedV7', true);
 
-                    final alreadyGranted = prefs.getBool('freeStarterCreditsShownV1') ?? false;
+                    final alreadyGranted =
+                        prefs.getBool('freeStarterCreditsShownV1') ?? false;
                     if (!alreadyGranted) {
                       await prefs.setBool('freeStarterCreditsShownV1', true);
                       await _grantStarterCreditsAfterDisclaimer();
-                      if (mounted) {
-                        messenger?.showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              'You received 10 free credits.',
-                              textAlign: TextAlign.center,
-                            ),
-                          ),
-                        );
-                      }
                     }
 
                     if (mounted) {
                       setState(() => _showCreditsInHeader = true);
                     }
                   },
-                  child: const Text('Accept and Close', style: TextStyle(color: Colors.black)),
+                  child: const Text('Accept and Close',
+                      style: TextStyle(color: Colors.black)),
                 );
               },
             ),
@@ -2518,7 +2496,8 @@ class _HomeScreenState extends State<HomeScreen> {
         unawaited(_updateCreditsInFirestore());
 
         if (!silent) {
-          _showSnack('This device already used free trial credits. Please purchase credits to continue.');
+          _showSnack(
+              'This device already used free trial credits. Please purchase credits to continue.');
           _showCreditTiers();
         }
         return false;
@@ -2530,7 +2509,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // Save updated credits to Firestore
       unawaited(_updateCreditsInFirestore());
-      debugPrint('Deducted $_usageCostCredits from Personal Balance. Remaining: $_credits');
+      debugPrint(
+          'Deducted $_usageCostCredits from Personal Balance. Remaining: $_credits');
 
       // Mark device as used free trial when consuming the first free credit, and
       // permanently lock the trial once it is exhausted so the same user/device cannot
@@ -2557,19 +2537,18 @@ class _HomeScreenState extends State<HomeScreen> {
           }, SetOptions(merge: true));
         }
         if (!silent) {
-          _showSnack('Your 10 free credits are used up. Please choose a package to continue.');
+          _showSnack(
+              'Your 10 free credits are used up. Please choose a package to continue.');
         }
         _showCreditTiers();
         return false;
       }
 
-      if (!silent) {
-        _showSnack('Used $_usageCostCredits credit | Balance: $_credits translations remaining');
-      }
       return true;
     }
     if (!silent) {
-      _showSnack('You are out of credits. Please choose a package to continue.');
+      _showSnack(
+          'You are out of credits. Please choose a package to continue.');
       _showCreditTiers();
     }
     return false;
@@ -2577,9 +2556,55 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _doTranslate(String input) async {
     setState(() => _isTranslating = true);
-    
-    // 1. Get Translation (checks text cache)
-    final result = await _translateText(input);
+
+    final cachedTranslation =
+        await _getCachedTranslation(input, _selectedOutputLang);
+    String result;
+    bool alreadyHadAudio = false;
+    Uint8List? comboAudioData;
+
+    try {
+      if (cachedTranslation != null && cachedTranslation.isNotEmpty) {
+        result = cachedTranslation;
+        _phoneticText = '';
+      } else {
+        // Text translation is a cache miss. Let's do a combined translate & synthesize request!
+        final provider = _ttsProviderForLanguage(_selectedOutputLang);
+        final voiceName = _voiceNameForLanguage(_selectedOutputLang);
+        final comboResult = await _translationService.translateAndSynthesize(
+          input,
+          _selectedOutputLang,
+          voiceName: voiceName,
+          ttsProvider: provider,
+        );
+
+        if (comboResult != null) {
+          result = comboResult.translation;
+          _phoneticText = '';
+
+          // Cache the translation text so we don't have to translate again in future
+          await _saveCacheTranslation(input, _selectedOutputLang, result);
+
+          // Warm up / populate the local and remote audio cache under the translated key
+          final cacheVoiceKey = '$provider|${voiceName ?? ''}';
+          final cacheLookupKey =
+              _getCacheKey(result, _selectedOutputLang, cacheVoiceKey);
+          await _saveCacheAudio(result, _selectedOutputLang, cacheVoiceKey,
+              base64Encode(comboResult.audioContent));
+          await _saveLocalCachedAudio(cacheLookupKey, comboResult.audioContent);
+
+          comboAudioData = comboResult.audioContent;
+          alreadyHadAudio = true;
+        } else {
+          // Fallback to normal google translate / single translation-only call
+          result = await _translateText(input);
+        }
+      }
+    } catch (e) {
+      debugPrint('Optimized translation flow error: $e');
+      result = await _translateText(input);
+    }
+
     if (!mounted) return;
 
     setState(() {
@@ -2602,12 +2627,23 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // 3. Audio Handling
     final safeForSpeech = _silenceProfanityForSpeech(result);
-    
+
     if (safeForSpeech.isEmpty) return;
 
-    // Initial live translation ALWAYS deducts a credit as per user requirement.
-    // The cache is still used for repeats and to speed up generation, but deduction happens here.
-    await _speakTranslatedText(result);
+    if (alreadyHadAudio &&
+        comboAudioData != null &&
+        comboAudioData.isNotEmpty) {
+      // Consume a usage credit
+      if (!await _consumeUsageAllowance(
+          inputText: _spokenRawText, outputText: result)) {
+        debugPrint('Failed to consume usage allowance, aborting direct play.');
+        return;
+      }
+      await _audioPlayer.stop();
+      await _audioPlayer.play(BytesSource(comboAudioData));
+    } else {
+      await _speakTranslatedText(result);
+    }
   }
 
   String _maskProfanityForDisplay(String text) {
@@ -2657,7 +2693,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
       if (backendTranslation != null && backendTranslation.trim().isNotEmpty) {
         _phoneticText = '';
-        await _saveCacheTranslation(input, _selectedOutputLang, backendTranslation.trim());
+        await _saveCacheTranslation(
+            input, _selectedOutputLang, backendTranslation.trim());
         return backendTranslation.trim();
       }
     } catch (_) {
@@ -2710,14 +2747,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final safeForSpeech = _silenceProfanityForSpeech(text);
     if (safeForSpeech.trim().isEmpty) {
-      debugPrint('[$context] Abort: sanitized text is empty after profanity filtering.');
+      debugPrint(
+          '[$context] Abort: sanitized text is empty after profanity filtering.');
       return true;
     }
     return false;
   }
 
   Future<void> _speakText(String text, String language) async {
-    debugPrint('[_speakText] Attempting to speak text: "$text" in language: $language');
+    debugPrint(
+        '[_speakText] Attempting to speak text: "$text" in language: $language');
     if (_shouldAbortTts(text, context: 'speakText')) {
       return;
     }
@@ -2727,11 +2766,13 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final provider = _ttsProviderForLanguage(language);
       final voiceName = _voiceNameForLanguage(language);
-      debugPrint('[_speakText] Determined provider: $provider, voice: $voiceName');
-      
+      debugPrint(
+          '[_speakText] Determined provider: $provider, voice: $voiceName');
+
       // 1. Check Cache First (No credit deduction)
       final cacheVoiceKey = '$provider|${voiceName ?? ''}';
-      final cacheLookupKey = _getCacheKey(safeForSpeech, language, cacheVoiceKey);
+      final cacheLookupKey =
+          _getCacheKey(safeForSpeech, language, cacheVoiceKey);
       debugPrint('[_speakText] Cache lookup key: $cacheLookupKey');
 
       final localCached = await _getLocalCachedAudio(cacheLookupKey);
@@ -2741,7 +2782,8 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      final cachedBase64 = await _getCachedAudio(safeForSpeech, language, cacheVoiceKey);
+      final cachedBase64 =
+          await _getCachedAudio(safeForSpeech, language, cacheVoiceKey);
       if (cachedBase64 != null) {
         debugPrint('[_speakText] Audio cache hit (shared)');
         final decoded = base64Decode(cachedBase64);
@@ -2762,13 +2804,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
       if (audioData != null && audioData.isNotEmpty) {
         if (!await _consumeUsageAllowance(inputText: safeForSpeech)) {
-          debugPrint('[_speakText] Failed to consume usage allowance after generation, ignoring.');
+          debugPrint(
+              '[_speakText] Failed to consume usage allowance after generation, ignoring.');
           return;
         }
         debugPrint('[_speakText] Audio data generated, playing.');
         await _audioPlayer.play(BytesSource(audioData));
       } else {
-        debugPrint('[_speakText] Audio data is null or empty. Showing speech service unavailable message.');
+        debugPrint(
+            '[_speakText] Audio data is null or empty. Showing speech service unavailable message.');
         _showSnack(_speechServiceUnavailableMessage());
       }
     } catch (e) {
@@ -2822,8 +2866,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<Uint8List?> _generateAudioWithCache(
       String text, String language, String? voice,
-      {required String provider}) async {
-    debugPrint('[_generateAudioWithCache] Attempting to generate audio for text: "$text", language: $language, voice: $voice, provider: $provider');
+      {required String provider, bool skipTranslation = true}) async {
+    debugPrint(
+        '[_generateAudioWithCache] Attempting to generate audio for text: "$text", language: $language, voice: $voice, provider: $provider, skipTranslation: $skipTranslation');
     final cacheVoiceKey = '$provider|${voice ?? ''}';
     final cacheLookupKey = _getCacheKey(text, language, cacheVoiceKey);
     debugPrint('[_generateAudioWithCache] Cache lookup key: $cacheLookupKey');
@@ -2831,7 +2876,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final localCached = await _getLocalCachedAudio(cacheLookupKey);
     if (localCached != null && localCached.isNotEmpty) {
       _localAudioCacheHits++;
-      debugPrint('[_generateAudioWithCache] Audio cache hit (local): $_localAudioCacheHits');
+      debugPrint(
+          '[_generateAudioWithCache] Audio cache hit (local): $_localAudioCacheHits');
       return localCached;
     }
 
@@ -2840,27 +2886,32 @@ class _HomeScreenState extends State<HomeScreen> {
       final decoded = base64Decode(cachedBase64);
       await _saveLocalCachedAudio(cacheLookupKey, decoded);
       _sharedAudioCacheHits++;
-      debugPrint('[_generateAudioWithCache] Audio cache hit (shared): $_sharedAudioCacheHits');
+      debugPrint(
+          '[_generateAudioWithCache] Audio cache hit (shared): $_sharedAudioCacheHits');
       return decoded;
     }
 
     _remoteAudioCacheMisses++;
-    debugPrint('[_generateAudioWithCache] Audio cache miss (remote generation): $_remoteAudioCacheMisses');
+    debugPrint(
+        '[_generateAudioWithCache] Audio cache miss (remote generation): $_remoteAudioCacheMisses');
 
     final audioData = await _translationService.generateTranslation(
       text,
       language,
       voiceName: voice,
       ttsProvider: provider,
+      skipTranslation: skipTranslation,
     );
 
     if (audioData != null && audioData.isNotEmpty) {
-      debugPrint('[_generateAudioWithCache] Audio data received from translation service. Caching locally.');
+      debugPrint(
+          '[_generateAudioWithCache] Audio data received from translation service. Caching locally.');
       final audioBase64 = base64Encode(audioData);
       await _saveCacheAudio(text, language, cacheVoiceKey, audioBase64);
       await _saveLocalCachedAudio(cacheLookupKey, audioData);
     } else {
-      debugPrint('[_generateAudioWithCache] No audio data received from translation service.');
+      debugPrint(
+          '[_generateAudioWithCache] No audio data received from translation service.');
     }
 
     return audioData;
@@ -2878,28 +2929,27 @@ class _HomeScreenState extends State<HomeScreen> {
       final provider = _ttsProviderForLanguage(_selectedOutputLang);
       final voiceName = _voiceNameForLanguage(_selectedOutputLang);
       final chunks = _buildRealtimeSpeechChunks(safeForSpeech);
-      debugPrint('[_speakTranslatedText] selected provider=$provider voice=$voiceName chunks=${chunks.length} sentenceLength=${safeForSpeech.length}');
+      debugPrint(
+          '[_speakTranslatedText] selected provider=$provider voice=$voiceName chunks=${chunks.length} sentenceLength=${safeForSpeech.length}');
       if (chunks.isEmpty) {
-        debugPrint('[_speakTranslatedText] No speech chunks generated for sanitized text.');
+        debugPrint(
+            '[_speakTranslatedText] No speech chunks generated for sanitized text.');
         _showSnack(_speechServiceUnavailableMessage());
         return;
       }
 
-      final chunkRequests = chunks
-          .asMap()
-          .entries
-          .map((entry) {
-            final index = entry.key;
-            final chunk = entry.value;
-            debugPrint('[_speakTranslatedText] scheduling chunk $index/${chunks.length}: ${chunk.length} chars');
-            return _generateAudioWithCache(
-              chunk,
-              _selectedOutputLang,
-              voiceName,
-              provider: provider,
-            );
-          })
-          .toList(growable: false);
+      final chunkRequests = chunks.asMap().entries.map((entry) {
+        final index = entry.key;
+        final chunk = entry.value;
+        debugPrint(
+            '[_speakTranslatedText] scheduling chunk $index/${chunks.length}: ${chunk.length} chars');
+        return _generateAudioWithCache(
+          chunk,
+          _selectedOutputLang,
+          voiceName,
+          provider: provider,
+        );
+      }).toList(growable: false);
 
       bool playedAny = false;
       await _audioPlayer.stop();
@@ -2914,8 +2964,10 @@ class _HomeScreenState extends State<HomeScreen> {
         }
 
         if (!playedAny) {
-          if (!await _consumeUsageAllowance(inputText: _spokenRawText, outputText: text)) {
-            debugPrint('[_speakTranslatedText] Failed to consume usage allowance, aborting.');
+          if (!await _consumeUsageAllowance(
+              inputText: _spokenRawText, outputText: text)) {
+            debugPrint(
+                '[_speakTranslatedText] Failed to consume usage allowance, aborting.');
             return;
           }
         }
@@ -2930,9 +2982,6 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       ttsStopwatch.stop();
-      if (playedAny) {
-        _showSnack('${(ttsStopwatch.elapsedMilliseconds / 1000).toStringAsFixed(2)} seconds');
-      }
 
       if (!playedAny) {
         _showSnack(_speechServiceUnavailableMessage());
@@ -2989,7 +3038,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final t = _tttController.text.trim();
     if (t.isEmpty) return;
     if (_isTranslating) {
-      debugPrint('[_submitTTT] Ignoring duplicate submit while a translation is already running.');
+      debugPrint(
+          '[_submitTTT] Ignoring duplicate submit while a translation is already running.');
       _showSnack('Please wait for the current translation to finish.');
       return;
     }
@@ -3012,9 +3062,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _resetOutput() => setState(() {
         _spokenText = '';
-      _spokenRawText = '';
+        _spokenRawText = '';
         _translatedText = '';
-      _translatedRawText = '';
+        _translatedRawText = '';
         _phoneticText = '';
         _spokenLang = '';
         _translatedLang = '';
@@ -3045,11 +3095,16 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _sharingCurrentTranslation = true);
 
     try {
-      final inputRaw = _spokenRawText.trim().isNotEmpty ? _spokenRawText.trim() : inputDisplay;
-      final outputRaw =
-          _translatedRawText.trim().isNotEmpty ? _translatedRawText.trim() : outputDisplay;
-      final inputLang = _spokenLang.isNotEmpty ? _spokenLang : _selectedInputLang;
-      final outputLang = _translatedLang.isNotEmpty ? _translatedLang : _selectedOutputLang;
+      final inputRaw = _spokenRawText.trim().isNotEmpty
+          ? _spokenRawText.trim()
+          : inputDisplay;
+      final outputRaw = _translatedRawText.trim().isNotEmpty
+          ? _translatedRawText.trim()
+          : outputDisplay;
+      final inputLang =
+          _spokenLang.isNotEmpty ? _spokenLang : _selectedInputLang;
+      final outputLang =
+          _translatedLang.isNotEmpty ? _translatedLang : _selectedOutputLang;
       final dir = await getTemporaryDirectory();
       final nowSuffix = DateTime.now().millisecondsSinceEpoch;
 
@@ -3126,7 +3181,8 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       if (!hasInputMp3 || !hasOutputMp3) {
-        _showSnack('Could not generate both input and output MP3 files. Please try again.');
+        _showSnack(
+            'Could not generate both input and output MP3 files. Please try again.');
         return;
       }
 
@@ -3137,7 +3193,8 @@ class _HomeScreenState extends State<HomeScreen> {
       );
       files.add(XFile(inputTextFile.path, mimeType: 'text/plain'));
 
-      final outputTextFile = File('${dir.path}/lets_talk_output_$nowSuffix.txt');
+      final outputTextFile =
+          File('${dir.path}/lets_talk_output_$nowSuffix.txt');
       await outputTextFile.writeAsString(
         'Output Language: $outputLang\n\n$outputDisplay\n',
         flush: true,
@@ -3204,10 +3261,14 @@ class _HomeScreenState extends State<HomeScreen> {
     final normalized = detail.trim();
     if (normalized.isNotEmpty) {
       final lower = normalized.toLowerCase();
-      if (lower.contains('narakeet') || lower.contains('voice') || lower.contains('tts')) {
+      if (lower.contains('narakeet') ||
+          lower.contains('voice') ||
+          lower.contains('tts')) {
         return 'Speech service unavailable. Check connection and try again.';
       }
-      if (lower.contains('api key') || lower.contains('not configured') || lower.contains('secret')) {
+      if (lower.contains('api key') ||
+          lower.contains('not configured') ||
+          lower.contains('secret')) {
         return 'Speech service is not configured. Please try again later.';
       }
       return 'Speech service unavailable. Please try again later.';
@@ -3265,17 +3326,21 @@ class _HomeScreenState extends State<HomeScreen> {
               Text('Let\'s Talk',
                   style: TextStyle(
                       fontWeight: FontWeight.w600,
-                    color: isDark ? Colors.white70 : const Color(0xFF000000))),
+                      color:
+                          isDark ? Colors.white70 : const Color(0xFF000000))),
               const SizedBox(height: 16),
               TextButton(
                 onPressed: () => Navigator.of(context).pop(),
                 style: TextButton.styleFrom(
                   foregroundColor: Colors.white,
                   backgroundColor: Colors.black,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
                 ),
-                child: const Text('Close', style: TextStyle(color: Colors.white)),
+                child:
+                    const Text('Close', style: TextStyle(color: Colors.white)),
               ),
             ],
           ),
@@ -3297,7 +3362,8 @@ class _HomeScreenState extends State<HomeScreen> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+      backgroundColor:
+          isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) {
@@ -3318,147 +3384,165 @@ class _HomeScreenState extends State<HomeScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-              Row(
-                children: [
-                  Icon(Icons.account_balance_wallet,
-                      color: isDark ? Colors.white : const Color(0xFF000000)),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Credit Packages',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: isDark ? Colors.white : const Color(0xFF000000),
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: Center(
-                      child: Column(
+                      Row(
                         children: [
-                          Text(
-                            'Translations capped',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: isDark ? Colors.white70 : Colors.black54,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                          Text(
-                            'at 5 seconds',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: isDark ? Colors.white70 : Colors.black54,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  Chip(
-                    label: Text(
-                      'Balance: $_credits translations',
-                      style: TextStyle(
-                        color: isDark ? Colors.white : const Color(0xFF000000),
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    backgroundColor: isDark ? Colors.black : Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: isDark ? Colors.white10 : const Color(0xFFF5F5F5),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Your plan renews automatically every month.',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isDark ? Colors.white70 : Colors.black87,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton(
-                        onPressed: _cancelMonthlyDebit,
-                        style: TextButton.styleFrom(
-                          foregroundColor: isDark ? Colors.white : Colors.black,
-                          backgroundColor: isDark ? Colors.black : Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                        ),
-                        child: const Text('Cancel renewals'),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              ..._tiers.map((tier) => Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: isDark ? Colors.white10 : Colors.black,
-                        foregroundColor: Colors.white,
-                        minimumSize: const Size(double.infinity, 52),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        _showPaymentGateways(tier);
-                      },
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
+                          Icon(Icons.account_balance_wallet,
+                              color: isDark
+                                  ? Colors.white
+                                  : const Color(0xFF000000)),
+                          const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              tier.name,
-                              style: const TextStyle(
+                              'Credit Packages',
+                              style: TextStyle(
+                                fontSize: 20,
                                 fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                                color: Colors.white,
+                                color: isDark
+                                    ? Colors.white
+                                    : const Color(0xFF000000),
                               ),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          Text(
-                            '${tier.credits} translations',
-                            style: const TextStyle(color: Colors.white70),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            tier.price,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Center(
+                              child: Column(
+                                children: [
+                                  Text(
+                                    'Translations capped',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: isDark
+                                          ? Colors.white70
+                                          : Colors.black54,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                  Text(
+                                    'at 5 seconds',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: isDark
+                                          ? Colors.white70
+                                          : Colors.black54,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                              ),
                             ),
+                          ),
+                          Chip(
+                            label: Text(
+                              'Balance: $_credits translations',
+                              style: TextStyle(
+                                color: isDark
+                                    ? Colors.white
+                                    : const Color(0xFF000000),
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            backgroundColor:
+                                isDark ? Colors.black : Colors.white,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
                           ),
                         ],
                       ),
-                    ),
-                  )),
+                      const SizedBox(height: 12),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color:
+                              isDark ? Colors.white10 : const Color(0xFFF5F5F5),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Your plan renews automatically every month.',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isDark ? Colors.white70 : Colors.black87,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton(
+                                onPressed: _cancelMonthlyDebit,
+                                style: TextButton.styleFrom(
+                                  foregroundColor:
+                                      isDark ? Colors.white : Colors.black,
+                                  backgroundColor:
+                                      isDark ? Colors.black : Colors.white,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                ),
+                                child: const Text('Cancel renewals'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      ..._tiers.map((tier) => Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor:
+                                    isDark ? Colors.white10 : Colors.black,
+                                foregroundColor: Colors.white,
+                                minimumSize: const Size(double.infinity, 52),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              onPressed: () {
+                                Navigator.pop(ctx);
+                                _showPaymentGateways(tier);
+                              },
+                              child: Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      tier.name,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16,
+                                        color: Colors.white,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    '${tier.credits} translations',
+                                    style:
+                                        const TextStyle(color: Colors.white70),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    tier.price,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )),
                     ],
                   ),
                 ),
@@ -3476,14 +3560,16 @@ class _HomeScreenState extends State<HomeScreen> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+      backgroundColor:
+          isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) {
         return Material(
           color: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-          surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+          surfaceTintColor:
+              isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
           child: SafeArea(
             top: false,
             child: ConstrainedBox(
@@ -3497,54 +3583,60 @@ class _HomeScreenState extends State<HomeScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                  Text(
-                    'Choose Payment Gateway',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: isDark ? Colors.white : const Color(0xFF000000),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    '${tier.name} • ${tier.credits} translations • ${tier.price}',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: isDark ? Colors.white70 : Colors.black54,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: isDark ? Colors.white10 : Colors.black,
-                        foregroundColor: Colors.white,
-                        minimumSize: const Size(double.infinity, 108),
-                        padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 20),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
+                      Text(
+                        'Choose Payment Gateway',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color:
+                              isDark ? Colors.white : const Color(0xFF000000),
                         ),
                       ),
-                      onPressed: () async {
-                        Navigator.pop(ctx);
-                        await Future<void>.delayed(const Duration(milliseconds: 120));
-                        if (!mounted) return;
-                        _startPaystackTierPayment(tier);
-                      },
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Image.asset('assets/paystack.png', width: 46, height: 46),
-                          const SizedBox(width: 16),
-                          const Text(
-                            'Paystack',
-                            style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
-                          ),
-                        ],
+                      const SizedBox(height: 6),
+                      Text(
+                        '${tier.name} • ${tier.credits} translations • ${tier.price}',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: isDark ? Colors.white70 : Colors.black54,
+                        ),
                       ),
-                    ),
-                  ),
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor:
+                                isDark ? Colors.white10 : Colors.black,
+                            foregroundColor: Colors.white,
+                            minimumSize: const Size(double.infinity, 108),
+                            padding: const EdgeInsets.symmetric(
+                                vertical: 22, horizontal: 20),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                          ),
+                          onPressed: () async {
+                            Navigator.pop(ctx);
+                            await Future<void>.delayed(
+                                const Duration(milliseconds: 120));
+                            if (!mounted) return;
+                            _startPaystackTierPayment(tier);
+                          },
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Image.asset('assets/paystack.png',
+                                  width: 46, height: 46),
+                              const SizedBox(width: 16),
+                              const Text(
+                                'Paystack',
+                                style: TextStyle(
+                                    fontSize: 24, fontWeight: FontWeight.w800),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -3596,12 +3688,14 @@ class _HomeScreenState extends State<HomeScreen> {
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
-    _showSnack('Debit cancelled. Your current credits stay active until ${_formatShortDate(keepUntil)}.');
+    _showSnack(
+        'Debit cancelled. Your current credits stay active until ${_formatShortDate(keepUntil)}.');
   }
 
   bool _allowPaystackSandboxSimulation() {
     final raw = safeDotEnvString('PAYSTACK_SANDBOX_BYPASS').toLowerCase();
-    final enabledByEnv = raw == '1' || raw == 'true' || raw == 'yes' || raw == 'on';
+    final enabledByEnv =
+        raw == '1' || raw == 'true' || raw == 'yes' || raw == 'on';
     return kDebugMode || enabledByEnv;
   }
 
@@ -3636,7 +3730,8 @@ class _HomeScreenState extends State<HomeScreen> {
       unawaited(_updateCreditsInFirestore());
     }
 
-    _showSnack('Monthly bundle activated: ${tier.credits} translations (${tier.name}) [$sourceLabel].');
+    _showSnack(
+        'Monthly bundle activated: ${tier.credits} translations (${tier.name}) [$sourceLabel].');
 
     try {
       await FirebaseFirestore.instance.collection('payment_events').add({
@@ -3675,7 +3770,7 @@ class _HomeScreenState extends State<HomeScreen> {
       // Secure approach: Open Paystack Checkout URL in a WebView
       // This avoids having the Secret Key in the frontend.
       final checkoutUrl = 'https://checkout.paystack.com/$accessCode';
-      
+
       final result = await Navigator.push(
         context,
         MaterialPageRoute(
@@ -3693,7 +3788,8 @@ class _HomeScreenState extends State<HomeScreen> {
         return _PaystackResponse(
           status: 'error',
           reference: '',
-          message: 'Payment window closed. If you completed payment, your credits will update shortly.',
+          message:
+              'Payment window closed. If you completed payment, your credits will update shortly.',
         );
       }
     } catch (e) {
@@ -3713,7 +3809,10 @@ class _HomeScreenState extends State<HomeScreen> {
     final amount = _tierAmountFromPrice(tier.price);
 
     String? accessCode = safeDotEnvString('PAYSTACK_TEST_ACCESS_CODE');
-    accessCode = (accessCode.isNotEmpty) ? accessCode : await _requestPaystackAccessCode(tier, amount, callbackUrl: 'https://standard.paystack.co/close');
+    accessCode = (accessCode.isNotEmpty)
+        ? accessCode
+        : await _requestPaystackAccessCode(tier, amount,
+            callbackUrl: 'https://standard.paystack.co/close');
 
     if (accessCode == null || accessCode.isEmpty) {
       if (_allowPaystackSandboxSimulation()) {
@@ -3743,10 +3842,12 @@ class _HomeScreenState extends State<HomeScreen> {
       if (userRef != null) {
         subscription = userRef.snapshots().listen((snapshot) {
           if (!snapshot.exists) return;
-          final newCredits = (snapshot.data()?['credits'] as num?)?.toInt() ?? 0;
+          final newCredits =
+              (snapshot.data()?['credits'] as num?)?.toInt() ?? 0;
           if (newCredits > _credits) {
             creditedByWebhook = true;
-            debugPrint('✅ Credits updated in Firestore by webhook during payment.');
+            debugPrint(
+                '✅ Credits updated in Firestore by webhook during payment.');
             if (mounted) setState(() => _credits = newCredits);
           }
         });
@@ -3755,7 +3856,8 @@ class _HomeScreenState extends State<HomeScreen> {
       final response = await _launchPaystackWithViewRetry(accessCode);
       await subscription?.cancel();
 
-      final isSuccess = response.status.toLowerCase() == 'success' || creditedByWebhook;
+      final isSuccess =
+          response.status.toLowerCase() == 'success' || creditedByWebhook;
 
       if (isSuccess) {
         if (!creditedByWebhook) {
@@ -3818,27 +3920,32 @@ class _HomeScreenState extends State<HomeScreen> {
                     letterSpacing: 0.6,
                     shadows: [
                       Shadow(
-                        color: Colors.black.withValues(alpha: isDark ? 0.65 : 0.28),
+                        color: Colors.black
+                            .withValues(alpha: isDark ? 0.65 : 0.28),
                         blurRadius: 0,
                         offset: const Offset(1, 0),
                       ),
                       Shadow(
-                        color: Colors.black.withValues(alpha: isDark ? 0.65 : 0.28),
+                        color: Colors.black
+                            .withValues(alpha: isDark ? 0.65 : 0.28),
                         blurRadius: 0,
                         offset: const Offset(-1, 0),
                       ),
                       Shadow(
-                        color: Colors.black.withValues(alpha: isDark ? 0.65 : 0.28),
+                        color: Colors.black
+                            .withValues(alpha: isDark ? 0.65 : 0.28),
                         blurRadius: 0,
                         offset: const Offset(0, 1),
                       ),
                       Shadow(
-                        color: Colors.black.withValues(alpha: isDark ? 0.65 : 0.28),
+                        color: Colors.black
+                            .withValues(alpha: isDark ? 0.65 : 0.28),
                         blurRadius: 0,
                         offset: const Offset(0, -1),
                       ),
                       Shadow(
-                        color: Colors.black.withValues(alpha: isDark ? 0.7 : 0.3),
+                        color:
+                            Colors.black.withValues(alpha: isDark ? 0.7 : 0.3),
                         blurRadius: 8,
                         offset: const Offset(0, 2),
                       ),
@@ -3857,17 +3964,20 @@ class _HomeScreenState extends State<HomeScreen> {
                     height: 1,
                     shadows: [
                       Shadow(
-                        color: Colors.black.withValues(alpha: isDark ? 0.55 : 0.2),
+                        color:
+                            Colors.black.withValues(alpha: isDark ? 0.55 : 0.2),
                         blurRadius: 0,
                         offset: const Offset(1, 0),
                       ),
                       Shadow(
-                        color: Colors.black.withValues(alpha: isDark ? 0.55 : 0.2),
+                        color:
+                            Colors.black.withValues(alpha: isDark ? 0.55 : 0.2),
                         blurRadius: 0,
                         offset: const Offset(-1, 0),
                       ),
                       Shadow(
-                        color: Colors.black.withValues(alpha: isDark ? 0.65 : 0.2),
+                        color:
+                            Colors.black.withValues(alpha: isDark ? 0.65 : 0.2),
                         blurRadius: 5,
                         offset: const Offset(0, 1),
                       ),
@@ -3896,7 +4006,9 @@ class _HomeScreenState extends State<HomeScreen> {
             // - If on History and swipe left: go to Learn
             // - If on History and swipe right: go to Translate
             // - If on Learn and swipe right: go to History if not empty, else go to Translate
-            if (_activeTab == 'translate' && details.primaryVelocity != null && details.primaryVelocity! < -200) {
+            if (_activeTab == 'translate' &&
+                details.primaryVelocity != null &&
+                details.primaryVelocity! < -200) {
               if (_credits <= 0) {
                 _showCreditTiers();
               } else if (_history.isNotEmpty) {
@@ -3904,7 +4016,8 @@ class _HomeScreenState extends State<HomeScreen> {
               } else {
                 setState(() => _activeTab = 'learn');
               }
-            } else if (_activeTab == 'history' && details.primaryVelocity != null) {
+            } else if (_activeTab == 'history' &&
+                details.primaryVelocity != null) {
               if (details.primaryVelocity! < -200) {
                 if (_credits <= 0) {
                   _showCreditTiers();
@@ -3914,7 +4027,9 @@ class _HomeScreenState extends State<HomeScreen> {
               } else if (details.primaryVelocity! > 200) {
                 setState(() => _activeTab = 'translate');
               }
-            } else if (_activeTab == 'learn' && details.primaryVelocity != null && details.primaryVelocity! > 200) {
+            } else if (_activeTab == 'learn' &&
+                details.primaryVelocity != null &&
+                details.primaryVelocity! > 200) {
               if (_credits <= 0) {
                 _showCreditTiers();
               } else if (_history.isNotEmpty) {
@@ -3941,340 +4056,445 @@ class _HomeScreenState extends State<HomeScreen> {
             child: KeyedSubtree(
               key: ValueKey(_activeTab),
               child: Column(children: [
-          // Top bar
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: SizedBox(
-              height: 44,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: PopupMenuButton<String>(
-                      icon: Icon(Icons.menu, color: isDark ? Colors.white : Colors.black),
-                      tooltip: localizedUiText('menu', _uiLanguage),
-                      color: isDark ? const Color(0xFF222222) : Colors.white,
-                      surfaceTintColor: isDark ? const Color(0xFF222222) : Colors.white,
-                      itemBuilder: (context) => [
-                        PopupMenuItem(
-                          value: 'about',
-                          child: Row(
-                            children: [
-                              Icon(Icons.info_outline, size: 18, color: isDark ? Colors.white : Colors.black),
-                              const SizedBox(width: 12),
-                              Text(localizedUiText('about', _uiLanguage), style: TextStyle(color: isDark ? Colors.white : Colors.black)),
-                            ],
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'language_english',
-                          child: Row(
-                            children: [
-                              Icon(Icons.language, size: 18, color: isDark ? Colors.white : Colors.black),
-                              const SizedBox(width: 12),
-                              Text(localizedUiText('english', _uiLanguage), style: TextStyle(color: isDark ? Colors.white : Colors.black)),
-                            ],
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'language_afrikaans',
-                          child: Row(
-                            children: [
-                              Icon(Icons.language, size: 18, color: isDark ? Colors.white : Colors.black),
-                              const SizedBox(width: 12),
-                              Text(localizedUiText('afrikaans', _uiLanguage), style: TextStyle(color: isDark ? Colors.white : Colors.black)),
-                            ],
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'translate',
-                          child: Row(
-                            children: [
-                              Icon(Icons.translate, size: 18, color: isDark ? Colors.white : Colors.black),
-                              const SizedBox(width: 12),
-                              Text(localizedUiText('translate', _uiLanguage), style: TextStyle(color: isDark ? Colors.white : Colors.black)),
-                            ],
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'history',
-                          child: Row(
-                            children: [
-                              Icon(Icons.history, size: 18, color: isDark ? Colors.white : Colors.black),
-                              const SizedBox(width: 12),
-                              Text(localizedUiText('history', _uiLanguage), style: TextStyle(color: isDark ? Colors.white : Colors.black)),
-                            ],
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'learn',
-                          child: Row(
-                            children: [
-                              Icon(Icons.school, size: 18, color: isDark ? Colors.white : Colors.black),
-                              const SizedBox(width: 12),
-                              Text(localizedUiText('learn', _uiLanguage), style: TextStyle(color: isDark ? Colors.white : Colors.black)),
-                            ],
-                          ),
-                        ),
-                      ],
-                      onSelected: (value) {
-                        if (value == 'about') {
-                          showDialog(
-                            context: context,
-                            builder: (ctx) => AlertDialog(
-                              title: Text(localizedUiText('about', _uiLanguage)),
-                              content: Text(
-                                _uiLanguage == AppUiLanguage.afrikaans
-                                    ? "'Let’s Talk' help jou om Suid-Afrikaanse tale onmiddellik hardop te vertaal. Praat net stadig en duidelik terwyl jy die 'Praat'-knoppie druk, deel dan dadelik vertalings met vriende, stoor frases onder Jou Leer-oefening, en bestuur maklik jou vertaalgeskiedenis."
-                                    : "'Let’s Talk' helps you instantly translate South African languages out loud. Just speak slowly and clearly while pressing the 'Talk' button, then instantly share translations with friends, save phrases to your Learn tab for practice, and easily manage your translation history."
-                              ),
-                              actions: [
-                                Builder(
-                                  builder: (_) {
-                                    return TextButton(
-                                      style: TextButton.styleFrom(
-                                        backgroundColor: const Color(0xFF000000),
-                                        foregroundColor: Colors.white,
-                                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                                      ),
-                                      onPressed: () => Navigator.of(ctx).pop(),
-                                      child: Text(localizedUiText('close', _uiLanguage)),
-                                    );
-                                  },
-                                ),
-                              ],
-                            ),
-                          );
-                        } else if (value == 'language_english') {
-                          setState(() => _uiLanguage = AppUiLanguage.english);
-                        } else if (value == 'language_afrikaans') {
-                          setState(() => _uiLanguage = AppUiLanguage.afrikaans);
-                        } else if (value == 'translate') {
-                          setState(() => _activeTab = 'translate');
-                        } else if (value == 'history') {
-                          _openCreditsIfNeededForTab('history');
-                        } else if (value == 'learn') {
-                          _openCreditsIfNeededForTab('learn');
-                        } else if (value == 'theme') {
-                          widget.onToggleTheme();
-                        }
-                      },
-                    ),
-                  ),
-                  Center(
-                    child: _buildHeaderWordmark(isDark),
-                  ),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
+                // Top bar
+                Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  child: SizedBox(
+                    height: 44,
+                    child: Stack(
+                      alignment: Alignment.center,
                       children: [
-                        if (_showCreditsInHeader)
-                          GestureDetector(
-                            onTap: _showCreditTiers,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: isDark ? Colors.white12 : const Color(0xFFF1F3F5),
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                              child: Text(
-                                '$_credits',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                  color: isDark ? Colors.white : const Color(0xFF000000),
-                                ),
-                              ),
-                            ),
-                          ),
-                        const SizedBox(width: 8),
-                        PopupMenuButton<int>(
-                          tooltip: 'User menu',
-                          icon: Stack(
-                            clipBehavior: Clip.none,
-                            children: [
-                              _buildProfileAvatar(radius: 14, isDark: isDark),
-                              if (!_isAnonymousUser())
-                                const Positioned(
-                                  right: -1,
-                                  bottom: -1,
-                                  child: CircleAvatar(
-                                    radius: 5,
-                                    backgroundColor: Color(0xFF17C964),
-                                  ),
-                                ),
-                            ],
-                          ),
-                      color: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-                      surfaceTintColor:
-                          isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-                      offset: const Offset(0, 40),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      itemBuilder: (context) {
-                        final isDark = Theme.of(context).brightness == Brightness.dark;
-                        return [
-                          PopupMenuItem(
-                            value: 1,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: PopupMenuButton<String>(
+                            icon: Icon(Icons.menu,
+                                color: isDark ? Colors.white : Colors.black),
+                            tooltip: localizedUiText('menu', _uiLanguage),
+                            color:
+                                isDark ? const Color(0xFF222222) : Colors.white,
+                            surfaceTintColor:
+                                isDark ? const Color(0xFF222222) : Colors.white,
+                            itemBuilder: (context) => [
+                              PopupMenuItem(
+                                value: 'about',
+                                child: Row(
                                   children: [
-                                    _buildProfileAvatar(radius: 20, isDark: isDark),
+                                    Icon(Icons.info_outline,
+                                        size: 18,
+                                        color: isDark
+                                            ? Colors.white
+                                            : Colors.black),
                                     const SizedBox(width: 12),
-                                    Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text('User', style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.white : const Color(0xFF000000))),
-                                        Text(_displayUserIdentity(), style: TextStyle(fontSize: 12, color: isDark ? Colors.grey : Colors.black54)),
-                                        Text(_authStatusLabel(), style: TextStyle(fontSize: 11, color: isDark ? Colors.white70 : Colors.black54)),
-                                      ],
-                                    ),
+                                    Text(localizedUiText('about', _uiLanguage),
+                                        style: TextStyle(
+                                            color: isDark
+                                                ? Colors.white
+                                                : Colors.black)),
                                   ],
                                 ),
-                                const Divider(height: 18),
-                                if (_isAnonymousUser())
-                                  ListTile(
-                                    leading: Icon(Icons.login, color: isDark ? Colors.white : Colors.black),
-                                    title: Text('Sign In', style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000))),
-                                    subtitle: Text(
-                                      'Google or email for payments and organisation ownership',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: isDark ? Colors.white70 : Colors.black54,
+                              ),
+                              PopupMenuItem(
+                                value: 'translate',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.translate,
+                                        size: 18,
+                                        color: isDark
+                                            ? Colors.white
+                                            : Colors.black),
+                                    const SizedBox(width: 12),
+                                    Text(
+                                        localizedUiText(
+                                            'translate', _uiLanguage),
+                                        style: TextStyle(
+                                            color: isDark
+                                                ? Colors.white
+                                                : Colors.black)),
+                                  ],
+                                ),
+                              ),
+                              PopupMenuItem(
+                                value: 'history',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.history,
+                                        size: 18,
+                                        color: isDark
+                                            ? Colors.white
+                                            : Colors.black),
+                                    const SizedBox(width: 12),
+                                    Text(
+                                        localizedUiText('history', _uiLanguage),
+                                        style: TextStyle(
+                                            color: isDark
+                                                ? Colors.white
+                                                : Colors.black)),
+                                  ],
+                                ),
+                              ),
+                              PopupMenuItem(
+                                value: 'learn',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.school,
+                                        size: 18,
+                                        color: isDark
+                                            ? Colors.white
+                                            : Colors.black),
+                                    const SizedBox(width: 12),
+                                    Text(localizedUiText('learn', _uiLanguage),
+                                        style: TextStyle(
+                                            color: isDark
+                                                ? Colors.white
+                                                : Colors.black)),
+                                  ],
+                                ),
+                              ),
+                            ],
+                            onSelected: (value) {
+                              if (value == 'about') {
+                                showDialog(
+                                  context: context,
+                                  builder: (ctx) => AlertDialog(
+                                    title: Text(
+                                        localizedUiText('about', _uiLanguage)),
+                                    content: Text(_uiLanguage ==
+                                            AppUiLanguage.afrikaans
+                                        ? "'Let’s Talk' help jou om Suid-Afrikaanse tale onmiddellik hardop te vertaal. Praat net stadig en duidelik terwyl jy die 'Praat'-knoppie druk, deel dan dadelik vertalings met vriende, stoor frases onder Jou Leer-oefening, en bestuur maklik jou vertaalgeskiedenis."
+                                        : "'Let’s Talk' helps you instantly translate South African languages out loud. Just speak slowly and clearly while pressing the 'Talk' button, then instantly share translations with friends, save phrases to your Learn tab for practice, and easily manage your translation history."),
+                                    actions: [
+                                      Builder(
+                                        builder: (_) {
+                                          return TextButton(
+                                            style: TextButton.styleFrom(
+                                              backgroundColor:
+                                                  const Color(0xFF000000),
+                                              foregroundColor: Colors.white,
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 16,
+                                                      vertical: 10),
+                                            ),
+                                            onPressed: () =>
+                                                Navigator.of(ctx).pop(),
+                                            child: Text(localizedUiText(
+                                                'close', _uiLanguage)),
+                                          );
+                                        },
                                       ),
-                                    ),
-                                    onTap: () {
-                                      Navigator.pop(context);
-                                      _showAuthOptionsDialog();
-                                    },
+                                    ],
                                   ),
-                                if (!_isAnonymousUser())
-                                  ListTile(
-                                    leading: Icon(Icons.logout, color: isDark ? Colors.white : Colors.black),
-                                    title: Text('Sign Out', style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000))),
-                                    subtitle: Text(
-                                      'Return to a guest session on this device',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: isDark ? Colors.white70 : Colors.black54,
-                                      ),
-                                    ),
-                                    onTap: () {
-                                      Navigator.pop(context);
-                                      _signOutToGuest();
-                                    },
-                                  ),
-                                ListTile(
-                                  leading: Icon(Icons.qr_code_2, color: isDark ? Colors.white : Colors.black),
-                                  title: Text('Share App', style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000))),
-                                  onTap: () {
-                                    Navigator.pop(context);
-                                    _showQrShare();
-                                  },
-                                ),
-                                ListTile(
-                                  leading: Icon(Icons.account_balance_wallet, color: isDark ? Colors.white : Colors.black),
-                                  title: Text('Credits', style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000))),
-                                  onTap: () {
-                                    Navigator.pop(context);
-                                    _showCreditTiers();
-                                  },
-                                ),
-                                ListTile(
-                                  leading: Icon(Icons.info_outline, color: isDark ? Colors.white : Colors.black),
-                                  title: Text('Disclaimer', style: TextStyle(color: isDark ? Colors.white : const Color(0xFF000000))),
-                                  onTap: () {
-                                    Navigator.pop(context);
-                                    _showDisclaimerInfo();
-                                  },
-                                ),
-                                // Add more user actions here if needed
-                              ],
-                            ),
+                                );
+                              } else if (value == 'translate') {
+                                setState(() => _activeTab = 'translate');
+                              } else if (value == 'history') {
+                                _openCreditsIfNeededForTab('history');
+                              } else if (value == 'learn') {
+                                _openCreditsIfNeededForTab('learn');
+                              } else if (value == 'theme') {
+                                widget.onToggleTheme();
+                              }
+                            },
                           ),
-                        ];
-                      },
-                    ),
+                        ),
+                        Center(
+                          child: _buildHeaderWordmark(isDark),
+                        ),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (_showCreditsInHeader)
+                                GestureDetector(
+                                  onTap: _showCreditTiers,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: isDark
+                                          ? Colors.white12
+                                          : const Color(0xFFF1F3F5),
+                                      borderRadius: BorderRadius.circular(999),
+                                    ),
+                                    child: Text(
+                                      '$_credits',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                        color: isDark
+                                            ? Colors.white
+                                            : const Color(0xFF000000),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              const SizedBox(width: 8),
+                              PopupMenuButton<int>(
+                                tooltip: 'User menu',
+                                icon: Stack(
+                                  clipBehavior: Clip.none,
+                                  children: [
+                                    _buildProfileAvatar(
+                                        radius: 14, isDark: isDark),
+                                    if (!_isAnonymousUser())
+                                      const Positioned(
+                                        right: -1,
+                                        bottom: -1,
+                                        child: CircleAvatar(
+                                          radius: 5,
+                                          backgroundColor: Color(0xFF17C964),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                                color: isDark
+                                    ? const Color(0xFF000000)
+                                    : const Color(0xFFFFFFFF),
+                                surfaceTintColor: isDark
+                                    ? const Color(0xFF000000)
+                                    : const Color(0xFFFFFFFF),
+                                offset: const Offset(0, 40),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                                itemBuilder: (context) {
+                                  final isDark = Theme.of(context).brightness ==
+                                      Brightness.dark;
+                                  return [
+                                    PopupMenuItem(
+                                      value: 1,
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              _buildProfileAvatar(
+                                                  radius: 20, isDark: isDark),
+                                              const SizedBox(width: 12),
+                                              Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text('User',
+                                                      style: TextStyle(
+                                                          fontWeight:
+                                                              FontWeight.bold,
+                                                          color: isDark
+                                                              ? Colors.white
+                                                              : const Color(
+                                                                  0xFF000000))),
+                                                  Text(_displayUserIdentity(),
+                                                      style: TextStyle(
+                                                          fontSize: 12,
+                                                          color: isDark
+                                                              ? Colors.grey
+                                                              : Colors
+                                                                  .black54)),
+                                                  Text(_authStatusLabel(),
+                                                      style: TextStyle(
+                                                          fontSize: 11,
+                                                          color: isDark
+                                                              ? Colors.white70
+                                                              : Colors
+                                                                  .black54)),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                          const Divider(height: 18),
+                                          if (_isAnonymousUser())
+                                            ListTile(
+                                              leading: Icon(Icons.login,
+                                                  color: isDark
+                                                      ? Colors.white
+                                                      : Colors.black),
+                                              title: Text('Sign In',
+                                                  style: TextStyle(
+                                                      color: isDark
+                                                          ? Colors.white
+                                                          : const Color(
+                                                              0xFF000000))),
+                                              subtitle: Text(
+                                                'Google or email for payments and organisation ownership',
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  color: isDark
+                                                      ? Colors.white70
+                                                      : Colors.black54,
+                                                ),
+                                              ),
+                                              onTap: () {
+                                                Navigator.pop(context);
+                                                _showAuthOptionsDialog();
+                                              },
+                                            ),
+                                          if (!_isAnonymousUser())
+                                            ListTile(
+                                              leading: Icon(Icons.logout,
+                                                  color: isDark
+                                                      ? Colors.white
+                                                      : Colors.black),
+                                              title: Text('Sign Out',
+                                                  style: TextStyle(
+                                                      color: isDark
+                                                          ? Colors.white
+                                                          : const Color(
+                                                              0xFF000000))),
+                                              subtitle: Text(
+                                                'Return to a guest session on this device',
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  color: isDark
+                                                      ? Colors.white70
+                                                      : Colors.black54,
+                                                ),
+                                              ),
+                                              onTap: () {
+                                                Navigator.pop(context);
+                                                _signOutToGuest();
+                                              },
+                                            ),
+                                          ListTile(
+                                            leading: Icon(Icons.qr_code_2,
+                                                color: isDark
+                                                    ? Colors.white
+                                                    : Colors.black),
+                                            title: Text('Share App',
+                                                style: TextStyle(
+                                                    color: isDark
+                                                        ? Colors.white
+                                                        : const Color(
+                                                            0xFF000000))),
+                                            onTap: () {
+                                              Navigator.pop(context);
+                                              _showQrShare();
+                                            },
+                                          ),
+                                          ListTile(
+                                            leading: Icon(
+                                                Icons.account_balance_wallet,
+                                                color: isDark
+                                                    ? Colors.white
+                                                    : Colors.black),
+                                            title: Text('Credits',
+                                                style: TextStyle(
+                                                    color: isDark
+                                                        ? Colors.white
+                                                        : const Color(
+                                                            0xFF000000))),
+                                            onTap: () {
+                                              Navigator.pop(context);
+                                              _showCreditTiers();
+                                            },
+                                          ),
+                                          ListTile(
+                                            leading: Icon(Icons.info_outline,
+                                                color: isDark
+                                                    ? Colors.white
+                                                    : Colors.black),
+                                            title: Text('Disclaimer',
+                                                style: TextStyle(
+                                                    color: isDark
+                                                        ? Colors.white
+                                                        : const Color(
+                                                            0xFF000000))),
+                                            onTap: () {
+                                              Navigator.pop(context);
+                                              _showDisclaimerInfo();
+                                            },
+                                          ),
+                                          // Add more user actions here if needed
+                                        ],
+                                      ),
+                                    ),
+                                  ];
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
                   ),
-                ],
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: GestureDetector(
-                    onTap: () => setState(() => _activeTab = 'translate'),
-                    child: Container(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        'Translate',
-                        style: TextStyle(
-                          fontSize: _activeTab == 'translate' ? 14 : 11,
-                          fontWeight: FontWeight.w700,
-                          color: _activeTab == 'translate'
-                              ? (isDark ? Colors.white : Colors.black)
-                              : (isDark ? Colors.white54 : Colors.black54),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: () => setState(() => _activeTab = 'translate'),
+                          child: Container(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              'Translate',
+                              style: TextStyle(
+                                fontSize: _activeTab == 'translate' ? 14 : 11,
+                                fontWeight: FontWeight.w700,
+                                color: _activeTab == 'translate'
+                                    ? (isDark ? Colors.white : Colors.black)
+                                    : (isDark
+                                        ? Colors.white54
+                                        : Colors.black54),
+                              ),
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: GestureDetector(
-                    onTap: () => _openCreditsIfNeededForTab('history'),
-                    child: Container(
-                      alignment: Alignment.center,
-                      child: Text(
-                        'History',
-                        style: TextStyle(
-                          fontSize: _activeTab == 'history' ? 14 : 11,
-                          fontWeight: FontWeight.w700,
-                          color: _activeTab == 'history'
-                              ? (isDark ? Colors.white : Colors.black)
-                              : (isDark ? Colors.white54 : Colors.black54),
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: () => _openCreditsIfNeededForTab('history'),
+                          child: Container(
+                            alignment: Alignment.center,
+                            child: Text(
+                              'History',
+                              style: TextStyle(
+                                fontSize: _activeTab == 'history' ? 14 : 11,
+                                fontWeight: FontWeight.w700,
+                                color: _activeTab == 'history'
+                                    ? (isDark ? Colors.white : Colors.black)
+                                    : (isDark
+                                        ? Colors.white54
+                                        : Colors.black54),
+                              ),
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: GestureDetector(
-                    onTap: () => _openCreditsIfNeededForTab('learn'),
-                    child: Container(
-                      alignment: Alignment.centerRight,
-                      child: Text(
-                        'Learn',
-                        style: TextStyle(
-                          fontSize: _activeTab == 'learn' ? 14 : 11,
-                          fontWeight: FontWeight.w700,
-                          color: _activeTab == 'learn'
-                              ? (isDark ? Colors.white : Colors.black)
-                              : (isDark ? Colors.white54 : Colors.black54),
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: () => _openCreditsIfNeededForTab('learn'),
+                          child: Container(
+                            alignment: Alignment.centerRight,
+                            child: Text(
+                              'Learn',
+                              style: TextStyle(
+                                fontSize: _activeTab == 'learn' ? 14 : 11,
+                                fontWeight: FontWeight.w700,
+                                color: _activeTab == 'learn'
+                                    ? (isDark ? Colors.white : Colors.black)
+                                    : (isDark
+                                        ? Colors.white54
+                                        : Colors.black54),
+                              ),
+                            ),
+                          ),
                         ),
                       ),
-                    ),
+                    ],
                   ),
                 ),
-              ],
-            ),
-          ),
-          // Content
-          Expanded(
-            child: _activeTab == 'translate'
-                ? _buildTranslateTab(isDark)
-                : (_activeTab == 'history'
-                    ? _buildHistoryTab(isDark)
-                    : _buildLearnTab(isDark)),
-          ),
-        ]),
+                // Content
+                Expanded(
+                  child: _activeTab == 'translate'
+                      ? _buildTranslateTab(isDark)
+                      : (_activeTab == 'history'
+                          ? _buildHistoryTab(isDark)
+                          : _buildLearnTab(isDark)),
+                ),
+              ]),
             ),
           ),
         ),
@@ -4285,10 +4505,12 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildLearnTab(bool isDark) {
     final learnPhraseKey = _selectedLearnLang;
     final userPhrases = _userLearnPhrasesByLang[learnPhraseKey] ?? [];
-    final defaultPhrases = _learnPhrasesByLang[learnPhraseKey] ?? _learnPhrasesByLang['English']!;
+    final defaultPhrases =
+        _learnPhrasesByLang[learnPhraseKey] ?? _learnPhrasesByLang['English']!;
     final phrases = [
       ...userPhrases,
-      ...defaultPhrases.where((def) => !userPhrases.any((u) => u['text'] == def['text'])),
+      ...defaultPhrases
+          .where((def) => !userPhrases.any((u) => u['text'] == def['text'])),
     ]; // Avoid duplicate default if user added same
     return Stack(
       children: [
@@ -4297,115 +4519,123 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-          Center(
-            child: Text(
-              'Learn Everyday Phrases',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: isDark ? Colors.white : const Color(0xFF000000),
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          _langDrop(
-            _selectedLearnLang,
-            _outputLangs,
-            (v) => setState(() => _selectedLearnLang = v!),
-            isDark,
-          ),
-          const SizedBox(height: 14),
-          ...phrases.asMap().entries.map((entry) {
-            final idx = entry.key;
-            final phrase = entry.value;
-            final isUserPhrase = idx < userPhrases.length;
-            return Container(
-              margin: const EdgeInsets.only(bottom: 10),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: isDark ? Colors.white12 : const Color(0xFFE3F0FF), // soft blue pastel
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: isDark ? Colors.white24 : Colors.black26,
+              Center(
+                child: Text(
+                  'Learn Everyday Phrases',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: isDark ? Colors.white : const Color(0xFF000000),
+                  ),
                 ),
               ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          phrase['text'] ?? '',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w900,
-                            color: isDark ? Colors.white : const Color(0xFF000000),
-                          ),
-                        ),
-                        if ((phrase['phonetic'] ?? '').isNotEmpty) ...[
-                          const SizedBox(height: 2),
-                          Text(
-                            phrase['phonetic']!,
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontStyle: FontStyle.italic,
-                              color: isDark ? Colors.white70 : const Color(0xFF000000),
-                            ),
-                          ),
-                        ],
-                        const SizedBox(height: 3),
-                        Text(
-                          phrase['en'] ?? '',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: isDark
-                                ? Colors.white60
-                                : Colors.grey.shade700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.volume_up),
-                    tooltip: 'Listen',
-                    onPressed: () => _playLearnPhraseAudio(
-                      language: _selectedLearnLang,
-                      text: phrase['text'] ?? '',
-                      isUserPhrase: isUserPhrase,
-                    ),
-                  ),
-                  if (isUserPhrase)
-                    IconButton(
-                      icon: Icon(Icons.close, color: isDark ? Colors.white70 : Colors.black54),
-                      tooltip: 'Delete',
-                      onPressed: () => _deleteUserPhrase(idx),
-                    ),
-                ],
+              const SizedBox(height: 10),
+              _langDrop(
+                _selectedLearnLang,
+                _outputLangs,
+                (v) => setState(() => _selectedLearnLang = v!),
+                isDark,
               ),
-            );
-          }),
-        ],
-      ),
-    ),
-    // Bottom left home icon
-    Positioned(
-      bottom: 18,
-      right: 18,
-      child: FloatingActionButton(
-        heroTag: 'learn_home',
-        mini: true,
-        backgroundColor: isDark ? Colors.white12 : Colors.white,
-        foregroundColor: isDark ? Colors.white : Colors.black,
-        elevation: 2,
-        onPressed: () => setState(() => _activeTab = 'translate'),
-        tooltip: 'Home',
-        child: const Icon(Icons.home),
-      ),
-    ),
-  ],
-);
+              const SizedBox(height: 14),
+              ...phrases.asMap().entries.map((entry) {
+                final idx = entry.key;
+                final phrase = entry.value;
+                final isUserPhrase = idx < userPhrases.length;
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? Colors.white12
+                        : const Color(0xFFE3F0FF), // soft blue pastel
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: isDark ? Colors.white24 : Colors.black26,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              phrase['text'] ?? '',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w900,
+                                color: isDark
+                                    ? Colors.white
+                                    : const Color(0xFF000000),
+                              ),
+                            ),
+                            if ((phrase['phonetic'] ?? '').isNotEmpty) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                phrase['phonetic']!,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontStyle: FontStyle.italic,
+                                  color: isDark
+                                      ? Colors.white70
+                                      : const Color(0xFF000000),
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 3),
+                            Text(
+                              phrase['en'] ?? '',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isDark
+                                    ? Colors.white60
+                                    : Colors.grey.shade700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.volume_up),
+                        tooltip: 'Listen',
+                        onPressed: () => _playLearnPhraseAudio(
+                          language: _selectedLearnLang,
+                          text: phrase['text'] ?? '',
+                          isUserPhrase: isUserPhrase,
+                        ),
+                      ),
+                      if (isUserPhrase)
+                        IconButton(
+                          icon: Icon(Icons.close,
+                              color: isDark ? Colors.white70 : Colors.black54),
+                          tooltip: 'Delete',
+                          onPressed: () => _deleteUserPhrase(idx),
+                        ),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+        // Bottom left home icon
+        Positioned(
+          bottom: 18,
+          right: 18,
+          child: FloatingActionButton(
+            heroTag: 'learn_home',
+            mini: true,
+            backgroundColor: isDark ? Colors.white12 : Colors.white,
+            foregroundColor: isDark ? Colors.white : Colors.black,
+            elevation: 2,
+            onPressed: () => setState(() => _activeTab = 'translate'),
+            tooltip: 'Home',
+            child: const Icon(Icons.home),
+          ),
+        ),
+      ],
+    );
   }
 
   Widget _buildTranslateTab(bool isDark) {
@@ -4432,9 +4662,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       margin: const EdgeInsets.only(bottom: 12),
                       padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                       decoration: BoxDecoration(
-                        color: isDark ? Colors.white12 : const Color(0xFFE0F8D8),
+                        color:
+                            isDark ? Colors.white12 : const Color(0xFFE0F8D8),
                         borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: isDark ? Colors.white24 : Colors.black26),
+                        border: Border.all(
+                            color: isDark ? Colors.white24 : Colors.black26),
                       ),
                       child: Stack(
                         children: [
@@ -4442,7 +4674,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
                                 children: [
                                   Expanded(
                                     child: _langDrop(
@@ -4467,13 +4700,15 @@ class _HomeScreenState extends State<HomeScreen> {
                               const SizedBox(height: 6),
                               Expanded(
                                 child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
                                   children: [
                                     // Text area (with padding to avoid wall)
                                     Expanded(
                                       child: Stack(
                                         children: [
-                                          if (_spokenText.isNotEmpty && _tttController.text.isEmpty)
+                                          if (_spokenText.isNotEmpty &&
+                                              _tttController.text.isEmpty)
                                             Align(
                                               alignment: Alignment.topLeft,
                                               child: Text(
@@ -4481,7 +4716,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 style: TextStyle(
                                                   fontFamily: 'monospace',
                                                   fontSize: 14,
-                                                  color: isDark ? Colors.white : Colors.black,
+                                                  color: isDark
+                                                      ? Colors.white
+                                                      : Colors.black,
                                                 ),
                                               ),
                                             ),
@@ -4493,19 +4730,29 @@ class _HomeScreenState extends State<HomeScreen> {
                                               autofocus: false,
                                               enableSuggestions: true,
                                               autocorrect: true,
-                                              keyboardType: TextInputType.multiline,
-                                              textCapitalization: TextCapitalization.sentences,
-                                              cursorColor: isDark ? Colors.white : Colors.black,
+                                              keyboardType:
+                                                  TextInputType.multiline,
+                                              textCapitalization:
+                                                  TextCapitalization.sentences,
+                                              cursorColor: isDark
+                                                  ? Colors.white
+                                                  : Colors.black,
                                               style: TextStyle(
                                                 fontFamily: 'monospace',
                                                 fontSize: 14,
-                                                color: isDark ? Colors.white : Colors.black,
+                                                color: isDark
+                                                    ? Colors.white
+                                                    : Colors.black,
                                               ),
                                               decoration: InputDecoration(
                                                 border: InputBorder.none,
-                                                hintText: _showHintText ? 'Tap here to type a sentence...' : '',
+                                                hintText: _showHintText
+                                                    ? 'Tap here to type a sentence...'
+                                                    : '',
                                                 hintStyle: TextStyle(
-                                                  color: isDark ? Colors.white54 : Colors.black54,
+                                                  color: isDark
+                                                      ? Colors.white54
+                                                      : Colors.black54,
                                                   fontStyle: FontStyle.italic,
                                                 ),
                                                 isDense: true,
@@ -4516,7 +4763,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                               readOnly: false,
                                               onChanged: (_) => setState(() {}),
                                               onSubmitted: (_) => _submitTTT(),
-                                              textInputAction: TextInputAction.send,
+                                              textInputAction:
+                                                  TextInputAction.send,
                                             ),
                                           ),
                                         ],
@@ -4541,7 +4789,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               tooltip: 'Replay Input',
                               color: isDark ? Colors.white : Colors.black,
                               onPressed: _spokenText.isNotEmpty
-                                  ? () => _speakText(_spokenText, _selectedInputLang)
+                                  ? () => _speakText(
+                                      _spokenText, _selectedInputLang)
                                   : null,
                             ),
                           ),
@@ -4587,7 +4836,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     decoration: BoxDecoration(
                       color: isDark ? Colors.white12 : const Color(0xFFD9C7A3),
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: isDark ? Colors.white24 : Colors.black26),
+                      border: Border.all(
+                          color: isDark ? Colors.white24 : Colors.black26),
                     ),
                     child: Stack(
                       children: [
@@ -4627,11 +4877,15 @@ class _HomeScreenState extends State<HomeScreen> {
                                     child: Align(
                                       alignment: Alignment.topLeft,
                                       child: Text(
-                                        _translatedText.isNotEmpty ? _translatedText : '',
+                                        _translatedText.isNotEmpty
+                                            ? _translatedText
+                                            : '',
                                         style: TextStyle(
                                           fontFamily: 'monospace',
                                           fontSize: 14,
-                                          color: isDark ? Colors.white : Colors.black,
+                                          color: isDark
+                                              ? Colors.white
+                                              : Colors.black,
                                         ),
                                         maxLines: 3,
                                         overflow: TextOverflow.ellipsis,
@@ -4657,7 +4911,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             tooltip: 'Replay Output',
                             color: isDark ? Colors.white : Colors.black,
                             onPressed: _translatedText.isNotEmpty
-                                ? () => _speakText(_translatedText, _selectedOutputLang)
+                                ? () => _speakText(
+                                    _translatedText, _selectedOutputLang)
                                 : null,
                           ),
                         ),
@@ -4672,15 +4927,23 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Center(
                         child: ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: isDark ? Colors.transparent : const Color(0xFFE3F0FF),
-                            foregroundColor: isDark ? Colors.white : Colors.black,
-                            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                            backgroundColor: isDark
+                                ? Colors.transparent
+                                : const Color(0xFFE3F0FF),
+                            foregroundColor:
+                                isDark ? Colors.white : Colors.black,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 9, vertical: 5),
                             minimumSize: const Size(0, 24),
-                            shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide.none),
+                            shape: const RoundedRectangleBorder(
+                                borderRadius: BorderRadius.zero,
+                                side: BorderSide.none),
                             elevation: 0,
                           ),
                           icon: const Icon(Icons.school, size: 10),
-                          label: const Text('Send to Learn', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
+                          label: const Text('Send to Learn',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.bold, fontSize: 13.5)),
                           onPressed: () async {
                             if (_credits <= 0) {
                               _showCreditTiers();
@@ -4688,7 +4951,9 @@ class _HomeScreenState extends State<HomeScreen> {
                             }
                             final sent = await _sendToLearnMultipleLangs(
                               translated: _translatedText,
-                              original: _spokenText.isNotEmpty ? _spokenText : _tttController.text,
+                              original: _spokenText.isNotEmpty
+                                  ? _spokenText
+                                  : _tttController.text,
                               phonetic: _phoneticText,
                               langs: [_selectedOutputLang],
                             );
@@ -4772,8 +5037,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                 child: CircularProgressIndicator(
                                   value: _isTalking ? _talkHoldProgress : 0.0,
                                   strokeWidth: 4,
-                                  backgroundColor: Colors.white.withValues(alpha: 0.22),
-                                  valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                                  backgroundColor:
+                                      Colors.white.withValues(alpha: 0.22),
+                                  valueColor:
+                                      const AlwaysStoppedAnimation<Color>(
+                                          Colors.white),
                                 ),
                               ),
                               AnimatedContainer(
@@ -4785,7 +5053,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                   color: _isTalking ? Colors.red : Colors.green,
                                   boxShadow: [
                                     BoxShadow(
-                                      color: (_isTalking ? Colors.red : Colors.green)
+                                      color: (_isTalking
+                                              ? Colors.red
+                                              : Colors.green)
                                           .withValues(alpha: 0.4),
                                       blurRadius: _isTalking ? 20 : 10,
                                       spreadRadius: _isTalking ? 4 : 2,
@@ -4795,14 +5065,19 @@ class _HomeScreenState extends State<HomeScreen> {
                                 child: Column(
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
-                                      Icon(_isTalking ? Icons.mic : Icons.mic_none,
-                                          color: Colors.white, size: 40),
+                                      Icon(
+                                          _isTalking
+                                              ? Icons.mic
+                                              : Icons.mic_none,
+                                          color: Colors.white,
+                                          size: 40),
                                       const SizedBox(height: 4),
                                       if (_showTalkHintText)
                                         Text(
                                           _isTalking
                                               ? 'LISTENING'
-                                              : localizedUiText('hold_to_talk', _uiLanguage),
+                                              : localizedUiText(
+                                                  'hold_to_talk', _uiLanguage),
                                           style: const TextStyle(
                                               color: Colors.white,
                                               fontSize: 10,
@@ -4816,7 +5091,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         if (isDark)
                           IconButton(
-                            onPressed: _spokenText.isNotEmpty ? _resetOutput : null,
+                            onPressed:
+                                _spokenText.isNotEmpty ? _resetOutput : null,
                             icon: Icon(
                               Icons.refresh,
                               size: 28,
@@ -4839,13 +5115,15 @@ class _HomeScreenState extends State<HomeScreen> {
                               ],
                             ),
                             child: IconButton(
-                              onPressed: _spokenText.isNotEmpty ? _resetOutput : null,
+                              onPressed:
+                                  _spokenText.isNotEmpty ? _resetOutput : null,
                               icon: const Icon(
                                 Icons.refresh,
                                 size: 28,
                                 color: Colors.black,
                               ),
-                              tooltip: localizedUiText('new_translation', _uiLanguage),
+                              tooltip: localizedUiText(
+                                  'new_translation', _uiLanguage),
                               padding: const EdgeInsets.all(12),
                             ),
                           ),
@@ -4864,30 +5142,28 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _langDrop(String value, List<String> langs,
       ValueChanged<String?> onChanged, bool isDark) {
     // Detect if this is the main output dropdown by checking langs and value
-    final isOutputDropdown =
-      langs.length == 12 &&
-      (langs.contains('isiZulu') && langs.contains('Afrikaans')) &&
-      value == _selectedOutputLang;
-    final isInputDropdown =
-      langs.length == 11 &&
-      (langs.contains('isiZulu') && langs.contains('Afrikaans')) &&
-      value == _selectedInputLang;
+    final isOutputDropdown = langs.length == 12 &&
+        (langs.contains('isiZulu') && langs.contains('Afrikaans')) &&
+        value == _selectedOutputLang;
+    final isInputDropdown = langs.length == 11 &&
+        (langs.contains('isiZulu') && langs.contains('Afrikaans')) &&
+        value == _selectedInputLang;
     final dropdownColor = isDark
-      ? const Color(0xFF000000)
-      : isOutputDropdown
-        ? const Color(0xFFD9C7A3)
-        : Colors.white;
+        ? const Color(0xFF000000)
+        : isOutputDropdown
+            ? const Color(0xFFD9C7A3)
+            : Colors.white;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10),
         color: isDark
-          ? Colors.transparent
-          : isOutputDropdown
-            ? const Color(0xFFD9C7A3)
-            : isInputDropdown
-              ? const Color(0xFFE0F8D8)
-              : Colors.transparent,
+            ? Colors.transparent
+            : isOutputDropdown
+                ? const Color(0xFFD9C7A3)
+                : isInputDropdown
+                    ? const Color(0xFFE0F8D8)
+                    : Colors.transparent,
       ),
       child: Theme(
         data: Theme.of(context).copyWith(
@@ -4908,7 +5184,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     value: e,
                     child: Text(
                       e,
-                      style: const TextStyle(fontFamily: 'monospace', fontSize: 16),
+                      style: const TextStyle(
+                          fontFamily: 'monospace', fontSize: 16),
                     )))
                 .toList(),
             onChanged: onChanged,
@@ -5005,7 +5282,8 @@ class _HomeScreenState extends State<HomeScreen> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(Icons.history,
-                size: 64, color: isDark ? Colors.white30 : Colors.grey.shade300),
+                size: 64,
+                color: isDark ? Colors.white30 : Colors.grey.shade300),
             const SizedBox(height: 12),
             Text('No translations yet',
                 style: TextStyle(
@@ -5051,16 +5329,25 @@ class _HomeScreenState extends State<HomeScreen> {
                         final sure = await showDialog<bool>(
                           context: context,
                           builder: (ctx) {
-                            final isDark = Theme.of(ctx).brightness == Brightness.dark;
+                            final isDark =
+                                Theme.of(ctx).brightness == Brightness.dark;
                             return AlertDialog(
                               title: const Text('Are you sure?'),
                               content: const Text('Clear all History?'),
-                              backgroundColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-                              surfaceTintColor: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+                              backgroundColor: isDark
+                                  ? const Color(0xFF000000)
+                                  : const Color(0xFFFFFFFF),
+                              surfaceTintColor: isDark
+                                  ? const Color(0xFF000000)
+                                  : const Color(0xFFFFFFFF),
                               actions: [
                                 TextButton(
                                   onPressed: () => Navigator.of(ctx).pop(false),
-                                  child: Text('Cancel', style: TextStyle(color: isDark ? Colors.white : Color(0xFF000000))),
+                                  child: Text('Cancel',
+                                      style: TextStyle(
+                                          color: isDark
+                                              ? Colors.white
+                                              : Color(0xFF000000))),
                                 ),
                                 TextButton(
                                   style: TextButton.styleFrom(
@@ -5068,7 +5355,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                     foregroundColor: Colors.white,
                                   ),
                                   onPressed: () => Navigator.of(ctx).pop(true),
-                                  child: const Text('Clear', style: TextStyle(color: Colors.white)),
+                                  child: const Text('Clear',
+                                      style: TextStyle(color: Colors.white)),
                                 ),
                               ],
                             );
@@ -5094,13 +5382,16 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             Expanded(
               child: ListView.builder(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 itemCount: _history.length,
                 itemBuilder: (context, i) {
                   final item = _history[i];
                   return Card(
                     margin: const EdgeInsets.only(bottom: 12),
-                    color: isDark ? Colors.white12 : const Color(0xFFFFEBEE), // pastel red
+                    color: isDark
+                        ? Colors.white12
+                        : const Color(0xFFFFEBEE), // pastel red
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
@@ -5120,7 +5411,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                   child: Text('Phonetics: ${item.phonetic}',
                                       style: TextStyle(
                                           fontStyle: FontStyle.italic,
-                                          color: isDark ? Colors.white70 : Colors.black87)),
+                                          color: isDark
+                                              ? Colors.white70
+                                              : Colors.black87)),
                                 ),
                               Padding(
                                 padding: const EdgeInsets.only(top: 4.0),
@@ -5134,33 +5427,44 @@ class _HomeScreenState extends State<HomeScreen> {
                               IconButton(
                                 icon: const Icon(Icons.volume_up),
                                 tooltip: 'Repeat',
-                                onPressed: () => _speakText(item.translated, item.outputLang),
+                                onPressed: () => _speakText(
+                                    item.translated, item.outputLang),
                               ),
                             ],
                           ),
                         ),
                         Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                            child: ElevatedButton.icon(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: isDark ? Colors.transparent : const Color(0xFFE3F0FF),
-                                foregroundColor: isDark ? Colors.white : Colors.black,
-                                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-                                minimumSize: const Size(0, 24),
-                                shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide.none),
-                                elevation: 0,
-                              ),
-                              icon: const Icon(Icons.school, size: 10),
-                              label: const Text('Send to Learn', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
-                              onPressed: () async {
-                                if (_credits <= 0) {
-                                  _showCreditTiers();
-                                  return;
-                                }
-                                await _sendHistoryToLearn(item);
-                              },
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 4),
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: isDark
+                                  ? Colors.transparent
+                                  : const Color(0xFFE3F0FF),
+                              foregroundColor:
+                                  isDark ? Colors.white : Colors.black,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 9, vertical: 5),
+                              minimumSize: const Size(0, 24),
+                              shape: const RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.zero,
+                                  side: BorderSide.none),
+                              elevation: 0,
                             ),
+                            icon: const Icon(Icons.school, size: 10),
+                            label: const Text('Send to Learn',
+                                style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13.5)),
+                            onPressed: () async {
+                              if (_credits <= 0) {
+                                _showCreditTiers();
+                                return;
+                              }
+                              await _sendHistoryToLearn(item);
+                            },
                           ),
+                        ),
                       ],
                     ),
                   );
@@ -5187,7 +5491,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ],
     );
   }
-  
+
   @override
   void dispose() {
     _creditsSubscription?.cancel();
@@ -5203,7 +5507,8 @@ class _PaystackResponse {
   final String status;
   final String reference;
   final String message;
-  _PaystackResponse({required this.status, required this.reference, required this.message});
+  _PaystackResponse(
+      {required this.status, required this.reference, required this.message});
 }
 
 class _PaystackWebView extends StatefulWidget {

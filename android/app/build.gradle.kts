@@ -26,7 +26,6 @@ android {
     defaultConfig {
         applicationId = "com.limpopovoice.translate"
 
-        // PayFast requires API 21+.
         minSdk = maxOf(flutter.minSdkVersion, 21)
 
         targetSdk = flutter.targetSdkVersion
@@ -56,16 +55,23 @@ android {
 
     buildTypes {
         release {
-            // 🔥 USE REAL SIGNING
             signingConfig = if (hasKeystoreProperties) {
                 signingConfigs.getByName("release")
             } else {
                 signingConfigs.getByName("debug")
             }
 
-            // 🔥 KEEP THESE OFF FOR NOW
             isMinifyEnabled = false
             isShrinkResources = false
+        }
+        
+        debug {
+            // Forces debug builds to use your custom release keystore too
+            signingConfig = if (hasKeystoreProperties) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }
@@ -75,5 +81,5 @@ flutter {
 }
 
 dependencies {
-    // No manual Paystack dependency needed, handled by flutter_paystack_max
+    // Payments handled via Paystack integration
 }

@@ -36,15 +36,12 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // Shared caches (Read-only for clients; writes managed by server/Cloud Functions)
-    match /cache_translations/{cacheKey} {
-      allow read: if signedIn();
-      allow write: if false; // Cloud Functions with Admin SDK handle writes
+    // Shared caches for translations and audio.
+    match /translation_cache/{cacheKey} {
+      allow read, write: if signedIn();
     }
-    
-    match /cache_audio/{cacheKey} {
-      allow read: if signedIn();
-      allow write: if false; // Cloud Functions with Admin SDK handle writes
+    match /tts_audio_cache/{cacheKey} {
+      allow read, write: if signedIn();
     }
   }
 }
