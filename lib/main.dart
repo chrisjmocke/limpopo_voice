@@ -19,6 +19,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'translation_service.dart';
 import 'firebase_options.dart';
 
@@ -197,7 +198,7 @@ bool get isFirestoreCacheActive => _enableClientFirestoreCache && true;
 
 enum AppUiLanguage { english, afrikaans }
 
-String localizedUiText(String key, AppUiLanguage language) {
+String localizedUiText(String key, [AppUiLanguage? language]) {
   const english = <String, String>{
     'translate': 'Translate',
     'history': 'History',
@@ -236,46 +237,7 @@ String localizedUiText(String key, AppUiLanguage language) {
     'signed_out_guest': 'Signed out. Continuing as guest.',
   };
 
-  const afrikaans = <String, String>{
-    'translate': 'Vertaal',
-    'history': 'Geskiedenis',
-    'learn': 'Leer',
-    'about': 'Oor ons',
-    'close': 'Sluit',
-    'user': 'Gebruiker',
-    'sign_in': 'Meld aan',
-    'sign_out': 'Meld af',
-    'share_app': 'Deel app',
-    'credits': 'Krediete',
-    'disclaimer': 'Vrywaring',
-    'language': 'Taal',
-    'english': 'Engels',
-    'afrikaans': 'Afrikaans',
-    'menu': 'Kieslys',
-    'credit_packages': 'Kredietpakette',
-    'balance': 'Balans',
-    'translations': 'vertalings',
-    'cancel_renewals': 'Kanselleer hernuwing',
-    'choose_payment_gateway': 'Kies betaalpoort',
-    'share': 'Deel',
-    'new_translation': 'Nuwe vertaling',
-    'send_to_learn': 'Stuur na Leer',
-    'hold_to_talk': 'HOU OM TE PRAAT',
-    'continue_with_google': 'Gaan voort met Google',
-    'create_email_account': 'Skep e-posrekening',
-    'sign_in_with_email': 'Meld met e-pos aan',
-    'create_account': 'Skep',
-    'cancel': 'Kanselleer',
-    'email': 'E-pos',
-    'password': 'Wagwoord',
-    'continue': 'Gaan voort',
-    'signed_in_with_google': 'Aangemeld met Google.',
-    'signed_in_with_email': 'Aangemeld met e-pos.',
-    'signed_out_guest': 'Afgemeld. Gaan voort as gas.',
-  };
-
-  final lookup = language == AppUiLanguage.afrikaans ? afrikaans : english;
-  return lookup[key] ?? english[key] ?? key;
+  return english[key] ?? key;
 }
 
 class HistoryItem {
@@ -286,6 +248,8 @@ class HistoryItem {
       this.time,
       {this.phonetic});
 }
+
+enum HistoryEditAction { share, delete }
 
 class HomeScreen extends StatefulWidget {
   final VoidCallback onToggleTheme;
@@ -598,7 +562,7 @@ class _HomeScreenState extends State<HomeScreen> {
   };
   static const _voiceNames = {
     'Afrikaans': 'Rolanda',
-    'English': 'Aletta',
+    'English': 'Charlize',
     'isiNdebele': 'Dumisani',
     'isiXhosa': 'Lindiwe',
     'isiZulu': 'Nandi',
@@ -628,6 +592,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   bool _authBusy = false;
   final List<HistoryItem> _history = [];
+  bool _historyEditMode = false;
+  HistoryEditAction _historyEditAction = HistoryEditAction.share;
+  final Set<int> _selectedHistoryIndices = {};
   String _selectedLearnLang = 'Sepedi';
   final Map<String, String> _learnFocusTextByLang = {};
   final Map<String, String> _learnFocusMeaningByLang = {};
@@ -2162,11 +2129,47 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<String?> _getCachedTranslation(String text, String language) async {
-    return _getCachedTranslationFromFirestore(text, language);
+    final cleanText = text.toLowerCase().trim();
+    final localKey = 'text_trans_v1_${_stableCacheHash(cleanText)}_$language';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final localCached = prefs.getString(localKey);
+      if (localCached != null && localCached.isNotEmpty) {
+        debugPrint(
+            '[_getCachedTranslation] Translation cache hit (local): "$text" -> "$localCached"');
+        return localCached;
+      }
+    } catch (e) {
+      debugPrint(
+          'Failed to read local SharedPreferences translation cache: $e');
+    }
+
+    final firestoreCached =
+        await _getCachedTranslationFromFirestore(text, language);
+    if (firestoreCached != null && firestoreCached.isNotEmpty) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(localKey, firestoreCached);
+      } catch (_) {}
+      return firestoreCached;
+    }
+    return null;
   }
 
   Future<void> _saveCacheTranslation(
       String text, String language, String translation) async {
+    final cleanText = text.toLowerCase().trim();
+    final localKey = 'text_trans_v1_${_stableCacheHash(cleanText)}_$language';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(localKey, translation);
+      debugPrint(
+          '[_saveCacheTranslation] Saved translation to local cache: "$text" -> "$translation"');
+    } catch (e) {
+      debugPrint(
+          'Failed to write local SharedPreferences translation cache: $e');
+    }
+
     await _saveTranslationToFirestore(text, language, translation);
   }
 
@@ -3276,77 +3279,25 @@ class _HomeScreenState extends State<HomeScreen> {
     return 'Speech service unavailable. Check connection & try again.';
   }
 
-  void _showQrShare() {
-    const appUrl = 'https://dummy.link/letstalk';
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    showDialog(
-      context: context,
-      builder: (_) => Dialog(
-        backgroundColor:
-            isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-        surfaceTintColor:
-            isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Share App',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 20),
-              Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                        color: Colors.black26,
-                        blurRadius: 8,
-                        offset: const Offset(0, 2))
-                  ],
-                ),
-                padding: const EdgeInsets.all(12),
-                child: QrImageView(
-                  data: appUrl,
-                  version: QrVersions.auto,
-                  size: 200,
-                  backgroundColor: Colors.white,
-                  eyeStyle: const QrEyeStyle(
-                    eyeShape: QrEyeShape.square,
-                    color: Color(0xFF000000),
-                  ),
-                  dataModuleStyle: const QrDataModuleStyle(
-                    dataModuleShape: QrDataModuleShape.square,
-                    color: Color(0xFF000000),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text('Let\'s Talk',
-                  style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color:
-                          isDark ? Colors.white70 : const Color(0xFF000000))),
-              const SizedBox(height: 16),
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                style: TextButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  backgroundColor: Colors.black,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                ),
-                child:
-                    const Text('Close', style: TextStyle(color: Colors.white)),
-              ),
-            ],
+  void _shareAppUrl() async {
+    try {
+      final url = Uri.parse('https://www.talksa.co.za./');
+      if (await canLaunchUrl(url)) {
+        await launchUrl(url, mode: LaunchMode.externalApplication);
+      } else {
+        await SharePlus.instance.share(
+          ShareParams(
+            files: const [],
+            subject: 'Let\'s Talk',
+            text:
+                'Let\'s Talk | Voice-First Translation for South African Languages: https://www.talksa.co.za./',
           ),
-        ),
-      ),
-    );
+        );
+      }
+    } catch (e) {
+      debugPrint('Share app link error: $e');
+      _showSnack('Could not open link. Try again.');
+    }
   }
 
   void _openCreditsIfNeededForTab(String tabName) {
@@ -4159,10 +4110,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                   builder: (ctx) => AlertDialog(
                                     title: Text(
                                         localizedUiText('about', _uiLanguage)),
-                                    content: Text(_uiLanguage ==
-                                            AppUiLanguage.afrikaans
-                                        ? "'Let’s Talk' help jou om Suid-Afrikaanse tale onmiddellik hardop te vertaal. Praat net stadig en duidelik terwyl jy die 'Praat'-knoppie druk, deel dan dadelik vertalings met vriende, stoor frases onder Jou Leer-oefening, en bestuur maklik jou vertaalgeskiedenis."
-                                        : "'Let’s Talk' helps you instantly translate South African languages out loud. Just speak slowly and clearly while pressing the 'Talk' button, then instantly share translations with friends, save phrases to your Learn tab for practice, and easily manage your translation history."),
+                                    content: const Text(
+                                        "'Let’s Talk' helps you instantly translate South African languages out loud. Just speak slowly and clearly while pressing the 'Talk' button, then instantly share translations with friends, save phrases to your Learn tab for practice, and easily manage your translation history."),
                                     actions: [
                                       Builder(
                                         builder: (_) {
@@ -4357,7 +4306,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                               },
                                             ),
                                           ListTile(
-                                            leading: Icon(Icons.qr_code_2,
+                                            leading: Icon(Icons.share,
                                                 color: isDark
                                                     ? Colors.white
                                                     : Colors.black),
@@ -4369,7 +4318,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                                             0xFF000000))),
                                             onTap: () {
                                               Navigator.pop(context);
-                                              _showQrShare();
+                                              _shareAppUrl();
                                             },
                                           ),
                                           ListTile(
@@ -5195,8 +5144,9 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<void> _exportHistory() async {
-    if (_history.isEmpty) return;
+  Future<void> _exportHistory({List<HistoryItem>? selectedItems}) async {
+    final itemsToExport = selectedItems ?? _history;
+    if (itemsToExport.isEmpty) return;
     try {
       final dir = await getTemporaryDirectory();
       final files = <XFile>[];
@@ -5206,8 +5156,8 @@ class _HomeScreenState extends State<HomeScreen> {
       buf.writeln('Let\'s Talk — Translation History');
       buf.writeln('Exported: ${DateTime.now().toString().substring(0, 16)}');
       buf.writeln();
-      for (int i = 0; i < _history.length; i++) {
-        final item = _history[i];
+      for (int i = 0; i < itemsToExport.length; i++) {
+        final item = itemsToExport[i];
         buf.writeln('[${i + 1}] ${item.inputLang} -> ${item.outputLang}  '
             '${item.time.hour.toString().padLeft(2, "0")}:${item.time.minute.toString().padLeft(2, "0")}');
         buf.writeln('Original:    ${item.original}');
@@ -5219,8 +5169,8 @@ class _HomeScreenState extends State<HomeScreen> {
       files.add(XFile(txtFile.path, mimeType: 'text/plain'));
 
       // Generate audio files
-      for (int i = 0; i < _history.length; i++) {
-        final item = _history[i];
+      for (int i = 0; i < itemsToExport.length; i++) {
+        final item = itemsToExport[i];
         try {
           final inProvider = _ttsProviderForLanguage(item.inputLang);
           final inVoice = _voiceNameForLanguage(item.inputLang);
@@ -5302,30 +5252,190 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  // Share History Icon Button (far left)
-                  Material(
-                    color: isDark ? Colors.black : Colors.white,
-                    shape: const CircleBorder(),
-                    elevation: 2,
-                    child: IconButton(
-                      onPressed: _history.isEmpty ? null : _exportHistory,
-                      icon: Icon(
-                        Icons.share,
-                        size: 20,
-                        color: isDark ? Colors.white : Colors.black,
+                  if (_historyEditMode) ...[
+                    // Cancel selection
+                    Material(
+                      color: isDark ? Colors.black : Colors.white,
+                      shape: const CircleBorder(),
+                      elevation: 2,
+                      child: IconButton(
+                        onPressed: () {
+                          setState(() {
+                            _historyEditMode = false;
+                            _selectedHistoryIndices.clear();
+                          });
+                        },
+                        icon: const Icon(
+                          Icons.cancel,
+                          size: 20,
+                          color: Colors.red,
+                        ),
+                        tooltip: 'Cancel selection',
+                        padding: const EdgeInsets.all(12),
                       ),
-                      tooltip: 'Share History',
-                      padding: const EdgeInsets.all(12),
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    if (_historyEditAction == HistoryEditAction.share)
+                      // Export chosen selected items (Share)
+                      Material(
+                        color: isDark ? Colors.black : Colors.white,
+                        shape: const CircleBorder(),
+                        elevation: 2,
+                        child: IconButton(
+                          onPressed: _selectedHistoryIndices.isEmpty
+                              ? null
+                              : () async {
+                                  final selected = _selectedHistoryIndices
+                                      .map((idx) => _history[idx])
+                                      .toList();
+                                  await _exportHistory(selectedItems: selected);
+                                  setState(() {
+                                    _historyEditMode = false;
+                                    _selectedHistoryIndices.clear();
+                                  });
+                                },
+                          icon: Icon(
+                            Icons.send,
+                            size: 20,
+                            color: _selectedHistoryIndices.isEmpty
+                                ? Colors.grey
+                                : (isDark ? Colors.white : Colors.black),
+                          ),
+                          tooltip: 'Share Selected',
+                          padding: const EdgeInsets.all(12),
+                        ),
+                      ),
+                    if (_historyEditAction == HistoryEditAction.delete)
+                      // Delete chosen selected items
+                      Material(
+                        color: isDark ? Colors.black : Colors.white,
+                        shape: const CircleBorder(),
+                        elevation: 2,
+                        child: IconButton(
+                          onPressed: _selectedHistoryIndices.isEmpty
+                              ? null
+                              : () async {
+                                  final sure = await showDialog<bool>(
+                                    context: context,
+                                    builder: (ctx) {
+                                      final isDark = Theme.of(ctx).brightness ==
+                                          Brightness.dark;
+                                      return AlertDialog(
+                                        title: const Text('Delete Selected?'),
+                                        content: Text(
+                                            'Delete the ${_selectedHistoryIndices.length} selected translations?'),
+                                        backgroundColor: isDark
+                                            ? const Color(0xFF000000)
+                                            : const Color(0xFFFFFFFF),
+                                        surfaceTintColor: isDark
+                                            ? const Color(0xFF000000)
+                                            : const Color(0xFFFFFFFF),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.of(ctx).pop(false),
+                                            child: Text('Cancel',
+                                                style: TextStyle(
+                                                    color: isDark
+                                                        ? Colors.white
+                                                        : Color(0xFF000000))),
+                                          ),
+                                          TextButton(
+                                            style: TextButton.styleFrom(
+                                              backgroundColor:
+                                                  const Color(0xFF000000),
+                                              foregroundColor: Colors.white,
+                                            ),
+                                            onPressed: () =>
+                                                Navigator.of(ctx).pop(true),
+                                            child: const Text('Delete',
+                                                style: TextStyle(
+                                                    color: Colors.white)),
+                                          ),
+                                        ],
+                                      );
+                                    },
+                                  );
+                                  if (sure == true) {
+                                    setState(() {
+                                      final sortedIndices =
+                                          _selectedHistoryIndices.toList()
+                                            ..sort((a, b) => b.compareTo(a));
+                                      for (final idx in sortedIndices) {
+                                        _history.removeAt(idx);
+                                      }
+                                      _selectedHistoryIndices.clear();
+                                      _historyEditMode = false;
+                                    });
+                                  }
+                                },
+                          icon: Icon(
+                            Icons.delete,
+                            size: 20,
+                            color: _selectedHistoryIndices.isEmpty
+                                ? Colors.grey
+                                : Colors.red,
+                          ),
+                          tooltip: 'Delete Selected',
+                          padding: const EdgeInsets.all(12),
+                        ),
+                      ),
+                  ] else ...[
+                    // Toggle Share Select Mode
+                    Material(
+                      color: isDark ? Colors.black : Colors.white,
+                      shape: const CircleBorder(),
+                      elevation: 2,
+                      child: IconButton(
+                        onPressed: () {
+                          setState(() {
+                            _historyEditMode = true;
+                            _historyEditAction = HistoryEditAction.share;
+                            _selectedHistoryIndices.clear();
+                          });
+                        },
+                        icon: Icon(
+                          Icons.share,
+                          size: 20,
+                          color: isDark ? Colors.white : Colors.black,
+                        ),
+                        tooltip: 'Select and Share Entries',
+                        padding: const EdgeInsets.all(12),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // Toggle Delete Select Mode
+                    Material(
+                      color: isDark ? Colors.black : Colors.white,
+                      shape: const CircleBorder(),
+                      elevation: 2,
+                      child: IconButton(
+                        onPressed: () {
+                          setState(() {
+                            _historyEditMode = true;
+                            _historyEditAction = HistoryEditAction.delete;
+                            _selectedHistoryIndices.clear();
+                          });
+                        },
+                        icon: const Icon(
+                          Icons.delete_sweep,
+                          size: 20,
+                          color: Colors.red,
+                        ),
+                        tooltip: 'Select and Delete Entries',
+                        padding: const EdgeInsets.all(12),
+                      ),
+                    ),
+                  ],
                   const Spacer(),
                   // Clear History Icon Button (far right)
                   Material(
                     color: isDark ? Colors.black : Colors.white,
-                    shape: const CircleBorder(),
+                    shape: const StadiumBorder(),
                     elevation: 2,
-                    child: IconButton(
-                      onPressed: () async {
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(100),
+                      onTap: () async {
                         final sure = await showDialog<bool>(
                           context: context,
                           builder: (ctx) {
@@ -5368,13 +5478,29 @@ class _HomeScreenState extends State<HomeScreen> {
                           });
                         }
                       },
-                      icon: const Icon(
-                        Icons.delete_sweep,
-                        size: 24,
-                        color: Colors.red,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.delete_sweep,
+                              size: 18,
+                              color: Colors.red,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'delete all',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.red.shade400,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                      tooltip: 'Clear History',
-                      padding: const EdgeInsets.all(12),
                     ),
                   ),
                 ],
@@ -5387,15 +5513,34 @@ class _HomeScreenState extends State<HomeScreen> {
                 itemCount: _history.length,
                 itemBuilder: (context, i) {
                   final item = _history[i];
+                  final isSelected = _selectedHistoryIndices.contains(i);
                   return Card(
                     margin: const EdgeInsets.only(bottom: 12),
                     color: isDark
-                        ? Colors.white12
-                        : const Color(0xFFFFEBEE), // pastel red
+                        ? (isSelected ? Colors.white24 : Colors.white12)
+                        : (isSelected
+                            ? const Color(0xFFFFCDD2)
+                            : const Color(0xFFFFEBEE)), // pastel red styles
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         ListTile(
+                          leading: _historyEditMode
+                              ? Checkbox(
+                                  activeColor: Colors.black,
+                                  checkColor: Colors.white,
+                                  value: isSelected,
+                                  onChanged: (val) {
+                                    setState(() {
+                                      if (val == true) {
+                                        _selectedHistoryIndices.add(i);
+                                      } else {
+                                        _selectedHistoryIndices.remove(i);
+                                      }
+                                    });
+                                  },
+                                )
+                              : null,
                           title: Text(item.translated,
                               style: TextStyle(
                                   color: isDark ? Colors.white : Colors.black,
