@@ -376,7 +376,6 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     });
     await _persistUserLearnPhrases();
-    _showSnack('Sentence sent to selected languages (max 5 per language)');
     return true;
   }
 
@@ -2558,16 +2557,24 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _doTranslate(String input) async {
+    // Check credits first - no translation request is allowed on the main page if out of credits
+    if (_credits <= 0) {
+      _showCreditTiers();
+      return;
+    }
+
     setState(() => _isTranslating = true);
 
     final cachedTranslation =
         await _getCachedTranslation(input, _selectedOutputLang);
+    final hasCache = cachedTranslation != null && cachedTranslation.isNotEmpty;
+
     String result;
     bool alreadyHadAudio = false;
     Uint8List? comboAudioData;
 
     try {
-      if (cachedTranslation != null && cachedTranslation.isNotEmpty) {
+      if (hasCache) {
         result = cachedTranslation;
         _phoneticText = '';
       } else {
@@ -2854,7 +2861,6 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       } catch (e) {
         debugPrint('Learn asset audio playback failed for $assetPath: $e');
-        _showSnack('Learn audio file missing or unreadable: $assetPath');
         return;
       }
     }
@@ -2863,8 +2869,6 @@ class _HomeScreenState extends State<HomeScreen> {
       await _speakText(text, language);
       return;
     }
-
-    _showSnack('Learn audio file missing for this phrase.');
   }
 
   Future<Uint8List?> _generateAudioWithCache(
@@ -3281,22 +3285,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _shareAppUrl() async {
     try {
-      final url = Uri.parse('https://www.talksa.co.za./');
-      if (await canLaunchUrl(url)) {
-        await launchUrl(url, mode: LaunchMode.externalApplication);
-      } else {
-        await SharePlus.instance.share(
-          ShareParams(
-            files: const [],
-            subject: 'Let\'s Talk',
-            text:
-                'Let\'s Talk | Voice-First Translation for South African Languages: https://www.talksa.co.za./',
-          ),
-        );
-      }
+      await SharePlus.instance.share(
+        ShareParams(
+          files: const [],
+          subject: 'Let\'s Talk',
+          text:
+              'Let\'s Talk | Voice-First Translation for South African Languages: https://www.talksa.co.za',
+        ),
+      );
     } catch (e) {
       debugPrint('Share app link error: $e');
-      _showSnack('Could not open link. Try again.');
+      _showSnack('Could not share app link. Try again.');
     }
   }
 
@@ -4305,22 +4304,6 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 _signOutToGuest();
                                               },
                                             ),
-                                          ListTile(
-                                            leading: Icon(Icons.share,
-                                                color: isDark
-                                                    ? Colors.white
-                                                    : Colors.black),
-                                            title: Text('Share App',
-                                                style: TextStyle(
-                                                    color: isDark
-                                                        ? Colors.white
-                                                        : const Color(
-                                                            0xFF000000))),
-                                            onTap: () {
-                                              Navigator.pop(context);
-                                              _shareAppUrl();
-                                            },
-                                          ),
                                           ListTile(
                                             leading: Icon(
                                                 Icons.account_balance_wallet,
