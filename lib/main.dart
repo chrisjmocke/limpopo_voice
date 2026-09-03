@@ -203,6 +203,56 @@ bool get isFirestoreCacheActive => _enableClientFirestoreCache && true;
 
 enum AppUiLanguage { english, afrikaans }
 
+enum LearnPlaybackSpeed { normal, slow, slowest }
+
+double learnPlaybackRateForSelection(LearnPlaybackSpeed speed) {
+  switch (speed) {
+    case LearnPlaybackSpeed.normal:
+      return 1.0;
+    case LearnPlaybackSpeed.slow:
+      return 0.75;
+    case LearnPlaybackSpeed.slowest:
+      return 0.5;
+  }
+}
+
+String? nextTabForSwipe(String currentTab,
+    {double? primaryVelocity, double? dragDelta}) {
+  final velocity = primaryVelocity ?? 0.0;
+  final delta = dragDelta ?? 0.0;
+
+  final hasIntentionalSwipe =
+      (velocity.abs() > 12) || (delta.abs() > 18 && delta.abs() < 1800);
+  if (!hasIntentionalSwipe) return null;
+
+  final direction = velocity.abs() > 12
+      ? (velocity < 0 ? -1 : 1)
+      : (delta < 0 ? -1 : 1);
+
+  if (currentTab == 'translate') {
+    if (direction < 0) return 'history';
+    return null;
+  }
+
+  if (currentTab == 'history') {
+    if (direction < 0) return 'learn';
+    if (direction > 0) return 'translate';
+    return null;
+  }
+
+  if (currentTab == 'learn') {
+    if (direction > 0) return 'history';
+    return null;
+  }
+
+  return null;
+}
+
+List<T> limitEntries<T>(List<T> items, int maxItems) {
+  if (items.length <= maxItems) return items;
+  return items.take(maxItems).toList();
+}
+
 String localizedUiText(String key, [AppUiLanguage? language]) {
   const english = <String, String>{
     'translate': 'Translate',
@@ -242,7 +292,47 @@ String localizedUiText(String key, [AppUiLanguage? language]) {
     'signed_out_guest': 'Signed out. Continuing as guest.',
   };
 
-  return english[key] ?? key;
+  const afrikaans = <String, String>{
+    'translate': 'Vertaal',
+    'history': 'Geskiedenis',
+    'learn': 'Leer',
+    'about': 'Oor Ons',
+    'close': 'Sluit',
+    'user': 'Gebruiker',
+    'sign_in': 'Meld aan',
+    'sign_out': 'Meld af',
+    'share_app': 'Deel App',
+    'credits': 'Krediete',
+    'disclaimer': 'Vrywaring',
+    'language': 'Taal',
+    'english': 'Engels',
+    'afrikaans': 'Afrikaans',
+    'menu': 'Kieslys',
+    'credit_packages': 'Kredietpakkette',
+    'balance': 'Balans',
+    'translations': 'vertalings',
+    'cancel_renewals': 'Kanselleer hernuwing',
+    'choose_payment_gateway': 'Kies betalingspoort',
+    'share': 'Deel',
+    'new_translation': 'Nuwe vertaling',
+    'send_to_learn': 'Stuur na Leer',
+    'hold_to_talk': 'HOU OM TE PRAAT',
+    'continue_with_google': 'Gaan voort met Google',
+    'create_email_account': 'Skep e-posrekening',
+    'sign_in_with_email': 'Meld aan met e-pos',
+    'create_account': 'Skep',
+    'cancel': 'Kanselleer',
+    'email': 'E-pos',
+    'password': 'Wagwoord',
+    'continue': 'Gaan voort',
+    'signed_in_with_google': 'Aangemeld met Google.',
+    'signed_in_with_email': 'Aangemeld met e-pos.',
+    'signed_out_guest': 'Afgemeld. Gaan voort as gas.',
+  };
+
+  final selectedLanguage = language ?? AppUiLanguage.english;
+  final map = selectedLanguage == AppUiLanguage.afrikaans ? afrikaans : english;
+  return map[key] ?? english[key] ?? key;
 }
 
 class HistoryItem {
@@ -252,6 +342,26 @@ class HistoryItem {
   HistoryItem(this.inputLang, this.outputLang, this.original, this.translated,
       this.time,
       {this.phonetic});
+
+  Map<String, dynamic> toJson() => {
+        'inputLang': inputLang,
+        'outputLang': outputLang,
+        'original': original,
+        'translated': translated,
+        'phonetic': phonetic,
+        'time': time.toIso8601String(),
+      };
+
+  factory HistoryItem.fromJson(Map<String, dynamic> json) => HistoryItem(
+        (json['inputLang'] ?? '').toString(),
+        (json['outputLang'] ?? '').toString(),
+        (json['original'] ?? '').toString(),
+        (json['translated'] ?? '').toString(),
+        DateTime.tryParse((json['time'] ?? '').toString()) ?? DateTime.now(),
+        phonetic: (json['phonetic'] ?? '').toString().isEmpty
+            ? null
+            : (json['phonetic'] ?? '').toString(),
+      );
 }
 
 enum HistoryEditAction { share, delete }
@@ -371,10 +481,7 @@ class _HomeScreenState extends State<HomeScreen> {
           'en': original,
           if (phonetic.isNotEmpty) 'phonetic': phonetic,
         });
-        while (phraseList.length > 5) {
-          phraseList.removeLast();
-        }
-        _userLearnPhrasesByLang[key] = phraseList;
+        _userLearnPhrasesByLang[key] = limitEntries(phraseList, 100);
         _learnFocusTextByLang[lang] = translated;
         _learnFocusMeaningByLang[lang] = original;
         _learnFocusPhoneticByLang[lang] = phonetic.isEmpty ? null : phonetic;
@@ -595,11 +702,13 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _deviceId;
 
   bool _authBusy = false;
+  static const String _historyPrefsKey = 'device_history_v1';
   final List<HistoryItem> _history = [];
   bool _historyEditMode = false;
   HistoryEditAction _historyEditAction = HistoryEditAction.share;
   final Set<int> _selectedHistoryIndices = {};
   String _selectedLearnLang = 'Sepedi';
+  LearnPlaybackSpeed _learnPlaybackSpeed = LearnPlaybackSpeed.normal;
   final Map<String, String> _learnFocusTextByLang = {};
   final Map<String, String> _learnFocusMeaningByLang = {};
   final Map<String, String?> _learnFocusPhoneticByLang = {};
@@ -746,12 +855,50 @@ class _HomeScreenState extends State<HomeScreen> {
     _initSpeech();
     // Native Paystack initialization is handled in the plugin's onAttachedToEngine
     _tttController.addListener(_onInputChanged);
+    unawaited(_loadHistoryFromDevice());
     unawaited(_loadLearnSentences());
     unawaited(_loadUserLearnPhrases());
     unawaited(_checkInstallIdAndFreeTrial());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_showDisclaimerIfFirstInstall());
     });
+  }
+
+  Future<void> _saveHistoryToDevice() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final payload = jsonEncode(
+        _history.map((item) => item.toJson()).toList(),
+      );
+      await prefs.setString(_historyPrefsKey, payload);
+    } catch (e) {
+      debugPrint('Failed to save history to device cache: $e');
+    }
+  }
+
+  Future<void> _loadHistoryFromDevice() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_historyPrefsKey);
+      if (raw == null || raw.trim().isEmpty) return;
+
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return;
+
+      final loaded = decoded
+          .whereType<Map>()
+          .map((entry) => HistoryItem.fromJson(Map<String, dynamic>.from(entry)))
+          .toList();
+
+      if (!mounted) return;
+      setState(() {
+        _history
+          ..clear()
+          ..addAll(loaded);
+      });
+    } catch (e) {
+      debugPrint('Failed to read history from device cache: $e');
+    }
   }
 
   Future<void> _loadUserLearnPhrases() async {
@@ -2658,6 +2805,8 @@ class _HomeScreenState extends State<HomeScreen> {
             _maskProfanityForDisplay(result),
             DateTime.now(),
             phonetic: _phoneticText));
+    _history.removeRange(100, _history.length);
+    unawaited(_saveHistoryToDevice());
 
     // 3. Audio Handling
     final safeForSpeech = _silenceProfanityForSpeech(result);
@@ -2788,7 +2937,8 @@ class _HomeScreenState extends State<HomeScreen> {
     return false;
   }
 
-  Future<void> _speakText(String text, String language) async {
+  Future<void> _speakText(String text, String language,
+      {double? playbackRate}) async {
     debugPrint(
         '[_speakText] Attempting to speak text: "$text" in language: $language');
     if (_shouldAbortTts(text, context: 'speakText')) {
@@ -2796,6 +2946,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final safeForSpeech = _silenceProfanityForSpeech(text);
+    final rate = playbackRate ?? 1.0;
 
     try {
       final provider = _ttsProviderForLanguage(language);
@@ -2812,6 +2963,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final localCached = await _getLocalCachedAudio(cacheLookupKey);
       if (localCached != null && localCached.isNotEmpty) {
         debugPrint('[_speakText] Audio cache hit (local)');
+        await _audioPlayer.setPlaybackRate(rate);
         await _audioPlayer.play(BytesSource(localCached));
         return;
       }
@@ -2822,6 +2974,7 @@ class _HomeScreenState extends State<HomeScreen> {
         debugPrint('[_speakText] Audio cache hit (shared)');
         final decoded = base64Decode(cachedBase64);
         await _saveLocalCachedAudio(cacheLookupKey, decoded);
+        await _audioPlayer.setPlaybackRate(rate);
         await _audioPlayer.play(BytesSource(decoded));
         return;
       }
@@ -2843,6 +2996,7 @@ class _HomeScreenState extends State<HomeScreen> {
           return;
         }
         debugPrint('[_speakText] Audio data generated, playing.');
+        await _audioPlayer.setPlaybackRate(rate);
         await _audioPlayer.play(BytesSource(audioData));
       } else {
         debugPrint(
@@ -2876,11 +3030,13 @@ class _HomeScreenState extends State<HomeScreen> {
       _showCreditTiers();
       return;
     }
+    final playbackRate = learnPlaybackRateForSelection(_learnPlaybackSpeed);
     final assetPath = _learnAudioAssetPath(language, text);
     if (assetPath != null) {
       try {
         await _audioPlayer.stop();
-        debugPrint('Playing Learn asset audio: $assetPath');
+        await _audioPlayer.setPlaybackRate(playbackRate);
+        debugPrint('Playing Learn asset audio: $assetPath at ${playbackRate}x');
         await _audioPlayer.play(AssetSource(assetPath));
         return;
       } catch (e) {
@@ -2890,7 +3046,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     if (isUserPhrase) {
-      await _speakText(text, language);
+      await _speakText(text, language, playbackRate: playbackRate);
       return;
     }
   }
@@ -3435,7 +3591,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             Align(
                               alignment: Alignment.centerRight,
                               child: TextButton(
-                                onPressed: _cancelMonthlyDebit,
+                                onPressed: _confirmCancelMonthlyDebit,
                                 style: TextButton.styleFrom(
                                   foregroundColor:
                                       isDark ? Colors.white : Colors.black,
@@ -3776,6 +3932,32 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e) {
       debugPrint('Paystack cancellation request failed: $e');
       return false;
+    }
+  }
+
+  Future<void> _confirmCancelMonthlyDebit() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cancel renewals?'),
+        content: const Text(
+          'Are you sure you want to stop future monthly renewals? Your current credits will remain active until the end of the current cycle.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Agree'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _cancelMonthlyDebit();
     }
   }
 
@@ -4264,6 +4446,22 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  double _lastHorizontalDragDistance = 0;
+
+  void _handleTabSwipe(double? primaryVelocity, {double? dragDelta}) {
+    final targetTab = nextTabForSwipe(_activeTab,
+        primaryVelocity: primaryVelocity, dragDelta: dragDelta);
+    if (targetTab == null) return;
+
+    if (_credits <= 0) {
+      _showCreditTiers();
+      return;
+    }
+
+    setState(() => _activeTab = targetTab);
+    _lastHorizontalDragDistance = 0;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -4272,44 +4470,14 @@ class _HomeScreenState extends State<HomeScreen> {
       resizeToAvoidBottomInset: false,
       body: SafeArea(
         child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onHorizontalDragStart: (_) => _lastHorizontalDragDistance = 0,
+          onHorizontalDragUpdate: (details) {
+            _lastHorizontalDragDistance += details.delta.dx;
+          },
           onHorizontalDragEnd: (details) {
-            // Improved swipe logic:
-            // - If on Translate and swipe left: go to History if not empty, else go to Learn
-            // - If on History and swipe left: go to Learn
-            // - If on History and swipe right: go to Translate
-            // - If on Learn and swipe right: go to History if not empty, else go to Translate
-            if (_activeTab == 'translate' &&
-                details.primaryVelocity != null &&
-                details.primaryVelocity! < -200) {
-              if (_credits <= 0) {
-                _showCreditTiers();
-              } else if (_history.isNotEmpty) {
-                setState(() => _activeTab = 'history');
-              } else {
-                setState(() => _activeTab = 'learn');
-              }
-            } else if (_activeTab == 'history' &&
-                details.primaryVelocity != null) {
-              if (details.primaryVelocity! < -200) {
-                if (_credits <= 0) {
-                  _showCreditTiers();
-                } else {
-                  setState(() => _activeTab = 'learn');
-                }
-              } else if (details.primaryVelocity! > 200) {
-                setState(() => _activeTab = 'translate');
-              }
-            } else if (_activeTab == 'learn' &&
-                details.primaryVelocity != null &&
-                details.primaryVelocity! > 200) {
-              if (_credits <= 0) {
-                _showCreditTiers();
-              } else if (_history.isNotEmpty) {
-                setState(() => _activeTab = 'history');
-              } else {
-                setState(() => _activeTab = 'translate');
-              }
-            }
+            _handleTabSwipe(details.velocity.pixelsPerSecond.dx,
+                dragDelta: _lastHorizontalDragDistance);
           },
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 350),
@@ -4339,133 +4507,33 @@ class _HomeScreenState extends State<HomeScreen> {
                       children: [
                         Align(
                           alignment: Alignment.centerLeft,
-                          child: PopupMenuButton<String>(
-                            icon: Icon(Icons.menu,
-                                color: isDark ? Colors.white : Colors.black),
-                            tooltip: localizedUiText('menu', _uiLanguage),
-                            color:
-                                isDark ? const Color(0xFF222222) : Colors.white,
-                            surfaceTintColor:
-                                isDark ? const Color(0xFF222222) : Colors.white,
-                            itemBuilder: (context) => [
-                              PopupMenuItem(
-                                value: 'about',
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.info_outline,
-                                        size: 18,
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 8),
+                            child: _showCreditsInHeader
+                                ? GestureDetector(
+                                    onTap: _showCreditTiers,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
                                         color: isDark
-                                            ? Colors.white
-                                            : Colors.black),
-                                    const SizedBox(width: 12),
-                                    Text(localizedUiText('about', _uiLanguage),
-                                        style: TextStyle(
-                                            color: isDark
-                                                ? Colors.white
-                                                : Colors.black)),
-                                  ],
-                                ),
-                              ),
-                              PopupMenuItem(
-                                value: 'translate',
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.translate,
-                                        size: 18,
-                                        color: isDark
-                                            ? Colors.white
-                                            : Colors.black),
-                                    const SizedBox(width: 12),
-                                    Text(
-                                        localizedUiText(
-                                            'translate', _uiLanguage),
-                                        style: TextStyle(
-                                            color: isDark
-                                                ? Colors.white
-                                                : Colors.black)),
-                                  ],
-                                ),
-                              ),
-                              PopupMenuItem(
-                                value: 'history',
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.history,
-                                        size: 18,
-                                        color: isDark
-                                            ? Colors.white
-                                            : Colors.black),
-                                    const SizedBox(width: 12),
-                                    Text(
-                                        localizedUiText('history', _uiLanguage),
-                                        style: TextStyle(
-                                            color: isDark
-                                                ? Colors.white
-                                                : Colors.black)),
-                                  ],
-                                ),
-                              ),
-                              PopupMenuItem(
-                                value: 'learn',
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.school,
-                                        size: 18,
-                                        color: isDark
-                                            ? Colors.white
-                                            : Colors.black),
-                                    const SizedBox(width: 12),
-                                    Text(localizedUiText('learn', _uiLanguage),
-                                        style: TextStyle(
-                                            color: isDark
-                                                ? Colors.white
-                                                : Colors.black)),
-                                  ],
-                                ),
-                              ),
-                            ],
-                            onSelected: (value) {
-                              if (value == 'about') {
-                                showDialog(
-                                  context: context,
-                                  builder: (ctx) => AlertDialog(
-                                    title: Text(
-                                        localizedUiText('about', _uiLanguage)),
-                                    content: const Text(
-                                        "'Let’s Talk' helps you instantly translate South African languages out loud. Just speak slowly and clearly while pressing the 'Talk' button, then instantly share translations with friends, save phrases to your Learn tab for practice, and easily manage your translation history."),
-                                    actions: [
-                                      Builder(
-                                        builder: (_) {
-                                          return TextButton(
-                                            style: TextButton.styleFrom(
-                                              backgroundColor:
-                                                  const Color(0xFF000000),
-                                              foregroundColor: Colors.white,
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                      horizontal: 16,
-                                                      vertical: 10),
-                                            ),
-                                            onPressed: () =>
-                                                Navigator.of(ctx).pop(),
-                                            child: Text(localizedUiText(
-                                                'close', _uiLanguage)),
-                                          );
-                                        },
+                                            ? Colors.white12
+                                            : const Color(0xFFF1F3F5),
+                                        borderRadius: BorderRadius.circular(999),
                                       ),
-                                    ],
-                                  ),
-                                );
-                              } else if (value == 'translate') {
-                                setState(() => _activeTab = 'translate');
-                              } else if (value == 'history') {
-                                _openCreditsIfNeededForTab('history');
-                              } else if (value == 'learn') {
-                                _openCreditsIfNeededForTab('learn');
-                              } else if (value == 'theme') {
-                                widget.onToggleTheme();
-                              }
-                            },
+                                      child: Text(
+                                        '$_credits',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700,
+                                          color: isDark
+                                              ? Colors.white
+                                              : const Color(0xFF000000),
+                                        ),
+                                      ),
+                                    ),
+                                  )
+                                : const SizedBox.shrink(),
                           ),
                         ),
                         Center(
@@ -4476,30 +4544,6 @@ class _HomeScreenState extends State<HomeScreen> {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              if (_showCreditsInHeader)
-                                GestureDetector(
-                                  onTap: _showCreditTiers,
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 8, vertical: 4),
-                                    decoration: BoxDecoration(
-                                      color: isDark
-                                          ? Colors.white12
-                                          : const Color(0xFFF1F3F5),
-                                      borderRadius: BorderRadius.circular(999),
-                                    ),
-                                    child: Text(
-                                      '$_credits',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w700,
-                                        color: isDark
-                                            ? Colors.white
-                                            : const Color(0xFF000000),
-                                      ),
-                                    ),
-                                  ),
-                                ),
                               const SizedBox(width: 8),
                               PopupMenuButton<int>(
                                 tooltip: 'User menu',
@@ -4659,6 +4703,51 @@ class _HomeScreenState extends State<HomeScreen> {
                                               _showDisclaimerInfo();
                                             },
                                           ),
+                                          ListTile(
+                                            leading: Icon(Icons.info_outline,
+                                                color: isDark
+                                                    ? Colors.white
+                                                    : Colors.black),
+                                            title: Text('About',
+                                                style: TextStyle(
+                                                    color: isDark
+                                                        ? Colors.white
+                                                        : const Color(
+                                                            0xFF000000))),
+                                            onTap: () {
+                                              Navigator.pop(context);
+                                              showDialog(
+                                                context: context,
+                                                builder: (ctx) => AlertDialog(
+                                                  title: Text(
+                                                      localizedUiText(
+                                                          'about', _uiLanguage)),
+                                                  content: const Text(
+                                                      "'Let’s Talk' helps you instantly translate South African languages out loud. Just speak slowly and clearly while pressing the 'Talk' button, then instantly share translations with friends, save phrases to your Learn tab for practice, and easily manage your translation history."),
+                                                  actions: [
+                                                    TextButton(
+                                                      style: TextButton.styleFrom(
+                                                        backgroundColor:
+                                                            const Color(
+                                                                0xFF000000),
+                                                        foregroundColor:
+                                                            Colors.white,
+                                                        padding: const EdgeInsets
+                                                            .symmetric(
+                                                          horizontal: 16,
+                                                          vertical: 10,
+                                                        ),
+                                                      ),
+                                                      onPressed: () =>
+                                                          Navigator.of(ctx).pop(),
+                                                      child: Text(localizedUiText(
+                                                          'close', _uiLanguage)),
+                                                    ),
+                                                  ],
+                                                ),
+                                              );
+                                            },
+                                          ),
                                           // Add more user actions here if needed
                                         ],
                                       ),
@@ -4791,6 +4880,52 @@ class _HomeScreenState extends State<HomeScreen> {
                 isDark,
               ),
               const SizedBox(height: 14),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final itemWidth =
+                      (constraints.maxWidth - 16) / 3;
+                  return Row(
+                    children: [
+                      SizedBox(
+                        width: itemWidth,
+                        child: _buildLearnSpeedChip(
+                          label: '1.0x',
+                          isSelected: _learnPlaybackSpeed == LearnPlaybackSpeed.normal,
+                          onPressed: () => setState(() {
+                            _learnPlaybackSpeed = LearnPlaybackSpeed.normal;
+                          }),
+                          isDark: isDark,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: itemWidth,
+                        child: _buildLearnSpeedChip(
+                          label: '0.75x',
+                          isSelected: _learnPlaybackSpeed == LearnPlaybackSpeed.slow,
+                          onPressed: () => setState(() {
+                            _learnPlaybackSpeed = LearnPlaybackSpeed.slow;
+                          }),
+                          isDark: isDark,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: itemWidth,
+                        child: _buildLearnSpeedChip(
+                          label: '0.5x',
+                          isSelected: _learnPlaybackSpeed == LearnPlaybackSpeed.slowest,
+                          onPressed: () => setState(() {
+                            _learnPlaybackSpeed = LearnPlaybackSpeed.slowest;
+                          }),
+                          isDark: isDark,
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+              const SizedBox(height: 14),
               ...phrases.asMap().entries.map((entry) {
                 final idx = entry.key;
                 final phrase = entry.value;
@@ -4800,13 +4935,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   decoration: BoxDecoration(
-                    color: isDark
-                        ? Colors.white12
-                        : const Color(0xFFE3F0FF), // soft blue pastel
+                    color: Colors.black,
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: isDark ? Colors.white24 : Colors.black26,
-                    ),
                   ),
                   child: Row(
                     children: [
@@ -4816,42 +4946,36 @@ class _HomeScreenState extends State<HomeScreen> {
                           children: [
                             Text(
                               phrase['text'] ?? '',
-                              style: TextStyle(
+                              style: const TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w900,
-                                color: isDark
-                                    ? Colors.white
-                                    : const Color(0xFF000000),
+                                color: Colors.white,
                               ),
                             ),
                             if ((phrase['phonetic'] ?? '').isNotEmpty) ...[
                               const SizedBox(height: 2),
                               Text(
                                 phrase['phonetic']!,
-                                style: TextStyle(
+                                style: const TextStyle(
                                   fontSize: 12,
                                   fontStyle: FontStyle.italic,
-                                  color: isDark
-                                      ? Colors.white70
-                                      : const Color(0xFF000000),
+                                  color: Colors.white70,
                                 ),
                               ),
                             ],
                             const SizedBox(height: 3),
                             Text(
                               phrase['en'] ?? '',
-                              style: TextStyle(
+                              style: const TextStyle(
                                 fontSize: 12,
-                                color: isDark
-                                    ? Colors.white60
-                                    : Colors.grey.shade700,
+                                color: Colors.white60,
                               ),
                             ),
                           ],
                         ),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.volume_up),
+                        icon: const Icon(Icons.volume_up, color: Colors.white),
                         tooltip: 'Listen',
                         onPressed: () => _playLearnPhraseAudio(
                           language: _selectedLearnLang,
@@ -4861,8 +4985,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       if (isUserPhrase)
                         IconButton(
-                          icon: Icon(Icons.close,
-                              color: isDark ? Colors.white70 : Colors.black54),
+                          icon: const Icon(Icons.close, color: Colors.white70),
                           tooltip: 'Delete',
                           onPressed: () => _deleteUserPhrase(idx),
                         ),
@@ -4892,6 +5015,27 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _buildLearnSpeedChip({
+    required String label,
+    required bool isSelected,
+    required VoidCallback onPressed,
+    required bool isDark,
+  }) {
+    return ChoiceChip(
+      label: Text(label),
+      selected: isSelected,
+      showCheckmark: false,
+      selectedColor: Colors.white,
+      backgroundColor: Colors.black,
+      labelStyle: TextStyle(
+        color: isSelected ? Colors.black : Colors.white70,
+        fontWeight: FontWeight.w700,
+      ),
+      side: BorderSide.none,
+      onSelected: (_) => onPressed(),
+    );
+  }
+
   Widget _buildTranslateTab(bool isDark) {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -4916,11 +5060,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       margin: const EdgeInsets.only(bottom: 12),
                       padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                       decoration: BoxDecoration(
-                        color:
-                            isDark ? Colors.white12 : const Color(0xFFE0F8D8),
+                        color: isDark ? Colors.black : Colors.black,
                         borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                            color: isDark ? Colors.white24 : Colors.black26),
                       ),
                       child: Stack(
                         children: [
@@ -5088,10 +5229,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     margin: const EdgeInsets.only(bottom: 8),
                     padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                     decoration: BoxDecoration(
-                      color: isDark ? Colors.white12 : const Color(0xFFD9C7A3),
+                      color: isDark ? Colors.black : Colors.black,
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                          color: isDark ? Colors.white24 : Colors.black26),
                     ),
                     child: Stack(
                       children: [
@@ -5526,26 +5665,48 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildHistoryTab(bool isDark) {
     if (_history.isEmpty) {
-      // If history is empty and tab is history, auto-switch to Translate
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _activeTab == 'history') {
-          setState(() => _activeTab = 'translate');
-        }
-      });
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.history,
-                size: 64,
-                color: isDark ? Colors.white30 : Colors.grey.shade300),
-            const SizedBox(height: 12),
-            Text('No translations yet',
-                style: TextStyle(
-                    color: isDark ? Colors.white38 : Colors.grey.shade500,
-                    fontSize: 16)),
-          ],
-        ),
+      return Stack(
+        children: [
+          Center(
+            child: Container(
+              margin: const EdgeInsets.all(24),
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: isDark ? Colors.black : Colors.black,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.history,
+                      size: 54,
+                      color: isDark ? Colors.white30 : Colors.grey.shade400),
+                  const SizedBox(height: 12),
+                  Text('You have no History',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                          color: isDark ? Colors.white : Colors.black,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600)),
+                ],
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: 18,
+            right: 18,
+            child: FloatingActionButton(
+              heroTag: 'history_home_empty',
+              mini: true,
+              backgroundColor: isDark ? Colors.white12 : Colors.white,
+              foregroundColor: isDark ? Colors.white : Colors.black,
+              elevation: 2,
+              onPressed: () => setState(() => _activeTab = 'translate'),
+              tooltip: 'Home',
+              child: const Icon(Icons.home),
+            ),
+          ),
+        ],
       );
     }
     return Stack(
@@ -5672,6 +5833,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       _selectedHistoryIndices.clear();
                                       _historyEditMode = false;
                                     });
+                                    unawaited(_saveHistoryToDevice());
                                   }
                                 },
                           icon: Icon(
@@ -5781,6 +5943,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           setState(() {
                             _history.clear();
                           });
+                          unawaited(_saveHistoryToDevice());
                         }
                       },
                       child: Padding(
@@ -5821,11 +5984,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   final isSelected = _selectedHistoryIndices.contains(i);
                   return Card(
                     margin: const EdgeInsets.only(bottom: 12),
-                    color: isDark
-                        ? (isSelected ? Colors.white24 : Colors.white12)
-                        : (isSelected
-                            ? const Color(0xFFFFCDD2)
-                            : const Color(0xFFFFEBEE)), // pastel red styles
+                    color: isDark ? Colors.black : Colors.black,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [

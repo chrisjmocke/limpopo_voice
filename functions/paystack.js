@@ -80,6 +80,10 @@ function extractSubscriptionMetadata(eventData = {}) {
     direct.subscription?.subscription_code ||
     direct.subscription?.code ||
     direct.subscription?.id ||
+    direct.subscription?.subscription_code ||
+    direct.subscription?.code ||
+    direct.authorization?.subscription_code ||
+    direct.authorization?.code ||
     metadata.subscriptionCode ||
     customerMetadata.subscriptionCode ||
     metadata.subscription_code ||
@@ -93,6 +97,8 @@ function extractSubscriptionMetadata(eventData = {}) {
     direct.subscription?.authorization?.token ||
     direct.customer?.authorization?.authorization_code ||
     direct.customer?.authorization?.token ||
+    direct.subscription?.authorization_code ||
+    direct.subscription?.token ||
     direct.token ||
     metadata.subscriptionToken ||
     customerMetadata.subscriptionToken ||
@@ -333,6 +339,19 @@ const createPaystackTransactionHttp = onRequest(
         return res.status(502).send({ error: "Paystack transaction creation failed" });
       }
 
+      if (normalizedPlanCode) {
+        const { subscriptionCode, subscriptionToken } = extractSubscriptionMetadata(result?.data || {});
+        if (subscriptionCode || subscriptionToken) {
+          await persistSubscriptionMetadata(db, decodedToken.uid, {
+            subscriptionCode: subscriptionCode || null,
+            subscriptionToken: subscriptionToken || null,
+            subscriptionPlanCode: normalizedPlanCode,
+            monthlyRenewalActive: true,
+            subscriptionStatus: "active_monthly_pending_confirmation",
+          });
+        }
+      }
+
       return res.status(200).send({
         authorization_url: result.data?.authorization_url || null,
         access_code: result.data?.access_code || null,
@@ -379,8 +398,19 @@ const cancelPaystackSubscriptionHttp = onRequest(
     const userRef = db.collection("users").doc(String(userId));
     const userDoc = await userRef.get();
     const userData = userDoc.exists ? userDoc.data() || {} : {};
-    const bodyCode = String(req.body?.subscriptionCode || req.body?.code || "").trim();
-    const bodyToken = String(req.body?.subscriptionToken || req.body?.token || "").trim();
+    const bodyCode = String(
+      req.body?.subscriptionCode ||
+      req.body?.code ||
+      req.body?.subscription_code ||
+      "",
+    ).trim();
+    const bodyToken = String(
+      req.body?.subscriptionToken ||
+      req.body?.token ||
+      req.body?.authorization_code ||
+      req.body?.authorizationCode ||
+      "",
+    ).trim();
     const subscriptionCode = bodyCode || String(
       userData.subscriptionCode ||
       userData.paystackSubscriptionCode ||
