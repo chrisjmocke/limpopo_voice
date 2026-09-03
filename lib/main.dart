@@ -19,6 +19,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:vibration/vibration.dart';
 import 'translation_service.dart';
 import 'firebase_options.dart';
 
@@ -251,6 +252,41 @@ String? nextTabForSwipe(String currentTab,
 List<T> limitEntries<T>(List<T> items, int maxItems) {
   if (items.length <= maxItems) return items;
   return items.take(maxItems).toList();
+}
+
+String normalizeCacheText(String text) {
+  if (text.isEmpty) return '';
+  final normalized = text.toLowerCase().replaceAll(RegExp(r"['’]"), '');
+  final compact = normalized.replaceAll(RegExp(r'[^a-z0-9\s]+'), ' ');
+  return compact.replaceAll(RegExp(r'\s+'), ' ').trim();
+}
+
+List<String> buildFragmentCacheKeys(String text, {int maxWords = 3}) {
+  final normalized = normalizeCacheText(text);
+  if (normalized.isEmpty) return const <String>[];
+
+  final words = normalized.split(RegExp(r'\s+')).where((word) => word.isNotEmpty).toList();
+  if (words.isEmpty) return const <String>[];
+
+  final keys = <String>{};
+  keys.add(normalized);
+
+  for (final word in words) {
+    if (word.isNotEmpty) {
+      keys.add(word);
+    }
+  }
+
+  for (var i = 0; i < words.length; i++) {
+    for (var size = 2; size <= maxWords && i + size <= words.length; size++) {
+      final fragment = words.sublist(i, i + size).join(' ');
+      if (fragment.isNotEmpty) {
+        keys.add(fragment);
+      }
+    }
+  }
+
+  return keys.toList();
 }
 
 String localizedUiText(String key, [AppUiLanguage? language]) {
@@ -619,7 +655,9 @@ class _HomeScreenState extends State<HomeScreen> {
   String _selectedInputLang = 'English';
   String _selectedOutputLang = 'Sepedi';
   bool _showCreditsInHeader = true;
-  final _inputLangs = [
+
+  // Official supported South African Narakeet languages.
+  static const List<String> _southAfricanLanguageList = [
     'English',
     'Afrikaans',
     'isiNdebele',
@@ -632,19 +670,9 @@ class _HomeScreenState extends State<HomeScreen> {
     'Tshivenda',
     'Xitsonga',
   ];
-  final _outputLangs = [
-    'isiNdebele',
-    'isiXhosa',
-    'isiZulu',
-    'Sepedi',
-    'Sesotho',
-    'Setswana',
-    'siSwati',
-    'Tshivenda',
-    'Xitsonga',
-    'English',
-    'Afrikaans',
-  ];
+
+  final _inputLangs = List<String>.from(_southAfricanLanguageList);
+  final _outputLangs = List<String>.from(_southAfricanLanguageList);
   final _locales = {
     'Afrikaans': 'af-ZA',
     'English': 'en-ZA',
@@ -703,6 +731,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   bool _authBusy = false;
   static const String _historyPrefsKey = 'device_history_v1';
+  static const String _languagePrefsKey = 'device_selected_languages_v1';
   final List<HistoryItem> _history = [];
   bool _historyEditMode = false;
   HistoryEditAction _historyEditAction = HistoryEditAction.share;
@@ -821,7 +850,11 @@ class _HomeScreenState extends State<HomeScreen> {
     final normalized = _normalizeLanguageLabel(language);
     final provider = _ttsProviderForLanguage(normalized);
     if (provider == 'narakeet') {
-      return _voiceNames[normalized] ?? 'Aletta';
+      final preferred = _voiceNames[normalized];
+      if (preferred != null && preferred.trim().isNotEmpty) {
+        return preferred;
+      }
+      return 'Charlize';
     }
     return null;
   }
@@ -855,6 +888,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _initSpeech();
     // Native Paystack initialization is handled in the plugin's onAttachedToEngine
     _tttController.addListener(_onInputChanged);
+    unawaited(_loadSelectedLanguagesFromDevice());
     unawaited(_loadHistoryFromDevice());
     unawaited(_loadLearnSentences());
     unawaited(_loadUserLearnPhrases());
@@ -862,6 +896,56 @@ class _HomeScreenState extends State<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_showDisclaimerIfFirstInstall());
     });
+  }
+
+  Future<void> _saveSelectedLanguagesToDevice() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final payload = jsonEncode({
+        'input': _selectedInputLang,
+        'output': _selectedOutputLang,
+      });
+      await prefs.setString(_languagePrefsKey, payload);
+    } catch (e) {
+      debugPrint('Failed to save selected languages to device cache: $e');
+    }
+  }
+
+  Future<void> _loadSelectedLanguagesFromDevice() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_languagePrefsKey);
+      if (raw == null || raw.trim().isEmpty) return;
+
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return;
+
+      final rawInputLang = decoded['input']?.toString();
+      final rawOutputLang = decoded['output']?.toString();
+
+      String inputLang = _normalizeLanguageLabel(rawInputLang ?? '');
+      String outputLang = _normalizeLanguageLabel(rawOutputLang ?? '');
+
+      if (inputLang.isEmpty || !_inputLangs.contains(inputLang)) {
+        inputLang = _selectedInputLang;
+      }
+      if (outputLang.isEmpty || !_outputLangs.contains(outputLang)) {
+        outputLang = _selectedOutputLang;
+      }
+
+      if (!mounted) {
+        _selectedInputLang = inputLang;
+        _selectedOutputLang = outputLang;
+        return;
+      }
+
+      setState(() {
+        _selectedInputLang = inputLang;
+        _selectedOutputLang = outputLang;
+      });
+    } catch (e) {
+      debugPrint('Failed to read selected languages from device cache: $e');
+    }
   }
 
   Future<void> _saveHistoryToDevice() async {
@@ -2292,7 +2376,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<String?> _getCachedTranslation(String text, String language) async {
-    final cleanText = text.toLowerCase().trim();
+    final cleanText = normalizeCacheText(text);
     final localKey = 'text_trans_v1_${_stableCacheHash(cleanText)}_$language';
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -2316,12 +2400,69 @@ class _HomeScreenState extends State<HomeScreen> {
       } catch (_) {}
       return firestoreCached;
     }
+
+    final fragmentCached = await _getCachedFragmentTranslation(text, language);
+    if (fragmentCached != null && fragmentCached.isNotEmpty) {
+      debugPrint(
+          '[_getCachedTranslation] Fragment cache hit for: "$text" -> "$fragmentCached"');
+      return fragmentCached;
+    }
+
     return null;
+  }
+
+  Future<String?> _getCachedFragmentTranslation(
+      String text, String language) async {
+    final normalized = normalizeCacheText(text);
+    if (normalized.isEmpty) return null;
+
+    final words = normalized
+        .split(RegExp(r'\s+'))
+        .where((word) => word.isNotEmpty)
+        .toList();
+    if (words.length <= 1) return null;
+
+    final translatedParts = <String>[];
+    for (final word in words) {
+      final cachedWord = await _getCachedTranslation(word, language);
+      if (cachedWord == null || cachedWord.trim().isEmpty) {
+        return null;
+      }
+      translatedParts.add(cachedWord.trim());
+    }
+
+    if (translatedParts.length == words.length) {
+      return translatedParts.join(' ');
+    }
+
+    return null;
+  }
+
+  Future<void> _saveFragmentTranslations(
+      String sourceText, String language, String translatedText) async {
+    final sourceWords = normalizeCacheText(sourceText)
+        .split(RegExp(r'\s+'))
+        .where((word) => word.isNotEmpty)
+        .toList();
+    final translatedWords = normalizeCacheText(translatedText)
+        .split(RegExp(r'\s+'))
+        .where((word) => word.isNotEmpty)
+        .toList();
+
+    if (sourceWords.isEmpty || translatedWords.isEmpty) return;
+    if (sourceWords.length != translatedWords.length) return;
+
+    for (var i = 0; i < sourceWords.length; i++) {
+      final sourceWord = sourceWords[i];
+      final translatedWord = translatedWords[i];
+      if (sourceWord.isEmpty || translatedWord.isEmpty) continue;
+      await _saveCacheTranslation(sourceWord, language, translatedWord);
+    }
   }
 
   Future<void> _saveCacheTranslation(
       String text, String language, String translation) async {
-    final cleanText = text.toLowerCase().trim();
+    final cleanText = normalizeCacheText(text);
     final localKey = 'text_trans_v1_${_stableCacheHash(cleanText)}_$language';
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -2585,6 +2726,20 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _speechAvailable = ok);
   }
 
+  Future<void> _triggerTalkVibration() async {
+    try {
+      final hasVibrator = await Vibration.hasVibrator();
+      if (hasVibrator == true) {
+        await Vibration.vibrate(duration: 80, amplitude: 255);
+        return;
+      }
+    } catch (_) {}
+
+    try {
+      await HapticFeedback.heavyImpact();
+    } catch (_) {}
+  }
+
   void _startListening() async {
     final micStatus = await Permission.microphone.request();
     if (!micStatus.isGranted) {
@@ -2600,6 +2755,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     _talkHoldTimer?.cancel();
     _talkHoldProgress = 0.0;
+    unawaited(_triggerTalkVibration());
     final start = DateTime.now();
     _talkHoldTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
       if (!mounted) return;
@@ -2734,6 +2890,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    await _translationService.primeSession();
     setState(() => _isTranslating = true);
 
     final cachedTranslation =
@@ -2741,8 +2898,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final hasCache = cachedTranslation != null && cachedTranslation.isNotEmpty;
 
     String result;
-    bool alreadyHadAudio = false;
-    Uint8List? comboAudioData;
 
     try {
       if (hasCache) {
@@ -2765,6 +2920,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
           // Cache the translation text so we don't have to translate again in future
           await _saveCacheTranslation(input, _selectedOutputLang, result);
+          await _saveFragmentTranslations(input, _selectedOutputLang, result);
 
           // Warm up / populate the local and remote audio cache under the translated key
           final cacheVoiceKey = '$provider|${voiceName ?? ''}';
@@ -2773,9 +2929,6 @@ class _HomeScreenState extends State<HomeScreen> {
           await _saveCacheAudio(result, _selectedOutputLang, cacheVoiceKey,
               base64Encode(comboResult.audioContent));
           await _saveLocalCachedAudio(cacheLookupKey, comboResult.audioContent);
-
-          comboAudioData = comboResult.audioContent;
-          alreadyHadAudio = true;
         } else {
           // Fallback to normal google translate / single translation-only call
           result = await _translateText(input);
@@ -2787,6 +2940,25 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     if (!mounted) return;
+
+    final safeForSpeech = _silenceProfanityForSpeech(result);
+    if (safeForSpeech.isNotEmpty) {
+      // Start output audio immediately when the translated text is available so it
+      // plays alongside the TTT result rather than after a later UI refresh.
+      unawaited(
+        () async {
+          try {
+            await _speakText(result, _selectedOutputLang);
+          } catch (_) {
+            try {
+              await _speakTranslatedText(result);
+            } catch (_) {
+              debugPrint('Main output speech fallback failed for: $result');
+            }
+          }
+        }(),
+      );
+    }
 
     setState(() {
       _translatedRawText = result;
@@ -2805,28 +2977,15 @@ class _HomeScreenState extends State<HomeScreen> {
             _maskProfanityForDisplay(result),
             DateTime.now(),
             phonetic: _phoneticText));
-    _history.removeRange(100, _history.length);
+    if (_history.length > 100) {
+      _history.removeRange(100, _history.length);
+    }
     unawaited(_saveHistoryToDevice());
 
     // 3. Audio Handling
-    final safeForSpeech = _silenceProfanityForSpeech(result);
-
-    if (safeForSpeech.isEmpty) return;
-
-    if (alreadyHadAudio &&
-        comboAudioData != null &&
-        comboAudioData.isNotEmpty) {
-      // Consume a usage credit
-      if (!await _consumeUsageAllowance(
-          inputText: _spokenRawText, outputText: result)) {
-        debugPrint('Failed to consume usage allowance, aborting direct play.');
-        return;
-      }
-      await _audioPlayer.stop();
-      await _audioPlayer.play(BytesSource(comboAudioData));
-    } else {
-      await _speakTranslatedText(result);
-    }
+    // The actual speech trigger happens immediately above when the translated text
+    // is first resolved, so the output audio starts with the TTT result instead of
+    // waiting for a later step.
   }
 
   String _maskProfanityForDisplay(String text) {
@@ -2945,6 +3104,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    await _translationService.primeSession();
     final safeForSpeech = _silenceProfanityForSpeech(text);
     final rate = playbackRate ?? 1.0;
 
@@ -3054,6 +3214,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<Uint8List?> _generateAudioWithCache(
       String text, String language, String? voice,
       {required String provider, bool skipTranslation = true}) async {
+    await _translationService.primeSession();
     debugPrint(
         '[_generateAudioWithCache] Attempting to generate audio for text: "$text", language: $language, voice: $voice, provider: $provider, skipTranslation: $skipTranslation');
     final cacheVoiceKey = '$provider|${voice ?? ''}';
@@ -3171,10 +3332,21 @@ class _HomeScreenState extends State<HomeScreen> {
       ttsStopwatch.stop();
 
       if (!playedAny) {
-        _showSnack(_speechServiceUnavailableMessage());
+        debugPrint(
+            '[_speakTranslatedText] No chunked audio played; falling back to standard TTS flow.');
+        try {
+          await _speakText(text, _selectedOutputLang);
+        } catch (_) {
+          _showSnack(_speechServiceUnavailableMessage());
+        }
       }
     } catch (e) {
-      _showSnack('Speech audio error. Please try again.');
+      debugPrint('[_speakTranslatedText] Speech audio error: $e');
+      try {
+        await _speakText(text, _selectedOutputLang);
+      } catch (_) {
+        _showSnack('Speech audio error. Please try again.');
+      }
     }
   }
 
@@ -5086,6 +5258,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                           _phoneticText = '';
                                           _tttController.clear();
                                         });
+                                        unawaited(_saveSelectedLanguagesToDevice());
                                       },
                                       isDark,
                                     ),
@@ -5215,6 +5388,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               final tmp = _selectedInputLang;
                               _selectedInputLang = _selectedOutputLang;
                               _selectedOutputLang = tmp;
+                              unawaited(_saveSelectedLanguagesToDevice());
                             }),
                           ),
                         ),
@@ -5254,6 +5428,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                         _phoneticText = '';
                                         _tttController.clear();
                                       });
+                                      unawaited(_saveSelectedLanguagesToDevice());
                                     },
                                     isDark,
                                   ),

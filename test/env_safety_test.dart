@@ -92,4 +92,15 @@ void main() {
     expect(nextTabForSwipe('history', dragDelta: 80.0), 'translate');
     expect(nextTabForSwipe('learn', dragDelta: 80.0), 'history');
   });
+
+  test('fragment cache helpers normalize text and generate reusable fragment keys', () {
+    final normalized = normalizeCacheText('  Hello,   world!  ');
+    expect(normalized, 'hello world');
+
+    final keys = buildFragmentCacheKeys('Hello world again', maxWords: 2);
+    expect(keys, contains('hello'));
+    expect(keys, contains('world'));
+    expect(keys, contains('hello world'));
+    expect(keys.length, greaterThanOrEqualTo(3));
+  });
 }

@@ -14,19 +14,19 @@ const AUDIO_CACHE_SIGNED_URL_TTL_HOURS = Number(process.env.AUDIO_CACHE_SIGNED_U
 const AUDIO_CACHE_OBJECT_PREFIX = String(process.env.AUDIO_CACHE_OBJECT_PREFIX || "tts-cache").trim();
 
 const KNOWN_TTS_PROVIDERS = ["narakeet"];
-const SAFE_NARAKEET_VOICES = ['Aletta', 'Rolanda'];
+const SAFE_NARAKEET_VOICES = ['Hilda', 'Rolanda'];
 const NARAKEET_VOICE_ALTERNATIVES = {
-    'Afrikaans': ['Aletta', 'Rolanda'],
-    'English': ['Aletta', 'Rolanda'],
-    'isiNdebele': ['Aletta', 'Rolanda'],
-    'isiXhosa': ['Aletta', 'Rolanda'],
-    'isiZulu': ['Aletta', 'Rolanda'],
-    'Sepedi': ['Aletta', 'Rolanda'],
-    'Sesotho': ['Aletta', 'Rolanda'],
-    'Setswana': ['Aletta', 'Rolanda'],
-    'siSwati': ['Aletta', 'Rolanda'],
-    'Tshivenda': ['Aletta', 'Rolanda'],
-    'Xitsonga': ['Aletta', 'Rolanda'],
+    'Afrikaans': ['Rolanda', 'Jochem', 'Joost', 'Laurika'],
+    'English': ['Hilda', 'Charlize', 'Piet', 'Aletta', 'Riaan'],
+    'isiNdebele': ['Dumisani'],
+    'isiXhosa': ['Lindiwe', 'Thabo'],
+    'isiZulu': ['Nandi', 'Menzi', 'Zanele', 'Themba'],
+    'Sepedi': ['Mpho', 'Mogau'],
+    'Sesotho': ['Palesa'],
+    'Setswana': ['Bokang'],
+    'siSwati': ['Nomcebo'],
+    'Tshivenda': ['Mulalo'],
+    'Xitsonga': ['Basetsana'],
     default: ['Aletta', 'Rolanda'],
 };
 
@@ -340,6 +340,47 @@ async function translateWithGemini(text, targetLanguage, isRespectMode, preferre
     throw lastError || new Error("All Gemini models failed.");
 }
 
+async function translateWithGoogleFallback(text, targetLanguage) {
+    const sourceCode = "auto";
+    const targetCode = String({
+        Afrikaans: "af",
+        English: "en",
+        isiNdebele: "nr",
+        isiXhosa: "xh",
+        isiZulu: "zu",
+        Sepedi: "nso",
+        Sesotho: "st",
+        Setswana: "tn",
+        siSwati: "ss",
+        Tshivenda: "ve",
+        Xitsonga: "ts",
+    }[targetLanguage] || "en");
+
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${encodeURIComponent(sourceCode)}&tl=${encodeURIComponent(targetCode)}&dt=t&q=${encodeURIComponent(text)}`;
+    const response = await fetch(url, { method: "GET" });
+    if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        throw new Error(`Google Translate fallback failed: [${response.status}] ${body}`);
+    }
+
+    const payload = await response.json().catch(() => null);
+    if (!Array.isArray(payload) || !Array.isArray(payload[0])) {
+        throw new Error("Google Translate fallback returned an unexpected payload.");
+    }
+
+    const translated = payload[0]
+        .filter(Array.isArray)
+        .map((part) => String(part[0] || ""))
+        .join("")
+        .trim();
+
+    if (!translated) {
+        throw new Error("Google Translate fallback returned empty text.");
+    }
+
+    return translated;
+}
+
 function getAllowedOrigins() {
     const raw = String(process.env.ALLOWED_ORIGINS || "").trim();
     return raw ? raw.split(",").map((o) => o.trim()).filter(Boolean) : [];
@@ -377,8 +418,19 @@ exports.handleProcessSpeech = (req, res) => {
             const shouldSkipTranslation = skipTranslation === true;
             let translatedText = inputText; let modelUsed = null;
             if (!shouldSkipTranslation) {
-                const translationResult = await translateWithGemini(inputText, targetLanguage, isRespectMode, model);
-                translatedText = translationResult.translatedText; modelUsed = translationResult.modelUsed;
+                try {
+                    const translationResult = await translateWithGemini(inputText, targetLanguage, isRespectMode, model);
+                    translatedText = translationResult.translatedText; modelUsed = translationResult.modelUsed;
+                } catch (translationError) {
+                    console.warn("Gemini translation failed, using Google Translate fallback.", translationError?.message || translationError);
+                    try {
+                        translatedText = await translateWithGoogleFallback(inputText, targetLanguage);
+                        modelUsed = "google-translate-fallback";
+                    } catch (fallbackError) {
+                        console.error("Google Translate fallback failed too.", fallbackError?.message || fallbackError);
+                        translatedText = inputText;
+                    }
+                }
             }
             const requestedCode = mapLanguageCode(targetLanguage);
             const requestedGender = mapGender(isMale !== false);
