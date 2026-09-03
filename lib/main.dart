@@ -172,6 +172,18 @@ class _LetsTalkAppState extends State<LetsTalkApp> {
   }
 }
 
+class AlignedTokenPair {
+  final String sourceWord;
+  final String translatedWord;
+  final String colorHex;
+
+  const AlignedTokenPair({
+    required this.sourceWord,
+    required this.translatedWord,
+    required this.colorHex,
+  });
+}
+
 class _CreditTier {
   final String name;
   final int credits; // 1 credit = 5 seconds (capped at 5 sec per translation)
@@ -287,6 +299,153 @@ List<String> buildFragmentCacheKeys(String text, {int maxWords = 3}) {
   }
 
   return keys.toList();
+}
+
+List<AlignedTokenPair> buildFallbackAlignmentPairs(String source, String target) {
+  final sourceWords = source
+      .split(RegExp(r'\s+'))
+      .where((word) => word.trim().isNotEmpty)
+      .toList();
+  final targetWords = target
+      .split(RegExp(r'\s+'))
+      .where((word) => word.trim().isNotEmpty)
+      .toList();
+
+  if (sourceWords.isEmpty && targetWords.isEmpty) {
+    return const <AlignedTokenPair>[];
+  }
+
+  final palette = <String>[
+    '#FF5733',
+    '#33FF57',
+    '#3357FF',
+    '#FF33A8',
+    '#FFD633',
+    '#33D6FF',
+    '#C733FF',
+    '#FF8C33',
+  ];
+
+  final maxLen = max(sourceWords.length, targetWords.length);
+  final pairs = <AlignedTokenPair>[];
+  for (var i = 0; i < maxLen; i++) {
+    final sourceWord = i < sourceWords.length ? sourceWords[i] : '';
+    final translatedWord = i < targetWords.length ? targetWords[i] : '';
+    if (sourceWord.isEmpty && translatedWord.isEmpty) {
+      continue;
+    }
+    final colorHex = palette[i % palette.length];
+    pairs.add(AlignedTokenPair(
+      sourceWord: sourceWord,
+      translatedWord: translatedWord,
+      colorHex: colorHex,
+    ));
+  }
+  return pairs;
+}
+
+TextSpan _buildAlignedTokenSpan({
+  required String text,
+  required String colorHex,
+}) {
+  if (text.trim().isEmpty) {
+    return const TextSpan(text: '');
+  }
+
+  final shadeColor = Color(
+    int.tryParse(colorHex.replaceFirst('#', '0xFF')) ?? 0xFFFFFFFF,
+  );
+
+  return TextSpan(
+    text: text,
+    style: TextStyle(
+      color: Colors.white,
+      fontFamily: 'monospace',
+      fontWeight: FontWeight.w600,
+      background: Paint()..color = shadeColor.withValues(alpha: 0.25),
+    ),
+  );
+}
+
+Widget _buildWordAlignmentBlock({
+  required String sourceText,
+  required String translatedText,
+  List<AlignedTokenPair>? pairs,
+}) {
+  final alignmentPairs = pairs ?? buildFallbackAlignmentPairs(sourceText, translatedText);
+  if (alignmentPairs.isEmpty) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          sourceText,
+          style: const TextStyle(
+            fontSize: 16,
+            fontFamily: 'monospace',
+            fontWeight: FontWeight.w600,
+            color: Colors.white,
+          ),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          translatedText,
+          style: const TextStyle(
+            fontSize: 12,
+            fontFamily: 'monospace',
+            fontWeight: FontWeight.w500,
+            color: Colors.white60,
+          ),
+        ),
+      ],
+    );
+  }
+
+  final sourceSpans = <InlineSpan>[];
+  for (final pair in alignmentPairs) {
+    if (pair.sourceWord.trim().isEmpty) continue;
+    sourceSpans.add(_buildAlignedTokenSpan(
+      text: '${pair.sourceWord} ',
+      colorHex: pair.colorHex,
+    ));
+  }
+
+  final translatedSpans = <InlineSpan>[];
+  for (final pair in alignmentPairs) {
+    if (pair.translatedWord.trim().isEmpty) continue;
+    translatedSpans.add(_buildAlignedTokenSpan(
+      text: '${pair.translatedWord} ',
+      colorHex: pair.colorHex,
+    ));
+  }
+
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      RichText(
+        text: TextSpan(
+          children: sourceSpans,
+          style: const TextStyle(
+            fontSize: 16,
+            fontFamily: 'monospace',
+            fontWeight: FontWeight.w600,
+            color: Colors.white,
+          ),
+        ),
+      ),
+      const SizedBox(height: 6),
+      RichText(
+        text: TextSpan(
+          children: translatedSpans,
+          style: const TextStyle(
+            fontSize: 12,
+            fontFamily: 'monospace',
+            fontWeight: FontWeight.w500,
+            color: Colors.white60,
+          ),
+        ),
+      ),
+    ],
+  );
 }
 
 String localizedUiText(String key, [AppUiLanguage? language]) {
@@ -5116,13 +5275,22 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              phrase['text'] ?? '',
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w900,
-                                color: Colors.white,
-                              ),
+                            _buildWordAlignmentBlock(
+                              sourceText: phrase['text'] ?? '',
+                              translatedText: phrase['en'] ?? '',
+                              pairs: (() {
+                                final raw = phrase['alignment'];
+                                if (raw is List) {
+                                  return TranslationService.parseAlignmentPairs(raw)
+                                      .map((pair) => AlignedTokenPair(
+                                            sourceWord: pair['source_word'] ?? '',
+                                            translatedWord: pair['translated_word'] ?? '',
+                                            colorHex: pair['color_hex'] ?? '#FFFFFF',
+                                          ))
+                                      .toList();
+                                }
+                                return null;
+                              })(),
                             ),
                             if ((phrase['phonetic'] ?? '').isNotEmpty) ...[
                               const SizedBox(height: 2),
@@ -5135,14 +5303,6 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                               ),
                             ],
-                            const SizedBox(height: 3),
-                            Text(
-                              phrase['en'] ?? '',
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: Colors.white60,
-                              ),
-                            ),
                           ],
                         ),
                       ),

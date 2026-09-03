@@ -110,6 +110,32 @@ class TranslationService {
     return headers;
   }
 
+  static List<Map<String, String>> parseAlignmentPairs(dynamic raw) {
+    if (raw == null) return const <Map<String, String>>[];
+    if (raw is! List) return const <Map<String, String>>[];
+
+    final parsed = <Map<String, String>>[];
+    for (final item in raw) {
+      if (item is! Map) continue;
+      final source = item['source_word']?.toString() ??
+          item['source']?.toString() ??
+          '';
+      final translated = item['translated_word']?.toString() ??
+          item['translated']?.toString() ??
+          '';
+      final color = item['color_hex']?.toString() ??
+          item['color']?.toString() ??
+          '#FFFFFF';
+      if (source.isEmpty && translated.isEmpty) continue;
+      parsed.add({
+        'source_word': source,
+        'translated_word': translated,
+        'color_hex': color,
+      });
+    }
+    return parsed;
+  }
+
   Map<String, dynamic> buildRequestBody({
     required String text,
     required String targetLanguage,
@@ -117,6 +143,7 @@ class TranslationService {
     String ttsProvider = 'narakeet',
     bool isMale = true,
     bool skipTranslation = false,
+    bool includeAlignment = true,
   }) {
     return {
       'text': text.trim(),
@@ -125,6 +152,8 @@ class TranslationService {
       'isMale': isMale,
       'voiceName': voiceName,
       'ttsProvider': ttsProvider,
+      'includeAlignment': includeAlignment,
+      'alignmentMode': 'word_level',
     };
   }
 
@@ -184,6 +213,12 @@ class TranslationService {
         _setLastError(
             'missing_translation', 'No translation in response payload');
         return null;
+      }
+
+      final alignmentRaw = body['alignment'];
+      if (alignmentRaw != null) {
+        debugPrint(
+            '[TranslationService] Received alignment payload: ${alignmentRaw.toString()}');
       }
 
       _clearLastError();
@@ -494,6 +529,12 @@ class TranslationService {
         debugPrint('TranslationService: No translation in response');
         _setLastError('missing_translation', 'No translation in response');
         return null;
+      }
+
+      final alignmentRaw = body['alignment'];
+      if (alignmentRaw != null) {
+        debugPrint(
+            '[TranslationService] Received alignment payload: ${alignmentRaw.toString()}');
       }
 
       _clearLastError();
