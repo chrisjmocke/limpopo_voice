@@ -1,5 +1,9 @@
 Set-Location "C:\Users\BOK\limpopo_voice"
 
+$secretRoot = Join-Path $env:LOCALAPPDATA 'LimpopoVoice\secrets'
+New-Item -ItemType Directory -Force -Path $secretRoot | Out-Null
+$keyFile = Join-Path $secretRoot 'paystack_secret.txt'
+
 # Securely prompt for the key without showing it in the script code
 $key = Read-Host "Paste your Paystack Secret Key"
 if ([string]::IsNullOrWhiteSpace($key)) {
@@ -7,14 +11,14 @@ if ([string]::IsNullOrWhiteSpace($key)) {
   exit 1
 }
 
-Set-Content -Path .\paystack_secret.txt -NoNewline -Value $key
+Set-Content -Path $keyFile -NoNewline -Value $key
 
-Get-Item .\paystack_secret.txt | Select-Object Name,Length | Format-Table -AutoSize
+Get-Item $keyFile | Select-Object Name,Length | Format-Table -AutoSize
 
 # Set the secret in Firebase
-firebase functions:secrets:set PAYSTACK_SECRET_KEY --data-file .\paystack_secret.txt
+firebase functions:secrets:set PAYSTACK_SECRET_KEY --data-file $keyFile
 if ($LASTEXITCODE -ne 0) {
-  Remove-Item .\paystack_secret.txt -ErrorAction SilentlyContinue
+  Remove-Item $keyFile -ErrorAction SilentlyContinue
   exit $LASTEXITCODE
 }
 
@@ -24,7 +28,7 @@ firebase deploy --only functions:africa-south1:createPaystackTransaction,functio
 $deployExit = $LASTEXITCODE
 
 # Clean up the temporary file
-Remove-Item .\paystack_secret.txt -ErrorAction SilentlyContinue
+Remove-Item $keyFile -ErrorAction SilentlyContinue
 
 if ($deployExit -ne 0) { 
     Write-Warning "Specific function deployment failed. Retrying with general functions filter..."

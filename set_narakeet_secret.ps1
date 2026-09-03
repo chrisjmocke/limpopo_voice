@@ -2,7 +2,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $root = 'C:\Users\BOK\limpopo_voice'
-$KeyFile = Join-Path $root 'narakeet_key.txt'
+$secretRoot = Join-Path $env:LOCALAPPDATA 'LimpopoVoice\secrets'
+New-Item -ItemType Directory -Force -Path $secretRoot | Out-Null
+$KeyFile = Join-Path $secretRoot 'narakeet_key.txt'
 
 Set-Location $root
 

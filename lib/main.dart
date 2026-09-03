@@ -5,13 +5,13 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
+import 'package:permission_handler/permission_handler.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
@@ -19,7 +19,6 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'translation_service.dart';
 import 'firebase_options.dart';
 
@@ -183,6 +182,12 @@ const _tiers = [
   _CreditTier('Tier 1', 100, 'R19.99'), // 100 credits
   _CreditTier('Tier 2', 300, 'R49.99'), // 300 credits
   _CreditTier('Tier 3', 700, 'R99.99'), // 700 credits
+];
+
+const _onceOffTiers = [
+  _CreditTier('Tier 1', 100, 'R24.99'),
+  _CreditTier('Tier 2', 300, 'R59.99'),
+  _CreditTier('Tier 3', 700, 'R119.99'),
 ];
 const int _usageCostCredits =
     1; // 1 credit = 5 seconds per translation (capped)
@@ -494,7 +499,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String _activeTab = 'translate';
-  AppUiLanguage _uiLanguage = AppUiLanguage.english;
+  final AppUiLanguage _uiLanguage = AppUiLanguage.english;
   final stt.SpeechToText _speech = stt.SpeechToText();
   late final TranslationService _translationService;
   late final AudioPlayer _audioPlayer;
@@ -1506,6 +1511,14 @@ class _HomeScreenState extends State<HomeScreen> {
     return 'https://africa-south1-limpopo-voice-prod.cloudfunctions.net/createPaystackTransactionHttp';
   }
 
+  String _cancelPaystackSubscriptionUrl() {
+    final configured = safeDotEnvString('PAYSTACK_CANCEL_URL');
+    if (configured.isNotEmpty) {
+      return configured;
+    }
+    return 'https://africa-south1-limpopo-voice-prod.cloudfunctions.net/cancelPaystackSubscriptionHttp';
+  }
+
   Future<Map<String, String>?> _buildAuthorizedJsonHeaders(
       {bool forceRefresh = false}) async {
     try {
@@ -1532,10 +1545,14 @@ class _HomeScreenState extends State<HomeScreen> {
       return null;
     }
 
+    final planCode = _paystackPlanCodeForTier(tier);
     final payload = {
       'amountCents': (amount * 100).round(),
       'email': _authEmail ?? '',
       'callback_url': callbackUrl,
+      'planCode': planCode,
+      'purchaseType': 'monthly',
+      'creditsToAdd': tier.credits,
     };
 
     final uri = Uri.parse(_paystackInitUrl());
@@ -2296,7 +2313,6 @@ class _HomeScreenState extends State<HomeScreen> {
   void _showDisclaimerDialog() {
     if (!mounted) return;
 
-    final messenger = ScaffoldMessenger.maybeOf(context);
     unawaited(
       showDialog<void>(
         context: context,
@@ -2423,6 +2439,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _startListening() async {
+    final micStatus = await Permission.microphone.request();
+    if (!micStatus.isGranted) {
+      if (mounted) {
+        _showSnack('Microphone permission is required to use voice input.');
+      }
+      return;
+    }
+
     if (!_speechAvailable) {
       _showSnack('Microphone not available');
       return;
@@ -3283,22 +3307,6 @@ class _HomeScreenState extends State<HomeScreen> {
     return 'Speech service unavailable. Check connection & try again.';
   }
 
-  void _shareAppUrl() async {
-    try {
-      await SharePlus.instance.share(
-        ShareParams(
-          files: const [],
-          subject: 'Let\'s Talk',
-          text:
-              'Let\'s Talk | Voice-First Translation for South African Languages: https://www.talksa.co.za',
-        ),
-      );
-    } catch (e) {
-      debugPrint('Share app link error: $e');
-      _showSnack('Could not share app link. Try again.');
-    }
-  }
-
   void _openCreditsIfNeededForTab(String tabName) {
     if (_credits <= 0) {
       _showCreditTiers();
@@ -3444,6 +3452,15 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                       const SizedBox(height: 16),
+                      Text(
+                        'Monthly plans',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: isDark ? Colors.white70 : Colors.black54,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
                       ..._tiers.map((tier) => Padding(
                             padding: const EdgeInsets.only(bottom: 10),
                             child: ElevatedButton(
@@ -3493,6 +3510,65 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                             ),
                           )),
+                      const SizedBox(height: 18),
+                      Text(
+                        'One-off credit plans',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: isDark ? Colors.white70 : Colors.black54,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      ..._onceOffTiers.map((tier) => Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor:
+                                    isDark ? Colors.white10 : Colors.black,
+                                foregroundColor: Colors.white,
+                                minimumSize: const Size(double.infinity, 52),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              onPressed: () {
+                                Navigator.pop(ctx);
+                                _showPaymentGateways(tier, isOnceOff: true);
+                              },
+                              child: Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      tier.name,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16,
+                                        color: Colors.white,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    '${tier.credits} translations',
+                                    style:
+                                        const TextStyle(color: Colors.white70),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    tier.price,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )),
                     ],
                   ),
                 ),
@@ -3504,7 +3580,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _showPaymentGateways(_CreditTier tier) {
+  void _showPaymentGateways(_CreditTier tier, {bool isOnceOff = false}) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     showModalBottomSheet(
@@ -3544,7 +3620,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        '${tier.name} • ${tier.credits} translations • ${tier.price}',
+                        '${isOnceOff ? 'One-off' : 'Monthly'} • ${tier.name} • ${tier.credits} translations • ${tier.price}',
                         style: TextStyle(
                           fontSize: 13,
                           color: isDark ? Colors.white70 : Colors.black54,
@@ -3570,7 +3646,11 @@ class _HomeScreenState extends State<HomeScreen> {
                             await Future<void>.delayed(
                                 const Duration(milliseconds: 120));
                             if (!mounted) return;
-                            _startPaystackTierPayment(tier);
+                            if (isOnceOff) {
+                              _startPaystackOnceOffPayment(tier);
+                            } else {
+                              _startPaystackTierPayment(tier);
+                            }
                           },
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
@@ -3598,6 +3678,19 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  String _paystackPlanCodeForTier(_CreditTier tier) {
+    switch (tier.credits) {
+      case 100:
+        return 'PLN_2t2fvh0gmfjshy7';
+      case 300:
+        return 'PLN_ietxwof2rdpsfpt';
+      case 700:
+        return 'PLN_qq7y0nbwj2x75ff';
+      default:
+        return '';
+    }
+  }
+
   double _tierAmountFromPrice(String price) {
     final cleaned = price.replaceAll(RegExp(r'[^0-9.]'), '');
     return double.tryParse(cleaned) ?? 0;
@@ -3622,6 +3715,70 @@ class _HomeScreenState extends State<HomeScreen> {
     return '${date.day}/${date.month}/${date.year}';
   }
 
+  Future<bool> _cancelPaystackSubscriptionOnServer() async {
+    final headers = await _buildAuthorizedJsonHeaders();
+    if (headers == null) {
+      return false;
+    }
+
+    try {
+      final userRef = _userDocRef();
+      String? subscriptionCode;
+      String? subscriptionToken;
+      if (userRef != null) {
+        final userDoc = await userRef.get();
+        final data = userDoc.data();
+        if (data != null) {
+          subscriptionCode = (data['subscriptionCode'] ??
+                  data['paystackSubscriptionCode'] ??
+                  data['activeSubscriptionCode'] ??
+                  '')
+              .toString();
+          subscriptionToken = (data['subscriptionToken'] ??
+                  data['paystackToken'] ??
+                  data['authorizationCode'] ??
+                  data['paystackAuthorizationCode'] ??
+                  data['subscriptionAuthorizationCode'] ??
+                  '')
+              .toString();
+        }
+      }
+
+      debugPrint(
+          'Cancelling Paystack subscription: code=${subscriptionCode ?? 'missing'}, token=${subscriptionToken ?? 'missing'}');
+
+      final payload = {
+        if (subscriptionCode != null && subscriptionCode.trim().isNotEmpty)
+          'subscriptionCode': subscriptionCode.trim(),
+        if (subscriptionToken != null && subscriptionToken.trim().isNotEmpty)
+          'subscriptionToken': subscriptionToken.trim(),
+      };
+
+      final response = await http
+          .post(
+            Uri.parse(_cancelPaystackSubscriptionUrl()),
+            headers: headers,
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 30));
+
+      if (response.statusCode != 200) {
+        debugPrint(
+            'Paystack cancellation endpoint failed: ${response.statusCode} ${response.body}');
+        return false;
+      }
+
+      final body = jsonDecode(response.body);
+      if (body is Map<String, dynamic>) {
+        return body['ok'] == true || body['cancelled'] == true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint('Paystack cancellation request failed: $e');
+      return false;
+    }
+  }
+
   Future<void> _cancelMonthlyDebit() async {
     final ref = _userDocRef();
     if (ref == null) {
@@ -3632,21 +3789,24 @@ class _HomeScreenState extends State<HomeScreen> {
     final now = DateTime.now();
     final keepUntil = now.add(const Duration(days: 30));
 
-    await ref.set({
-      'monthlyDebitCancelled': true,
-      'cancelledUntil': Timestamp.fromDate(keepUntil),
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    try {
+      final serverCancelled = await _cancelPaystackSubscriptionOnServer();
+      await ref.set({
+        'monthlyDebitCancelled': true,
+        'monthlyRenewalActive': false,
+        'cancelledUntil': Timestamp.fromDate(keepUntil),
+        'subscriptionStatus': serverCancelled
+            ? 'cancelled_pending_expiry'
+            : 'cancelled_local_only',
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
 
-    _showSnack(
-        'Debit cancelled. Your current credits stay active until ${_formatShortDate(keepUntil)}.');
-  }
-
-  bool _allowPaystackSandboxSimulation() {
-    final raw = safeDotEnvString('PAYSTACK_SANDBOX_BYPASS').toLowerCase();
-    final enabledByEnv =
-        raw == '1' || raw == 'true' || raw == 'yes' || raw == 'on';
-    return kDebugMode || enabledByEnv;
+      _showSnack(
+          'Debit cancelled. Your current credits stay active until ${_formatShortDate(keepUntil)}.');
+    } catch (e) {
+      debugPrint('Fail to cancel monthly debit: $e');
+      _showSnack('Could not cancel the subscription right now. Please try again.');
+    }
   }
 
   Future<void> _completeTierPurchase(
@@ -3661,12 +3821,14 @@ class _HomeScreenState extends State<HomeScreen> {
     final ref = _userDocRef();
     final now = DateTime.now();
     final monthlyRenewalAt = _addOneMonth(now);
+    final existingCredits = _credits;
+    final updatedCredits = existingCredits + tier.credits;
 
-    setState(() => _credits = tier.credits);
+    setState(() => _credits = updatedCredits);
 
     if (ref != null) {
       await ref.set({
-        'credits': tier.credits,
+        'credits': updatedCredits,
         'chargeCycleStartedAt': Timestamp.fromDate(now),
         'nextAutoDebitAt': Timestamp.fromDate(monthlyRenewalAt),
         'monthlyRenewalActive': true,
@@ -3676,12 +3838,14 @@ class _HomeScreenState extends State<HomeScreen> {
         'lastTierName': tier.name,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+      debugPrint(
+          'Monthly bundle applied: existing=$_credits, added=${tier.credits}, final=$updatedCredits');
     } else {
       unawaited(_updateCreditsInFirestore());
     }
 
     _showSnack(
-        'Monthly bundle activated: ${tier.credits} translations (${tier.name}) [$sourceLabel].');
+        'Monthly bundle activated: ${tier.credits} translations (${tier.name}).');
 
     try {
       await FirebaseFirestore.instance.collection('payment_events').add({
@@ -3701,18 +3865,119 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _simulatePaystackSandboxPayment(
-    _CreditTier tier,
-    double amount,
-  ) async {
-    final ref = 'SIM-${DateTime.now().millisecondsSinceEpoch}';
-    await _completeTierPurchase(
-      tier,
-      amount: amount,
-      status: 'completed_sandbox_paystack_simulated',
-      reference: ref,
-      sourceLabel: 'Paystack Sandbox',
-    );
+  Future<void> _completeOnceOffPurchase(
+    _CreditTier tier, {
+    required double amount,
+    required String status,
+    required String reference,
+    String sourceLabel = 'Payment',
+  }) async {
+    if (!mounted) return;
+
+    final ref = _userDocRef();
+    final now = DateTime.now();
+    final existingCredits = _credits;
+    final updatedCredits = existingCredits + tier.credits;
+
+    setState(() => _credits = updatedCredits);
+
+    if (ref != null) {
+      await ref.set({
+        'credits': updatedCredits,
+        'tierActive': true,
+        'monthlyRenewalActive': false,
+        'monthlyDebitCancelled': false,
+        'cancelledUntil': null,
+        'nextAutoDebitAt': null,
+        'lastTierName': tier.name,
+        'subscriptionStatus': 'active_once_off',
+        'subscriptionPeriodEnd': Timestamp.fromDate(now.add(const Duration(days: 30))),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      debugPrint(
+          'Once-off bundle applied: existing=$_credits, added=${tier.credits}, final=$updatedCredits');
+    } else {
+      unawaited(_updateCreditsInFirestore());
+    }
+
+    _showSnack('One-off credits added: ${tier.credits} translations.');
+
+    try {
+      await FirebaseFirestore.instance.collection('payment_events').add({
+        'userId': _authUid,
+        'tierName': tier.name,
+        'secondsAdded': tier.credits,
+        'amountPaid': amount,
+        'status': status,
+        'reference': reference,
+        'creditsRollOver': false,
+        'subscriptionStatus': 'active_once_off',
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {
+      // Intentionally silent to avoid affecting the purchase flow.
+    }
+  }
+
+  Future<String?> _requestPaystackOnceOffAccessCode(_CreditTier tier,
+      double amount,
+      {String? callbackUrl}) async {
+    final headers = await _buildAuthorizedJsonHeaders();
+    if (headers == null) {
+      _showSnack('Could not authenticate payment request.');
+      return null;
+    }
+
+    final payload = {
+      'amountCents': (amount * 100).round(),
+      'email': _authEmail ?? '',
+      'callback_url': callbackUrl,
+      'purchaseType': 'once_off',
+      'creditsToAdd': tier.credits,
+    };
+
+    final uri = Uri.parse(_paystackInitUrl());
+    http.Response response;
+
+    try {
+      response = await http
+          .post(uri, headers: headers, body: jsonEncode(payload))
+          .timeout(const Duration(seconds: 30));
+    } catch (e) {
+      debugPrint('Paystack once-off init request failed: $e');
+      return null;
+    }
+
+    if (response.statusCode == 401) {
+      final refreshedHeaders =
+          await _buildAuthorizedJsonHeaders(forceRefresh: true);
+      if (refreshedHeaders == null) return null;
+      try {
+        response = await http
+            .post(uri, headers: refreshedHeaders, body: jsonEncode(payload))
+            .timeout(const Duration(seconds: 30));
+      } catch (e) {
+        debugPrint('Paystack once-off init retry failed: $e');
+        return null;
+      }
+    }
+
+    if (response.statusCode != 200) {
+      debugPrint('Paystack once-off HTTP ${response.statusCode}: ${response.body}');
+      return null;
+    }
+
+    try {
+      final body = jsonDecode(response.body);
+      if (body is! Map<String, dynamic>) return null;
+      final accessCode = body['access_code'] as String?;
+      return (accessCode != null && accessCode.trim().isNotEmpty)
+          ? accessCode.trim()
+          : null;
+    } catch (e) {
+      debugPrint('Paystack once-off response parse failed: $e');
+      return null;
+    }
   }
 
   Future<dynamic> _launchPaystackWithViewRetry(String accessCode) async {
@@ -3765,21 +4030,9 @@ class _HomeScreenState extends State<HomeScreen> {
             callbackUrl: 'https://standard.paystack.co/close');
 
     if (accessCode == null || accessCode.isEmpty) {
-      if (_allowPaystackSandboxSimulation()) {
-        try {
-          _showSnack(
-            'Paystack backend unavailable. Running simulated sandbox payment.',
-          );
-          await _simulatePaystackSandboxPayment(tier, amount);
-        } catch (e) {
-          debugPrint('Sandbox simulation error: $e');
-          _showSnack('Sandbox simulation failed: ${e.toString()}');
-        }
-      } else {
-        _showSnack(
-          'Could not get Paystack sandbox access code.',
-        );
-      }
+      _showSnack(
+        'Could not initialize the live Paystack payment. Please try again.',
+      );
       return;
     }
 
@@ -3811,12 +4064,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
       if (isSuccess) {
         if (!creditedByWebhook) {
+          debugPrint(
+              'DEBUG purchase metadata dump: tier=${tier.name}, credits=${tier.credits}, amount=$amount, ref=${response.reference}, uid=$_authUid, email=$_authEmail');
           await _completeTierPurchase(
             tier,
             amount: amount,
-            status: 'completed_sandbox_paystack',
+            status: 'completed_live_paystack',
             reference: response.reference,
-            sourceLabel: 'Paystack Sandbox',
+            sourceLabel: 'Paystack Live',
           );
         } else {
           _showSnack('Credits added successfully.');
@@ -3826,6 +4081,73 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     } catch (e) {
       debugPrint('Paystack error: $e');
+      _showSnack('Payment error: ${e.toString()}');
+    }
+  }
+
+  void _startPaystackOnceOffPayment(_CreditTier tier) async {
+    final paymentReady = await _ensurePaymentReadyAccount();
+    if (!paymentReady) return;
+
+    final amount = _tierAmountFromPrice(tier.price);
+
+    String? accessCode = safeDotEnvString('PAYSTACK_TEST_ACCESS_CODE');
+    accessCode = (accessCode.isNotEmpty)
+        ? accessCode
+        : await _requestPaystackOnceOffAccessCode(tier, amount,
+            callbackUrl: 'https://standard.paystack.co/close');
+
+    if (accessCode == null || accessCode.isEmpty) {
+      _showSnack(
+        'Could not initialize the one-off Paystack payment. Please try again.',
+      );
+      return;
+    }
+
+    try {
+      final userRef = _userDocRef();
+      StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? subscription;
+      bool creditedByWebhook = false;
+
+      if (userRef != null) {
+        subscription = userRef.snapshots().listen((snapshot) {
+          if (!snapshot.exists) return;
+          final newCredits =
+              (snapshot.data()?['credits'] as num?)?.toInt() ?? 0;
+          if (newCredits > _credits) {
+            creditedByWebhook = true;
+            debugPrint(
+                '✅ Once-off credits updated in Firestore by webhook.');
+            if (mounted) setState(() => _credits = newCredits);
+          }
+        });
+      }
+
+      final response = await _launchPaystackWithViewRetry(accessCode);
+      await subscription?.cancel();
+
+      final isSuccess =
+          response.status.toLowerCase() == 'success' || creditedByWebhook;
+
+      if (isSuccess) {
+        if (!creditedByWebhook) {
+          debugPrint(
+              'DEBUG once-off purchase metadata dump: tier=${tier.name}, credits=${tier.credits}, amount=$amount, ref=${response.reference}, uid=$_authUid, email=$_authEmail');
+          await _completeOnceOffPurchase(
+            tier,
+            amount: amount,
+            status: 'completed_live_paystack_once_off',
+            reference: response.reference,
+            sourceLabel: 'Paystack Live Once-Off',
+          );
+        } else {
+          _showSnack('Credits added successfully.');
+        }
+      } else {
+        _showSnack(response.message);
+      }
+    } catch (e) {
+      debugPrint('Once-off payment error: $e');
       _showSnack('Payment error: ${e.toString()}');
     }
   }
