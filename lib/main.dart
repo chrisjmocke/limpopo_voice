@@ -122,80 +122,117 @@ class _LetsTalkAppState extends State<LetsTalkApp> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Let\'s Talk',
-      debugShowCheckedModeBanner: false,
-      themeMode: ThemeMode.dark, // Fixed to dark mode only
-      darkTheme: ThemeData(
-        brightness: Brightness.dark,
-        fontFamily: 'monospace',
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF4CAF50), // Natural green
-          primary: const Color(0xFF66BB6A), // Lighter green
-          secondary: const Color(0xFFA5D6A7), // Even lighter green
+    final isLightTheme = _themeMode == ThemeMode.light;
+    final overlayStyle = SystemUiOverlayStyle(
+      statusBarColor: isLightTheme ? const Color(0xFFF7F5F0) : Colors.black,
+      statusBarIconBrightness: isLightTheme ? Brightness.dark : Brightness.light,
+      statusBarBrightness: isLightTheme ? Brightness.light : Brightness.dark,
+      systemNavigationBarColor: isLightTheme
+          ? const Color(0xFFF7F5F0)
+          : Colors.black,
+      systemNavigationBarDividerColor: isLightTheme
+          ? const Color(0xFFF7F5F0)
+          : Colors.black,
+      systemNavigationBarIconBrightness:
+          isLightTheme ? Brightness.dark : Brightness.light,
+      systemStatusBarContrastEnforced: true,
+      systemNavigationBarContrastEnforced: true,
+    );
+
+    SystemChrome.setSystemUIOverlayStyle(overlayStyle);
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: overlayStyle,
+      child: MaterialApp(
+        title: 'Let\'s Talk',
+        debugShowCheckedModeBanner: false,
+        themeMode: _themeMode,
+        darkTheme: ThemeData(
           brightness: Brightness.dark,
-          surface:
-              const Color(0xFF03070D), // Same as headerwordmark darkest color
-          surfaceContainerHighest:
-              const Color(0xFF0D1A2A), // Headerwordmark middle color
-        ),
-        scaffoldBackgroundColor:
-            const Color(0xFF03070D), // Pure black from headerwordmark
-        canvasColor: const Color(0xFF03070D), // Same as scaffold
-        useMaterial3: true,
-      ),
-      builder: (context, child) {
-        final media = MediaQuery.of(context);
-        return MediaQuery(
-          data: media.copyWith(textScaler: const TextScaler.linear(1.0)),
-          child: DefaultTextStyle.merge(
-            style: const TextStyle(
-              fontFamily: 'monospace',
-              fontWeight: FontWeight.w900,
-              fontSize: 18,
-              shadows: [
-                Shadow(
-                  color: Color(0x66000000),
-                  blurRadius: 0,
-                  offset: Offset(1.5, 0),
-                ),
-                Shadow(
-                  color: Color(0x66000000),
-                  blurRadius: 0,
-                  offset: Offset(-1.5, 0),
-                ),
-                Shadow(
-                  color: Color(0x66000000),
-                  blurRadius: 0,
-                  offset: Offset(0, 1.5),
-                ),
-                Shadow(
-                  color: Color(0x4D000000),
-                  blurRadius: 0,
-                  offset: Offset(0, -1),
-                ),
-                Shadow(
-                  color: Color(0x55000000),
-                  blurRadius: 0,
-                  offset: Offset(1, 1),
-                ),
-                Shadow(
-                  color: Color(0x55000000),
-                  blurRadius: 0,
-                  offset: Offset(-1, 1),
-                ),
-                Shadow(
-                  color: Color(0x66000000),
-                  blurRadius: 2,
-                  offset: Offset(0, 2),
-                ),
-              ],
-            ),
-            child: child ?? const SizedBox.shrink(),
+          fontFamily: 'monospace',
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF4CAF50), // Natural green
+            primary: const Color(0xFF66BB6A), // Lighter green
+            secondary: const Color(0xFFA5D6A7), // Even lighter green
+            brightness: Brightness.dark,
+            surface:
+                const Color(0xFF03070D), // Same as headerwordmark darkest color
+            surfaceContainerHighest:
+                const Color(0xFF0D1A2A), // Headerwordmark middle color
           ),
-        );
-      },
-      home: HomeScreen(onToggleTheme: _toggleTheme),
+          scaffoldBackgroundColor:
+              const Color(0xFF03070D), // Pure black from headerwordmark
+          canvasColor: const Color(0xFF03070D), // Same as scaffold
+          useMaterial3: true,
+        ),
+        theme: ThemeData(
+          brightness: Brightness.light,
+          fontFamily: 'monospace',
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF4CAF50),
+            primary: const Color(0xFF66BB6A),
+            secondary: const Color(0xFFA5D6A7),
+            brightness: Brightness.light,
+            surface: const Color(0xFFF7F5F0),
+            surfaceContainerHighest: const Color(0xFFF0EAE1),
+          ),
+          scaffoldBackgroundColor: const Color(0xFFF7F5F0),
+          canvasColor: const Color(0xFFF7F5F0),
+          useMaterial3: true,
+        ),
+        builder: (context, child) {
+          final media = MediaQuery.of(context);
+          return MediaQuery(
+            data: media.copyWith(textScaler: const TextScaler.linear(1.0)),
+            child: DefaultTextStyle.merge(
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontWeight: FontWeight.w900,
+                fontSize: 18,
+                shadows: [
+                  Shadow(
+                    color: Color(0x66000000),
+                    blurRadius: 0,
+                    offset: Offset(1.5, 0),
+                  ),
+                  Shadow(
+                    color: Color(0x66000000),
+                    blurRadius: 0,
+                    offset: Offset(-1.5, 0),
+                  ),
+                  Shadow(
+                    color: Color(0x66000000),
+                    blurRadius: 0,
+                    offset: Offset(0, 1.5),
+                  ),
+                  Shadow(
+                    color: Color(0x4D000000),
+                    blurRadius: 0,
+                    offset: Offset(0, -1),
+                  ),
+                  Shadow(
+                    color: Color(0x55000000),
+                    blurRadius: 0,
+                    offset: Offset(1, 1),
+                  ),
+                  Shadow(
+                    color: Color(0x55000000),
+                    blurRadius: 0,
+                    offset: Offset(-1, 1),
+                  ),
+                  Shadow(
+                    color: Color(0x66000000),
+                    blurRadius: 2,
+                    offset: Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: child ?? const SizedBox.shrink(),
+            ),
+          );
+        },
+        home: HomeScreen(onToggleTheme: _toggleTheme),
+      ),
     );
   }
 }
@@ -509,6 +546,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final FocusNode _inputFocusNode = FocusNode();
+  final GlobalKey _translateInputKey = GlobalKey();
   ImageProvider? _userProfileImage;
   StreamSubscription<User?>? _authSubscription;
 
@@ -544,9 +582,9 @@ class _HomeScreenState extends State<HomeScreen> {
           title: const Text('Are you sure?'),
           content: const Text('Delete this phrase from Learn?'),
           backgroundColor:
-              isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+              isDark ? Colors.black : const Color(0xFFFFFFFF),
           surfaceTintColor:
-              isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+              isDark ? Colors.black : const Color(0xFFFFFFFF),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(false),
@@ -556,7 +594,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             TextButton(
               style: TextButton.styleFrom(
-                backgroundColor: const Color(0xFF000000),
+                backgroundColor: Colors.black,
                 foregroundColor: Colors.white,
               ),
               onPressed: () => Navigator.of(ctx).pop(true),
@@ -601,9 +639,9 @@ class _HomeScreenState extends State<HomeScreen> {
             title: const Text('Duplicate'),
             content: const Text('This phrase already exists in Learn.'),
             backgroundColor:
-                isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+                isDark ? Colors.black : const Color(0xFFFFFFFF),
             surfaceTintColor:
-                isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+                isDark ? Colors.black : const Color(0xFFFFFFFF),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(ctx).pop(),
@@ -738,7 +776,7 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           TextButton(
             style: TextButton.styleFrom(
-              backgroundColor: const Color(0xFF000000),
+              backgroundColor: Colors.black,
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             ),
@@ -764,6 +802,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String _selectedInputLang = 'English';
   String _selectedOutputLang = 'Sepedi';
   bool _showCreditsInHeader = true;
+  int _monthlyCountdownDays = 0;
 
   // Official supported South African Narakeet languages.
   static const List<String> _southAfricanLanguageList = [
@@ -1476,10 +1515,17 @@ class _HomeScreenState extends State<HomeScreen> {
     if (ref != null) {
       _creditsSubscription = ref.snapshots().listen((snapshot) {
         if (snapshot.exists) {
-          final credits = (snapshot.data()?['credits'] as num?)?.toInt();
-          if (credits != null && credits != _credits) {
-            debugPrint('Real-time credit update: $credits');
-            if (mounted) setState(() => _credits = credits);
+          final data = snapshot.data();
+          final credits = (data?['credits'] as num?)?.toInt();
+          final countdownDays = _calculateMonthlyCountdownDays(data);
+          if (mounted) {
+            setState(() {
+              if (credits != null && credits != _credits) {
+                debugPrint('Real-time credit update: $credits');
+                _credits = credits;
+              }
+              _monthlyCountdownDays = countdownDays;
+            });
           }
         }
       });
@@ -1519,13 +1565,13 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (ctx) => AlertDialog(
         scrollable: true,
         backgroundColor:
-            isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+            isDark ? Colors.black : const Color(0xFFFFFFFF),
         surfaceTintColor:
-            isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+            isDark ? Colors.black : const Color(0xFFFFFFFF),
         title: Text(
           localizedUiText('sign_in', _uiLanguage),
           style:
-              TextStyle(color: isDark ? Colors.white : const Color(0xFF000000)),
+              TextStyle(color: isDark ? Colors.white : Colors.black),
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1590,7 +1636,7 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           TextButton(
             style: TextButton.styleFrom(
-              backgroundColor: const Color(0xFF000000),
+              backgroundColor: Colors.black,
               foregroundColor: Colors.white,
             ),
             onPressed: () => Navigator.of(ctx).pop(),
@@ -1615,15 +1661,15 @@ class _HomeScreenState extends State<HomeScreen> {
           builder: (ctx, setDialogState) => AlertDialog(
             scrollable: true,
             backgroundColor:
-                isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+                isDark ? Colors.black : const Color(0xFFFFFFFF),
             surfaceTintColor:
-                isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+                isDark ? Colors.black : const Color(0xFFFFFFFF),
             title: Text(
               createAccount
                   ? localizedUiText('create_email_account', _uiLanguage)
                   : localizedUiText('sign_in_with_email', _uiLanguage),
               style: TextStyle(
-                  color: isDark ? Colors.white : const Color(0xFF000000)),
+                  color: isDark ? Colors.white : Colors.black),
             ),
             content: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1672,11 +1718,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Text(localizedUiText('cancel', _uiLanguage),
                     style: TextStyle(
                         color:
-                            isDark ? Colors.white : const Color(0xFF000000))),
+                            isDark ? Colors.white : Colors.black)),
               ),
               TextButton(
                 style: TextButton.styleFrom(
-                  backgroundColor: const Color(0xFF000000),
+                  backgroundColor: Colors.black,
                   foregroundColor: Colors.white,
                 ),
                 onPressed: _authBusy
@@ -2188,10 +2234,12 @@ class _HomeScreenState extends State<HomeScreen> {
       final doc = await docRef.get();
 
       int credits = 0;
+      int monthlyCountdownDays = 0;
 
       if (doc.exists) {
         final data = doc.data() ?? {};
         credits = data['credits'] ?? 0;
+        monthlyCountdownDays = _calculateMonthlyCountdownDays(data);
       } else {
         // Create initial document structure if it doesn't exist
         await docRef.set({
@@ -2206,9 +2254,13 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       if (mounted) {
-        setState(() => _credits = credits);
+        setState(() {
+          _credits = credits;
+          _monthlyCountdownDays = monthlyCountdownDays;
+        });
       } else {
         _credits = credits;
+        _monthlyCountdownDays = monthlyCountdownDays;
       }
     } catch (e) {
       debugPrint('Error loading credits from Firestore: $e');
@@ -3011,8 +3063,8 @@ class _HomeScreenState extends State<HomeScreen> {
         context: context,
         barrierDismissible: false,
         builder: (ctx) => AlertDialog(
-          backgroundColor: const Color(0xFF000000),
-          surfaceTintColor: const Color(0xFF000000),
+          backgroundColor: Colors.black,
+          surfaceTintColor: Colors.black,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(18),
             side: const BorderSide(color: Color(0xFFF7F7F7), width: 2.5),
@@ -3837,24 +3889,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _showSnack(String m) {
-    final messenger = ScaffoldMessenger.maybeOf(context);
-    if (messenger == null) return;
-
-    messenger.showSnackBar(
-      SnackBar(
-        content: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Expanded(
-              child: Text(
-                m,
-                textAlign: TextAlign.center,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
+    // Toasts disabled by request.
+    debugPrint('Snack suppressed: $m');
   }
 
   Future<void> _sendHistoryToLearn(HistoryItem item) async {
@@ -3908,14 +3944,14 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor:
-          isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+          isDark ? Colors.black : const Color(0xFFFFFFFF),
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) {
         return Material(
-          color: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+          color: isDark ? Colors.black : const Color(0xFFFFFFFF),
           surfaceTintColor:
-              isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+              isDark ? Colors.black : const Color(0xFFFFFFFF),
           child: SafeArea(
             top: false,
             child: ConstrainedBox(
@@ -3934,7 +3970,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           Icon(Icons.account_balance_wallet,
                               color: isDark
                                   ? Colors.white
-                                  : const Color(0xFF000000)),
+                                  : Colors.black),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
@@ -3944,7 +3980,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 fontWeight: FontWeight.bold,
                                 color: isDark
                                     ? Colors.white
-                                    : const Color(0xFF000000),
+                                    : Colors.black,
                               ),
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -3988,12 +4024,12 @@ class _HomeScreenState extends State<HomeScreen> {
                               style: TextStyle(
                                 color: isDark
                                     ? Colors.white
-                                    : const Color(0xFF000000),
+                                    : Colors.black,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
                             backgroundColor:
-                                isDark ? Colors.black : Colors.white,
+                                isDark ? Colors.black : const Color(0xFFFFFFFF),
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(8)),
                           ),
@@ -4027,7 +4063,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   foregroundColor:
                                       isDark ? Colors.white : Colors.black,
                                   backgroundColor:
-                                      isDark ? Colors.black : Colors.white,
+                                      isDark ? Colors.black : const Color(0xFFFFFFFF),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(8),
                                   ),
@@ -4174,15 +4210,15 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor:
-          isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+          isDark ? Colors.black : const Color(0xFFFFFFFF),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) {
         return Material(
-          color: isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+          color: isDark ? Colors.black : const Color(0xFFFFFFFF),
           surfaceTintColor:
-              isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+              isDark ? Colors.black : const Color(0xFFFFFFFF),
           child: SafeArea(
             top: false,
             child: ConstrainedBox(
@@ -4202,7 +4238,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           fontSize: 18,
                           fontWeight: FontWeight.bold,
                           color:
-                              isDark ? Colors.white : const Color(0xFF000000),
+                              isDark ? Colors.white : Colors.black,
                         ),
                       ),
                       const SizedBox(height: 6),
@@ -4292,6 +4328,39 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _formatShortDate(DateTime date) {
     return '${date.day}/${date.month}/${date.year}';
+  }
+
+  int _calculateMonthlyCountdownDays(Map<String, dynamic>? data) {
+    if (data == null) return 0;
+
+    final now = DateTime.now();
+    DateTime? expiryDate;
+
+    final nextAutoDebitAt = data['nextAutoDebitAt'];
+    if (data['monthlyRenewalActive'] == true && nextAutoDebitAt is Timestamp) {
+      expiryDate = nextAutoDebitAt.toDate();
+    }
+
+    final subscriptionPeriodEnd = data['subscriptionPeriodEnd'];
+    if (expiryDate == null &&
+        (data['subscriptionStatus'] == 'active_once_off' ||
+            data['tierActive'] == true) &&
+        subscriptionPeriodEnd is Timestamp) {
+      expiryDate = subscriptionPeriodEnd.toDate();
+    }
+
+    final cancelledUntil = data['cancelledUntil'];
+    if (expiryDate == null &&
+        (data['monthlyDebitCancelled'] == true ||
+            data['subscriptionStatus'] == 'cancelled_pending_expiry') &&
+        cancelledUntil is Timestamp) {
+      expiryDate = cancelledUntil.toDate();
+    }
+
+    if (expiryDate == null) return 0;
+
+    final remaining = expiryDate.difference(now).inDays;
+    return remaining < 0 ? 0 : remaining;
   }
 
   Future<bool> _cancelPaystackSubscriptionOnServer() async {
@@ -4887,11 +4956,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                         onTap: _showCreditTiers,
                                         child: Container(
                                           padding: const EdgeInsets.symmetric(
-                                              horizontal: 8, vertical: 4),
+                                              horizontal: 10, vertical: 5),
                                           decoration: BoxDecoration(
                                             color: isDark
                                                 ? Colors.white12
-                                                : const Color(0xFFF1F3F5),
+                                                : const Color(0xFFEAE3D7),
                                             borderRadius:
                                                 BorderRadius.circular(999),
                                           ),
@@ -4902,7 +4971,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                               fontWeight: FontWeight.w700,
                                               color: isDark
                                                   ? Colors.white
-                                                  : const Color(0xFF000000),
+                                                  : Colors.black,
                                             ),
                                           ),
                                         ),
@@ -4923,20 +4992,28 @@ class _HomeScreenState extends State<HomeScreen> {
                                             ),
                                           ),
                                         )
-                                      : IconButton(
-                                          tooltip: 'Scan text from image',
-                                          onPressed: _showImageSourcePicker,
-                                          icon: Icon(
-                                            Icons.camera_alt_outlined,
-                                            size: 20,
+                                      : Container(
+                                          decoration: BoxDecoration(
                                             color: isDark
-                                                ? Colors.white
-                                                : Colors.black,
+                                                ? Colors.transparent
+                                                : const Color(0xFFF7F5F0),
+                                            shape: BoxShape.circle,
                                           ),
-                                          padding: EdgeInsets.zero,
-                                          constraints: const BoxConstraints(
-                                            minWidth: 28,
-                                            minHeight: 28,
+                                          child: IconButton(
+                                            tooltip: 'Scan text from image',
+                                            onPressed: _showImageSourcePicker,
+                                            icon: Icon(
+                                              Icons.camera_alt_outlined,
+                                              size: 20,
+                                              color: isDark
+                                                  ? Colors.white
+                                                  : Colors.black,
+                                            ),
+                                            padding: EdgeInsets.zero,
+                                            constraints: const BoxConstraints(
+                                              minWidth: 28,
+                                              minHeight: 28,
+                                            ),
                                           ),
                                         ),
                                 ),
@@ -4952,7 +5029,33 @@ class _HomeScreenState extends State<HomeScreen> {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const SizedBox(width: 8),
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: isDark
+                                      ? Colors.transparent
+                                      : const Color(0xFFF7F5F0),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: IconButton(
+                                  tooltip: Theme.of(context).brightness == Brightness.dark
+                                      ? 'Switch to light mode'
+                                      : 'Switch to dark mode',
+                                  onPressed: widget.onToggleTheme,
+                                  icon: Icon(
+                                    Theme.of(context).brightness == Brightness.dark
+                                        ? Icons.light_mode_outlined
+                                        : Icons.dark_mode_outlined,
+                                    size: 18,
+                                    color: isDark ? Colors.white : Colors.black,
+                                  ),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(
+                                    minWidth: 28,
+                                    minHeight: 28,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
                               PopupMenuButton<int>(
                                 tooltip: 'User menu',
                                 icon: Stack(
@@ -4972,11 +5075,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ],
                                 ),
                                 color: isDark
-                                    ? const Color(0xFF000000)
-                                    : const Color(0xFFFFFFFF),
+                                    ? Colors.black
+                                    : const Color(0xFFF7F5F0),
                                 surfaceTintColor: isDark
-                                    ? const Color(0xFF000000)
-                                    : const Color(0xFFFFFFFF),
+                                    ? Colors.black
+                                    : const Color(0xFFF7F5F0),
                                 offset: const Offset(0, 40),
                                 shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12)),
@@ -5084,12 +5187,43 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 color: isDark
                                                     ? Colors.white
                                                     : Colors.black),
-                                            title: Text('Credits',
+                                            title: RichText(
+                                              text: TextSpan(
                                                 style: TextStyle(
-                                                    color: isDark
-                                                        ? Colors.white
-                                                        : const Color(
-                                                            0xFF000000))),
+                                                  color: isDark
+                                                      ? Colors.white
+                                                      : const Color(
+                                                          0xFF21353D),
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                                children: [
+                                                  TextSpan(
+                                                    text: '$_credits ',
+                                                    style: const TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.w700,
+                                                    ),
+                                                  ),
+                                                  const TextSpan(text: 'Credits'),
+                                                ],
+                                              ),
+                                            ),
+                                            subtitle: _monthlyCountdownDays > 0
+                                                ? Text(
+                                                    '${_monthlyCountdownDays}d left',
+                                                    style: TextStyle(
+                                                      fontSize: 11,
+                                                      color: isDark
+                                                          ? const Color(
+                                                              0xFFFFD166)
+                                                          : const Color(
+                                                              0xFFB26A00),
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                    ),
+                                                  )
+                                                : null,
                                             onTap: () {
                                               Navigator.pop(context);
                                               _showCreditTiers();
@@ -5276,7 +5410,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
-                    color: isDark ? Colors.white : const Color(0xFF000000),
+                    color: isDark ? Colors.white : Colors.black,
                   ),
                 ),
               ),
@@ -5343,7 +5477,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   decoration: BoxDecoration(
-                    color: Colors.black,
+                    color: isDark ? Colors.black : const Color(0xFFF7F5F0),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Row(
@@ -5361,7 +5495,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     fontSize: 16 * _currentTextScale,
                                     fontFamily: 'monospace',
                                     fontWeight: FontWeight.w600,
-                                    color: Colors.white,
+                                    color: isDark ? Colors.white : Colors.black,
                                   ),
                                 ),
                                 const SizedBox(height: 3),
@@ -5371,7 +5505,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                     fontSize: 12 * _currentTextScale,
                                     fontFamily: 'monospace',
                                     fontWeight: FontWeight.w500,
-                                    color: Colors.white60,
+                                    color: isDark
+                                        ? Colors.white60
+                                        : Colors.black54,
                                   ),
                                 ),
                               ],
@@ -5380,10 +5516,12 @@ class _HomeScreenState extends State<HomeScreen> {
                               const SizedBox(height: 2),
                               Text(
                                 phrase['phonetic']!,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 12,
                                   fontStyle: FontStyle.italic,
-                                  color: Colors.white70,
+                                  color: isDark
+                                      ? Colors.white70
+                                      : Colors.black54,
                                 ),
                               ),
                             ],
@@ -5391,7 +5529,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.volume_up, color: Colors.white),
+                        icon: Icon(
+                          Icons.volume_up,
+                          color: isDark ? Colors.white : Colors.black,
+                        ),
                         tooltip: 'Listen',
                         onPressed: () => _playLearnPhraseAudio(
                           language: _selectedLearnLang,
@@ -5401,7 +5542,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       if (isUserPhrase)
                         IconButton(
-                          icon: const Icon(Icons.close, color: Colors.white70),
+                          icon: Icon(
+                            Icons.close,
+                            color: isDark ? Colors.white70 : Colors.black54,
+                          ),
                           tooltip: 'Delete',
                           onPressed: () => _deleteUserPhrase(idx),
                         ),
@@ -5441,10 +5585,12 @@ class _HomeScreenState extends State<HomeScreen> {
       label: Text(label),
       selected: isSelected,
       showCheckmark: false,
-      selectedColor: Colors.white,
-      backgroundColor: Colors.black,
+      selectedColor: isDark ? Colors.white : const Color(0xFFEAE3D7),
+      backgroundColor: isDark ? Colors.black : const Color(0xFFF7F5F0),
       labelStyle: TextStyle(
-        color: isSelected ? Colors.black : Colors.white70,
+        color: isSelected
+            ? (isDark ? Colors.black : Colors.black)
+            : (isDark ? Colors.white70 : Colors.black54),
         fontWeight: FontWeight.w700,
       ),
       side: BorderSide.none,
@@ -5476,7 +5622,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       margin: const EdgeInsets.only(bottom: 12),
                       padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                       decoration: BoxDecoration(
-                        color: isDark ? Colors.black : Colors.black,
+                        color: isDark ? Colors.black : const Color(0xFFF7F5F0),
                         borderRadius: BorderRadius.circular(16),
                       ),
                       child: Stack(
@@ -5535,47 +5681,106 @@ class _HomeScreenState extends State<HomeScreen> {
                                             ),
                                           Align(
                                             alignment: Alignment.topLeft,
-                                            child: TextField(
-                                              controller: _tttController,
-                                              focusNode: _inputFocusNode,
-                                              autofocus: false,
-                                              enableSuggestions: true,
-                                              autocorrect: true,
-                                              keyboardType:
-                                                  TextInputType.multiline,
-                                              textCapitalization:
-                                                  TextCapitalization.sentences,
-                                              cursorColor: isDark
-                                                  ? Colors.white
-                                                  : Colors.black,
-                                              style: TextStyle(
-                                                fontFamily: 'monospace',
-                                                fontSize: 16 * _currentTextScale,
-                                                color: isDark
+                                            child: GestureDetector(
+                                              behavior:
+                                                  HitTestBehavior.translucent,
+                                              onTapUp: (details) {
+                                                final text = _tttController.text;
+                                                final renderBox = _translateInputKey
+                                                        .currentContext
+                                                        ?.findRenderObject()
+                                                    as RenderBox?;
+                                                if (renderBox == null) {
+                                                  return;
+                                                }
+                                                final local = renderBox
+                                                    .globalToLocal(
+                                                        details.globalPosition);
+                                                final textDirection =
+                                                    Directionality.of(context);
+                                                final painter = TextPainter(
+                                                  text: TextSpan(
+                                                    text: text,
+                                                    style: TextStyle(
+                                                      fontFamily: 'monospace',
+                                                      fontSize:
+                                                          16 * _currentTextScale,
+                                                      color: isDark
+                                                          ? Colors.white
+                                                          : Colors.black,
+                                                    ),
+                                                  ),
+                                                  textDirection: textDirection,
+                                                  maxLines: 3,
+                                                )..layout(
+                                                  maxWidth: renderBox.size.width,
+                                                );
+                                                if (text.isEmpty) {
+                                                  _tttController.selection =
+                                                      const TextSelection.collapsed(
+                                                          offset: 0);
+                                                  return;
+                                                }
+                                                final position = painter
+                                                    .getPositionForOffset(local);
+                                                _tttController.selection =
+                                                    TextSelection.fromPosition(
+                                                        position);
+                                              },
+                                              child: TextField(
+                                                key: _translateInputKey,
+                                                controller: _tttController,
+                                                focusNode: _inputFocusNode,
+                                                autofocus: false,
+                                                enableSuggestions: true,
+                                                autocorrect: true,
+                                                enableInteractiveSelection: true,
+                                                toolbarOptions: const ToolbarOptions(
+                                                  copy: true,
+                                                  cut: true,
+                                                  paste: true,
+                                                  selectAll: true,
+                                                ),
+                                                selectionControls:
+                                                    materialTextSelectionControls,
+                                                keyboardType:
+                                                    TextInputType.multiline,
+                                                textCapitalization:
+                                                    TextCapitalization.sentences,
+                                                cursorColor: isDark
                                                     ? Colors.white
                                                     : Colors.black,
-                                              ),
-                                              decoration: InputDecoration(
-                                                border: InputBorder.none,
-                                                hintText: _showHintText
-                                                    ? 'Tap here to type a sentence...'
-                                                    : '',
-                                                hintStyle: TextStyle(
+                                                style: TextStyle(
+                                                  fontFamily: 'monospace',
+                                                  fontSize:
+                                                      16 * _currentTextScale,
                                                   color: isDark
-                                                      ? Colors.white54
-                                                      : Colors.black54,
-                                                  fontStyle: FontStyle.italic,
+                                                      ? Colors.white
+                                                      : Colors.black,
                                                 ),
-                                                isDense: true,
-                                                contentPadding: EdgeInsets.zero,
+                                                decoration: InputDecoration(
+                                                  border: InputBorder.none,
+                                                  hintText: _showHintText
+                                                      ? 'Tap here to type a sentence...'
+                                                      : '',
+                                                  hintStyle: TextStyle(
+                                                    color: isDark
+                                                        ? Colors.white54
+                                                        : Colors.black54,
+                                                    fontStyle: FontStyle.italic,
+                                                  ),
+                                                  isDense: true,
+                                                  contentPadding: EdgeInsets.zero,
+                                                ),
+                                                minLines: 1,
+                                                maxLines: 3,
+                                                readOnly: false,
+                                                showCursor: true,
+                                                onChanged: (_) => setState(() {}),
+                                                onSubmitted: (_) => _submitTTT(),
+                                                textInputAction:
+                                                    TextInputAction.send,
                                               ),
-                                              minLines: 1,
-                                              maxLines: 3,
-                                              readOnly: false,
-                                              onChanged: (_) => setState(() {}),
-                                              onSubmitted: (_) => _submitTTT(),
-                                              textInputAction:
-                                                  TextInputAction.send,
                                             ),
                                           ),
                                         ],
@@ -5598,7 +5803,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             child: IconButton(
                               icon: const Icon(Icons.replay, size: 26),
                               tooltip: 'Replay Input',
-                              color: isDark ? Colors.white : Colors.black,
+                              color: isDark ? Colors.white : const Color(0xFF3A2F2A),
                               onPressed: _spokenText.isNotEmpty
                                   ? () => _speakText(
                                       _spokenText, _selectedInputLang)
@@ -5615,16 +5820,23 @@ class _HomeScreenState extends State<HomeScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 2),
                     child: Center(
                       child: Transform.translate(
-                        offset: const Offset(0, -4), // Move up by 4 pixels
-                        child: Material(
-                          color: isDark ? Colors.black : Colors.white,
-                          shape: const CircleBorder(),
-                          elevation: 2,
+                        offset: const Offset(0, -4),
+                        child: Container(
+                          width: 46,
+                          height: 46,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF7F5F0),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: const Color(0xFFF7F5F0),
+                              width: 1,
+                            ),
+                          ),
                           child: IconButton(
                             icon: Icon(
                               Icons.swap_vert,
-                              size: 36,
-                              color: isDark ? Colors.white : Colors.black,
+                              size: 30,
+                              color: const Color(0xFF3A2F2A),
                             ),
                             tooltip: 'Swap languages',
                             onPressed: () => setState(() {
@@ -5633,6 +5845,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               _selectedOutputLang = tmp;
                               unawaited(_saveSelectedLanguagesToDevice());
                             }),
+                            splashColor: Colors.transparent,
+                            highlightColor: Colors.transparent,
                           ),
                         ),
                       ),
@@ -5646,7 +5860,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     margin: const EdgeInsets.only(bottom: 8),
                     padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                     decoration: BoxDecoration(
-                      color: isDark ? Colors.black : Colors.black,
+                      color: isDark ? Colors.black : const Color(0xFFF7F5F0),
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: Stack(
@@ -5719,7 +5933,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           child: IconButton(
                             icon: const Icon(Icons.replay, size: 26),
                             tooltip: 'Replay Output',
-                            color: isDark ? Colors.white : Colors.black,
+                            color: isDark ? Colors.white : const Color(0xFF3A2F2A),
                             onPressed: _translatedText.isNotEmpty
                                 ? () => _speakText(
                                     _translatedText, _selectedOutputLang)
@@ -5739,7 +5953,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           style: ElevatedButton.styleFrom(
                             backgroundColor: isDark
                                 ? Colors.transparent
-                                : const Color(0xFFE3F0FF),
+                                : const Color(0xFFF7F5F0),
                             foregroundColor:
                                 isDark ? Colors.white : Colors.black,
                             padding: const EdgeInsets.symmetric(
@@ -5805,16 +6019,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                     padding: const EdgeInsets.all(8),
                                   )
                                 : Container(
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
+                                    decoration: const BoxDecoration(
+                                      color: Color(0xFFF7F5F0),
                                       shape: BoxShape.circle,
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.black.withValues(alpha: 0.10),
-                                          blurRadius: 8,
-                                          offset: const Offset(0, 2),
-                                        ),
-                                      ],
                                     ),
                                     child: IconButton(
                                       onPressed: _cycleFontSize,
@@ -5844,11 +6051,13 @@ class _HomeScreenState extends State<HomeScreen> {
                                     child: CircularProgressIndicator(
                                       value: _isTalking ? _talkHoldProgress : 0.0,
                                       strokeWidth: 4,
-                                      backgroundColor:
-                                          Colors.white.withValues(alpha: 0.22),
+                                      backgroundColor: isDark
+                                          ? Colors.white.withValues(alpha: 0.22)
+                                          : Colors.black.withValues(alpha: 0.12),
                                       valueColor:
-                                          const AlwaysStoppedAnimation<Color>(
-                                              Colors.white),
+                                          AlwaysStoppedAnimation<Color>(
+                                            isDark ? Colors.white : Colors.black,
+                                          ),
                                     ),
                                   ),
                                   AnimatedContainer(
@@ -5914,16 +6123,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                     padding: const EdgeInsets.all(12),
                                   )
                                 : Container(
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
+                                    decoration: const BoxDecoration(
+                                      color: Color(0xFFF7F5F0),
                                       shape: BoxShape.circle,
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.black.withValues(alpha: 0.10),
-                                          blurRadius: 8,
-                                          offset: const Offset(0, 2),
-                                        ),
-                                      ],
                                     ),
                                     child: IconButton(
                                       onPressed:
@@ -5962,7 +6164,7 @@ class _HomeScreenState extends State<HomeScreen> {
         (langs.contains('isiZulu') && langs.contains('Afrikaans')) &&
         value == _selectedInputLang;
     final dropdownColor = isDark
-        ? const Color(0xFF000000)
+        ? Colors.black
         : isOutputDropdown
             ? const Color(0xFFD9C7A3)
             : Colors.white;
@@ -5975,7 +6177,7 @@ class _HomeScreenState extends State<HomeScreen> {
             : isOutputDropdown
                 ? const Color(0xFFD9C7A3)
                 : isInputDropdown
-                    ? const Color(0xFFE0F8D8)
+                    ? const Color(0xFFF7F5F0)
                     : Colors.transparent,
       ),
       child: Theme(
@@ -5988,7 +6190,7 @@ class _HomeScreenState extends State<HomeScreen> {
             value: value,
             dropdownColor: dropdownColor,
             style: TextStyle(
-                color: isDark ? Colors.white : const Color(0xFF000000),
+                color: isDark ? Colors.white : Colors.black,
                 fontWeight: FontWeight.w600,
                 fontFamily: 'monospace',
                 fontSize: 16),
@@ -6141,9 +6343,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   if (_historyEditMode) ...[
                     // Cancel selection
                     Material(
-                      color: isDark ? Colors.black : Colors.white,
+                      color: isDark ? Colors.black : const Color(0xFFF7F5F0),
                       shape: const CircleBorder(),
-                      elevation: 2,
+                      elevation: 0,
                       child: IconButton(
                         onPressed: () {
                           setState(() {
@@ -6164,9 +6366,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     if (_historyEditAction == HistoryEditAction.share)
                       // Export chosen selected items (Share)
                       Material(
-                        color: isDark ? Colors.black : Colors.white,
+                        color: isDark ? Colors.black : const Color(0xFFF7F5F0),
                         shape: const CircleBorder(),
-                        elevation: 2,
+                        elevation: 0,
                         child: IconButton(
                           onPressed: _selectedHistoryIndices.isEmpty
                               ? null
@@ -6194,9 +6396,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     if (_historyEditAction == HistoryEditAction.delete)
                       // Delete chosen selected items
                       Material(
-                        color: isDark ? Colors.black : Colors.white,
+                        color: isDark ? Colors.black : const Color(0xFFF7F5F0),
                         shape: const CircleBorder(),
-                        elevation: 2,
+                        elevation: 0,
                         child: IconButton(
                           onPressed: _selectedHistoryIndices.isEmpty
                               ? null
@@ -6211,10 +6413,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                         content: Text(
                                             'Delete the ${_selectedHistoryIndices.length} selected translations?'),
                                         backgroundColor: isDark
-                                            ? const Color(0xFF000000)
+                                            ? Colors.black
                                             : const Color(0xFFFFFFFF),
                                         surfaceTintColor: isDark
-                                            ? const Color(0xFF000000)
+                                            ? Colors.black
                                             : const Color(0xFFFFFFFF),
                                         actions: [
                                           TextButton(
@@ -6229,7 +6431,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                           TextButton(
                                             style: TextButton.styleFrom(
                                               backgroundColor:
-                                                  const Color(0xFF000000),
+                                                  Colors.black,
                                               foregroundColor: Colors.white,
                                             ),
                                             onPressed: () =>
@@ -6270,9 +6472,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   ] else ...[
                     // Toggle Share Select Mode
                     Material(
-                      color: isDark ? Colors.black : Colors.white,
+                      color: isDark ? Colors.black : const Color(0xFFF7F5F0),
                       shape: const CircleBorder(),
-                      elevation: 2,
+                      elevation: 0,
                       child: IconButton(
                         onPressed: () {
                           setState(() {
@@ -6293,9 +6495,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     const SizedBox(width: 8),
                     // Toggle Delete Select Mode
                     Material(
-                      color: isDark ? Colors.black : Colors.white,
+                      color: isDark ? Colors.black : const Color(0xFFF7F5F0),
                       shape: const CircleBorder(),
-                      elevation: 2,
+                      elevation: 0,
                       child: IconButton(
                         onPressed: () {
                           setState(() {
@@ -6317,9 +6519,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   const Spacer(),
                   // Clear History Icon Button (far right)
                   Material(
-                    color: isDark ? Colors.black : Colors.white,
+                    color: isDark ? Colors.black : const Color(0xFFF7F5F0),
                     shape: const StadiumBorder(),
-                    elevation: 2,
+                    elevation: 0,
                     child: InkWell(
                       borderRadius: BorderRadius.circular(100),
                       onTap: () async {
@@ -6332,10 +6534,10 @@ class _HomeScreenState extends State<HomeScreen> {
                               title: const Text('Are you sure?'),
                               content: const Text('Clear all History?'),
                               backgroundColor: isDark
-                                  ? const Color(0xFF000000)
+                                  ? Colors.black
                                   : const Color(0xFFFFFFFF),
                               surfaceTintColor: isDark
-                                  ? const Color(0xFF000000)
+                                  ? Colors.black
                                   : const Color(0xFFFFFFFF),
                               actions: [
                                 TextButton(
@@ -6348,7 +6550,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                                 TextButton(
                                   style: TextButton.styleFrom(
-                                    backgroundColor: const Color(0xFF000000),
+                                    backgroundColor: Colors.black,
                                     foregroundColor: Colors.white,
                                   ),
                                   onPressed: () => Navigator.of(ctx).pop(true),
@@ -6404,7 +6606,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   final isSelected = _selectedHistoryIndices.contains(i);
                   return Card(
                     margin: const EdgeInsets.only(bottom: 12),
-                    color: isDark ? Colors.black : Colors.black,
+                    color: isDark ? Colors.black : const Color(0xFFF7F5F0),
                     elevation: 0,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -6477,7 +6679,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             style: ElevatedButton.styleFrom(
                               backgroundColor: isDark
                                   ? Colors.transparent
-                                  : const Color(0xFFE3F0FF),
+                                  : const Color(0xFFF7F5F0),
                               foregroundColor:
                                   isDark ? Colors.white : Colors.black,
                               padding: const EdgeInsets.symmetric(
