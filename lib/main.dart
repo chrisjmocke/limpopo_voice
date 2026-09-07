@@ -17,8 +17,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
@@ -827,6 +829,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _tttController = TextEditingController();
   bool _showHintText = true;
   bool _showTalkHintText = true;
+  bool _isScanningText = false;
   int _credits = 10;
   String? _authUid;
   String? _authEmail;
@@ -854,6 +857,210 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _fontSizeLevel = (_fontSizeLevel + 1) % 3;
     });
+  }
+
+  Future<bool> _ensureImagePermission(ImageSource source) async {
+    if (source == ImageSource.camera) {
+      final status = await Permission.camera.request();
+      if (status.isGranted || status.isLimited) return true;
+
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Camera permission is required to scan text using the camera.'),
+        ),
+      );
+
+      if (status.isPermanentlyDenied) {
+        await openAppSettings();
+      }
+      return false;
+    }
+
+    if (Platform.isAndroid) {
+      final androidInfo = await DeviceInfoPlugin().androidInfo;
+      final sdkInt = androidInfo.version.sdkInt;
+
+      if (sdkInt >= 33) {
+        final status = await Permission.photos.request();
+        if (status.isGranted || status.isLimited) return true;
+
+        if (!mounted) return false;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Photo access is required to scan text from your gallery.'),
+          ),
+        );
+
+        if (status.isPermanentlyDenied) {
+          await openAppSettings();
+        }
+        return false;
+      }
+
+      final status = await Permission.storage.request();
+      if (status.isGranted || status.isLimited) return true;
+
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Gallery access is required to scan text from your photos.'),
+        ),
+      );
+
+      if (status.isPermanentlyDenied) {
+        await openAppSettings();
+      }
+      return false;
+    }
+
+    final status = await Permission.photos.request();
+    if (status.isGranted || status.isLimited) return true;
+
+    if (!mounted) return false;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Photo access is required to scan text from your gallery.'),
+      ),
+    );
+
+    if (status.isPermanentlyDenied) {
+      await openAppSettings();
+    }
+    return false;
+  }
+
+  Future<void> _scanTextFromImageSource(
+      TextEditingController inputController, ImageSource source) async {
+    if (!await _ensureImagePermission(source)) return;
+
+    final ImagePicker picker = ImagePicker();
+    final XFile? image = await picker.pickImage(source: source);
+
+    if (image == null) return;
+
+    setState(() {
+      _isScanningText = true;
+    });
+
+    final inputImage = InputImage.fromFilePath(image.path);
+    final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+
+    try {
+      final RecognizedText recognizedText =
+          await textRecognizer.processImage(inputImage);
+
+      if (!mounted) return;
+
+      final commonWatermarks = <RegExp>[
+        RegExp(r'\bKATBOK\b', caseSensitive: false),
+        RegExp(r'\bkatbok\b', caseSensitive: false),
+        RegExp(r'\bCAMERA\b', caseSensitive: false),
+        RegExp(r'\bPHOTO\b', caseSensitive: false),
+        RegExp(r'\bGALLERY\b', caseSensitive: false),
+        RegExp(r'\bSCAN\b', caseSensitive: false),
+        RegExp(r'\bTEXT\b', caseSensitive: false),
+        RegExp(r'\bLENS\b', caseSensitive: false),
+        RegExp(r'\bAPP\b', caseSensitive: false),
+        RegExp(r'\bWATERMARK\b', caseSensitive: false),
+      ];
+
+      final filteredLines = recognizedText.blocks
+          .expand((block) => block.lines)
+          .map((line) => line.text.trim())
+          .where((line) => line.isNotEmpty)
+          .map((line) {
+            var cleaned = line;
+            for (final pattern in commonWatermarks) {
+              cleaned = cleaned.replaceAll(pattern, '');
+            }
+            cleaned = cleaned
+                .replaceAll(RegExp(r'[_|\-]{2,}'), ' ')
+                .replaceAll(RegExp(r'\s+'), ' ')
+                .trim();
+            return cleaned;
+          })
+          .where((line) => line.isNotEmpty)
+          .toList();
+
+      final cleanedText = filteredLines.join('\n').trim();
+
+      if (cleanedText.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No text detected in the image.')),
+        );
+        return;
+      }
+
+      inputController.text = cleanedText;
+      inputController.selection =
+          TextSelection.collapsed(offset: inputController.text.length);
+
+      setState(() {
+        _showHintText = false;
+        _spokenRawText = cleanedText;
+        _spokenText = _maskProfanityForDisplay(cleanedText);
+        _translatedText = '';
+        _phoneticText = '';
+      });
+
+      unawaited(_doTranslate(cleanedText));
+    } catch (e) {
+      debugPrint('Error scanning text: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('OCR failed: $e')),
+      );
+    } finally {
+      textRecognizer.close();
+      if (mounted) {
+        setState(() {
+          _isScanningText = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _showImageSourcePicker() async {
+    final ImageSource? source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: Colors.black,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Scan text from',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 18,
+                ),
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                leading: const Icon(Icons.camera_alt, color: Colors.white),
+                title: const Text('Camera', style: TextStyle(color: Colors.white)),
+                onTap: () => Navigator.of(ctx).pop(ImageSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library, color: Colors.white),
+                title: const Text('Gallery', style: TextStyle(color: Colors.white)),
+                onTap: () => Navigator.of(ctx).pop(ImageSource.gallery),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (source == null) return;
+    await _scanTextFromImageSource(_tttController, source);
   }
 
   double get _currentTextScale {
@@ -4672,31 +4879,69 @@ class _HomeScreenState extends State<HomeScreen> {
                           alignment: Alignment.centerLeft,
                           child: Padding(
                             padding: const EdgeInsets.only(left: 8),
-                            child: _showCreditsInHeader
-                                ? GestureDetector(
-                                    onTap: _showCreditTiers,
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 8, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: isDark
-                                            ? Colors.white12
-                                            : const Color(0xFFF1F3F5),
-                                        borderRadius: BorderRadius.circular(999),
-                                      ),
-                                      child: Text(
-                                        '$_credits',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w700,
-                                          color: isDark
-                                              ? Colors.white
-                                              : const Color(0xFF000000),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                _showCreditsInHeader
+                                    ? GestureDetector(
+                                        onTap: _showCreditTiers,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 8, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: isDark
+                                                ? Colors.white12
+                                                : const Color(0xFFF1F3F5),
+                                            borderRadius:
+                                                BorderRadius.circular(999),
+                                          ),
+                                          child: Text(
+                                            '$_credits',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w700,
+                                              color: isDark
+                                                  ? Colors.white
+                                                  : const Color(0xFF000000),
+                                            ),
+                                          ),
                                         ),
-                                      ),
-                                    ),
-                                  )
-                                : const SizedBox.shrink(),
+                                      )
+                                    : const SizedBox.shrink(),
+                                const SizedBox(width: 6),
+                                SizedBox(
+                                  width: 28,
+                                  height: 28,
+                                  child: _isScanningText
+                                      ? const Center(
+                                          child: SizedBox(
+                                            width: 16,
+                                            height: 16,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                        )
+                                      : IconButton(
+                                          tooltip: 'Scan text from image',
+                                          onPressed: _showImageSourcePicker,
+                                          icon: Icon(
+                                            Icons.camera_alt_outlined,
+                                            size: 20,
+                                            color: isDark
+                                                ? Colors.white
+                                                : Colors.black,
+                                          ),
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(
+                                            minWidth: 28,
+                                            minHeight: 28,
+                                          ),
+                                        ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                         Center(

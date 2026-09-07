@@ -34,6 +34,8 @@ dependencies:
   shared_preferences: ^2.3.3
   qr_flutter: ^4.1.0
   device_info_plus: ^12.3.0
+  google_mlkit_text_recognition: ^0.15.1
+  image_picker: ^1.1.2
   # Note: audioplayers removed to save space as we use generic TTS now.
 
 dev_dependencies:
