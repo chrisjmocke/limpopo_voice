@@ -1,0 +1,25 @@
+{
+  "plans": [
+    {
+      "id": "PLAN_100",
+      "code": "PLN_2t2fvh0gmfjshy7",
+      "credits": 100,
+      "amountCents": 1999,
+      "priceZar": 19.99
+    },
+    {
+      "id": "PLAN_300",
+      "code": "PLN_ietxwof2rdpsfpt",
+      "credits": 300,
+      "amountCents": 4999,
+      "priceZar": 49.99
+    },
+    {
+      "id": "PLAN_700",
+      "code": "PLN_qq7y0nbwj2x75ff",
+      "credits": 700,
+      "amountCents": 9999,
+      "priceZar": 99.99
+    }
+  ]
+}

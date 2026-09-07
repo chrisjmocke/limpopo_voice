@@ -1,27 +1,34 @@
+// ignore_for_file: deprecated_member_use
+
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:async';
 import 'dart:math';
-import 'package:flutter/material.dart';
+
+import 'package:audioplayers/audioplayers.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:crypto/crypto.dart';
+import 'package:firebase_app_check/firebase_app_check.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
-import 'package:permission_handler/permission_handler.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
-import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:audioplayers/audioplayers.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:device_info_plus/device_info_plus.dart';
-import 'package:webview_flutter/webview_flutter.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:vibration/vibration.dart';
-import 'translation_service.dart';
+import 'package:webview_flutter/webview_flutter.dart';
+
 import 'firebase_options.dart';
+import 'translation_service.dart';
 
 // const _paystackChannel = MethodChannel('com.limpopovoice.translate/paystack');
 
@@ -73,6 +80,25 @@ void main() async {
           options: DefaultFirebaseOptions.currentPlatform);
     }
     debugPrint('Firebase initialized successfully');
+
+    if (kIsWeb) {
+      await FirebaseAppCheck.instance.activate(
+        webProvider: ReCaptchaV3Provider('6LfrV7UaAAAAAL81B2G0zY'),
+      );
+    } else {
+      if (kDebugMode) {
+        debugPrint(
+            'Firebase App Check in debug mode: register this device debug token in Firebase Console for Android debug builds.');
+      }
+      await FirebaseAppCheck.instance.activate(
+        androidProvider: kDebugMode
+            ? AndroidProvider.debug
+            : AndroidProvider.playIntegrity,
+        appleProvider: AppleProvider.deviceCheck,
+      );
+    }
+
+    debugPrint('Firebase App Check initialized successfully');
   } catch (e) {
     debugPrint("Firebase init error: $e");
   }
@@ -172,16 +198,9 @@ class _LetsTalkAppState extends State<LetsTalkApp> {
   }
 }
 
-class AlignedTokenPair {
-  final String sourceWord;
-  final String translatedWord;
-  final String colorHex;
-
-  const AlignedTokenPair({
-    required this.sourceWord,
-    required this.translatedWord,
-    required this.colorHex,
-  });
+enum _PaystackPaymentFlow {
+  onceOff,
+  recurring,
 }
 
 class _CreditTier {
@@ -189,6 +208,65 @@ class _CreditTier {
   final int credits; // 1 credit = 5 seconds (capped at 5 sec per translation)
   final String price;
   const _CreditTier(this.name, this.credits, this.price);
+}
+
+class PaymentPlans {
+  static const String _plansAssetPath = 'assets/plans.json';
+
+  static const Map<int, String> fallbackCreditsToCode = {
+    100: 'PLN_2t2fvh0gmfjshy7',
+    300: 'PLN_ietxwof2rdpsfpt',
+    700: 'PLN_qq7y0nbwj2x75ff',
+  };
+
+  static Future<Map<String, int>> loadCodeToCredits() async {
+    try {
+      final raw = await rootBundle.loadString(_plansAssetPath);
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) {
+        throw StateError('Invalid payment plan config payload');
+      }
+
+      final plans = decoded['plans'];
+      if (plans is! List) {
+        throw StateError('Payment plan config missing plans list');
+      }
+
+      final map = <String, int>{};
+      for (final item in plans) {
+        if (item is Map<String, dynamic>) {
+          final code = item['code']?.toString();
+          final credits = item['credits'];
+          if (code != null && credits is int) {
+            map[code] = credits;
+          }
+        }
+      }
+
+      if (map.isNotEmpty) return map;
+    } catch (e) {
+      debugPrint('PaymentPlans load failed, using fallback map: $e');
+    }
+
+    return {
+      for (final entry in fallbackCreditsToCode.entries) entry.value: entry.key,
+    };
+  }
+
+  static Future<Map<int, String>> loadCreditsToCode() async {
+    try {
+      final codeToCredits = await loadCodeToCredits();
+      final creditsToCode = <int, String>{};
+      for (final entry in codeToCredits.entries) {
+        creditsToCode[entry.value] = entry.key;
+      }
+      if (creditsToCode.isNotEmpty) return creditsToCode;
+    } catch (_) {
+      // Fall through to fallback map below.
+    }
+
+    return fallbackCreditsToCode;
+  }
 }
 
 const _tiers = [
@@ -273,6 +351,12 @@ String normalizeCacheText(String text) {
   return compact.replaceAll(RegExp(r'\s+'), ' ').trim();
 }
 
+String buildSharedAudioCacheHash(String text, String languageCode) {
+  final cleanedText = text.trim().toLowerCase();
+  final bytes = utf8.encode('$languageCode:$cleanedText');
+  return sha256.convert(bytes).toString();
+}
+
 List<String> buildFragmentCacheKeys(String text, {int maxWords = 3}) {
   final normalized = normalizeCacheText(text);
   if (normalized.isEmpty) return const <String>[];
@@ -299,153 +383,6 @@ List<String> buildFragmentCacheKeys(String text, {int maxWords = 3}) {
   }
 
   return keys.toList();
-}
-
-List<AlignedTokenPair> buildFallbackAlignmentPairs(String source, String target) {
-  final sourceWords = source
-      .split(RegExp(r'\s+'))
-      .where((word) => word.trim().isNotEmpty)
-      .toList();
-  final targetWords = target
-      .split(RegExp(r'\s+'))
-      .where((word) => word.trim().isNotEmpty)
-      .toList();
-
-  if (sourceWords.isEmpty && targetWords.isEmpty) {
-    return const <AlignedTokenPair>[];
-  }
-
-  final palette = <String>[
-    '#FF5733',
-    '#33FF57',
-    '#3357FF',
-    '#FF33A8',
-    '#FFD633',
-    '#33D6FF',
-    '#C733FF',
-    '#FF8C33',
-  ];
-
-  final maxLen = max(sourceWords.length, targetWords.length);
-  final pairs = <AlignedTokenPair>[];
-  for (var i = 0; i < maxLen; i++) {
-    final sourceWord = i < sourceWords.length ? sourceWords[i] : '';
-    final translatedWord = i < targetWords.length ? targetWords[i] : '';
-    if (sourceWord.isEmpty && translatedWord.isEmpty) {
-      continue;
-    }
-    final colorHex = palette[i % palette.length];
-    pairs.add(AlignedTokenPair(
-      sourceWord: sourceWord,
-      translatedWord: translatedWord,
-      colorHex: colorHex,
-    ));
-  }
-  return pairs;
-}
-
-TextSpan _buildAlignedTokenSpan({
-  required String text,
-  required String colorHex,
-}) {
-  if (text.trim().isEmpty) {
-    return const TextSpan(text: '');
-  }
-
-  final shadeColor = Color(
-    int.tryParse(colorHex.replaceFirst('#', '0xFF')) ?? 0xFFFFFFFF,
-  );
-
-  return TextSpan(
-    text: text,
-    style: TextStyle(
-      color: Colors.white,
-      fontFamily: 'monospace',
-      fontWeight: FontWeight.w600,
-      background: Paint()..color = shadeColor.withValues(alpha: 0.25),
-    ),
-  );
-}
-
-Widget _buildWordAlignmentBlock({
-  required String sourceText,
-  required String translatedText,
-  List<AlignedTokenPair>? pairs,
-}) {
-  final alignmentPairs = pairs ?? buildFallbackAlignmentPairs(sourceText, translatedText);
-  if (alignmentPairs.isEmpty) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          sourceText,
-          style: const TextStyle(
-            fontSize: 16,
-            fontFamily: 'monospace',
-            fontWeight: FontWeight.w600,
-            color: Colors.white,
-          ),
-        ),
-        const SizedBox(height: 3),
-        Text(
-          translatedText,
-          style: const TextStyle(
-            fontSize: 12,
-            fontFamily: 'monospace',
-            fontWeight: FontWeight.w500,
-            color: Colors.white60,
-          ),
-        ),
-      ],
-    );
-  }
-
-  final sourceSpans = <InlineSpan>[];
-  for (final pair in alignmentPairs) {
-    if (pair.sourceWord.trim().isEmpty) continue;
-    sourceSpans.add(_buildAlignedTokenSpan(
-      text: '${pair.sourceWord} ',
-      colorHex: pair.colorHex,
-    ));
-  }
-
-  final translatedSpans = <InlineSpan>[];
-  for (final pair in alignmentPairs) {
-    if (pair.translatedWord.trim().isEmpty) continue;
-    translatedSpans.add(_buildAlignedTokenSpan(
-      text: '${pair.translatedWord} ',
-      colorHex: pair.colorHex,
-    ));
-  }
-
-  return Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      RichText(
-        text: TextSpan(
-          children: sourceSpans,
-          style: const TextStyle(
-            fontSize: 16,
-            fontFamily: 'monospace',
-            fontWeight: FontWeight.w600,
-            color: Colors.white,
-          ),
-        ),
-      ),
-      const SizedBox(height: 6),
-      RichText(
-        text: TextSpan(
-          children: translatedSpans,
-          style: const TextStyle(
-            fontSize: 12,
-            fontFamily: 'monospace',
-            fontWeight: FontWeight.w500,
-            color: Colors.white60,
-          ),
-        ),
-      ),
-    ],
-  );
 }
 
 String localizedUiText(String key, [AppUiLanguage? language]) {
@@ -570,6 +507,17 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final FocusNode _inputFocusNode = FocusNode();
+  ImageProvider? _userProfileImage;
+  StreamSubscription<User?>? _authSubscription;
+
+  void _syncUserProfileImage() {
+    final user = FirebaseAuth.instance.currentUser;
+    final photoUrl = user?.photoURL;
+    _userProfileImage = (photoUrl != null && photoUrl.isNotEmpty)
+        ? NetworkImage(photoUrl)
+        : null;
+  }
+
   Future<void> _deleteUserPhrase(int idx) async {
     final sure = await _confirmDeleteLearnPhrase();
     if (sure) {
@@ -874,10 +822,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String _spokenText = '';
   String _translatedText = '';
   String _spokenRawText = '';
-  String _translatedRawText = '';
   String _phoneticText = '';
-  String _spokenLang = '';
-  String _translatedLang = '';
   final Map<String, List<String>> _learnSentences = {};
   final TextEditingController _tttController = TextEditingController();
   bool _showHintText = true;
@@ -900,10 +845,28 @@ class _HomeScreenState extends State<HomeScreen> {
   final Map<String, String> _learnFocusTextByLang = {};
   final Map<String, String> _learnFocusMeaningByLang = {};
   final Map<String, String?> _learnFocusPhoneticByLang = {};
-  bool _sharingCurrentTranslation = false;
+  int _fontSizeLevel = 0; // 0: Normal, 1: Larger, 2: Largest
   Timer? _autocorrectTimer;
   Timer? _talkHoldTimer;
   double _talkHoldProgress = 0.0;
+
+  void _cycleFontSize() {
+    setState(() {
+      _fontSizeLevel = (_fontSizeLevel + 1) % 3;
+    });
+  }
+
+  double get _currentTextScale {
+    switch (_fontSizeLevel) {
+      case 1:
+        return 1.15;
+      case 2:
+        return 1.30;
+      case 0:
+      default:
+        return 1.0;
+    }
+  }
   int _localAudioCacheHits = 0;
   int _sharedAudioCacheHits = 0;
   int _remoteAudioCacheMisses = 0;
@@ -1039,6 +1002,13 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!_outputLangs.contains(_selectedLearnLang)) {
       _selectedLearnLang = _outputLangs.first;
     }
+    _syncUserProfileImage();
+    _authSubscription = FirebaseAuth.instance.authStateChanges().listen((user) {
+      if (!mounted) return;
+      setState(() {
+        _syncUserProfileImage();
+      });
+    });
     _audioPlayer = AudioPlayer();
     final functionUrl = _translationFunctionUrl();
     _translationService = TranslationService(functionUrl: functionUrl);
@@ -1784,30 +1754,12 @@ class _HomeScreenState extends State<HomeScreen> {
     return 'Not signed in';
   }
 
-  ImageProvider? _getUserProfileImage() {
-    final user = FirebaseAuth.instance.currentUser;
-    debugPrint('📸 _getUserProfileImage called for: ${user?.email}');
-
-    if (user != null && user.photoURL != null && user.photoURL!.isNotEmpty) {
-      debugPrint('✅ Using Firebase photoURL: ${user.photoURL}');
-      return NetworkImage(user.photoURL!);
-    }
-
-    debugPrint('⚠️ No photoURL from Firebase');
-    return null;
-  }
+  ImageProvider? _getUserProfileImage() => _userProfileImage;
 
   Widget _buildProfileAvatar({required double radius, required bool isDark}) {
-    final user = FirebaseAuth.instance.currentUser;
-    debugPrint('=== BUILD AVATAR ===');
-    debugPrint('Current user: ${user?.email}');
-    debugPrint('User photoURL: ${user?.photoURL}');
-    debugPrint('User displayName: ${user?.displayName}');
-
     final photoProvider = _getUserProfileImage();
 
     if (photoProvider == null) {
-      debugPrint('No photo provider - showing default icon');
       return CircleAvatar(
         radius: radius,
         backgroundColor: isDark ? Colors.white12 : Colors.black,
@@ -1819,7 +1771,6 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     }
 
-    debugPrint('Photo provider available, loading: $photoProvider');
     return CircleAvatar(
       radius: radius,
       backgroundColor: isDark ? Colors.white12 : Colors.black,
@@ -1885,8 +1836,12 @@ class _HomeScreenState extends State<HomeScreen> {
         await user?.reload();
         debugPrint('✅ Profile refresh complete');
 
-        // Trigger rebuild
-        if (mounted) setState(() {});
+        // Trigger rebuild only after the auth profile has been refreshed.
+        if (mounted) {
+          setState(() {
+            _syncUserProfileImage();
+          });
+        }
       }
     } catch (e) {
       debugPrint('⚠️ Failed to refresh Google profile: $e');
@@ -1927,22 +1882,30 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<String?> _requestPaystackAccessCode(_CreditTier tier, double amount,
-      {String? callbackUrl}) async {
+  Future<String?> _requestPaystackAccessCode(
+    _CreditTier tier,
+    double amount, {
+    required _PaystackPaymentFlow flow,
+    String? callbackUrl,
+  }) async {
     final headers = await _buildAuthorizedJsonHeaders();
     if (headers == null) {
       _showSnack('Could not authenticate payment request.');
       return null;
     }
 
-    final planCode = _paystackPlanCodeForTier(tier);
-    final payload = {
+    final isRecurring = flow == _PaystackPaymentFlow.recurring;
+    final planCode = isRecurring ? await _paystackPlanCodeForTier(tier) : null;
+    final payload = <String, dynamic>{
       'amountCents': (amount * 100).round(),
       'email': _authEmail ?? '',
       'callback_url': callbackUrl,
-      'planCode': planCode,
-      'purchaseType': 'monthly',
+      'purchaseType': isRecurring ? 'monthly' : 'once_off',
       'creditsToAdd': tier.credits,
+      'channels': isRecurring
+          ? ['card']
+          : ['card', 'bank', 'eft', 'mobile_money'],
+      if (planCode != null && planCode.isNotEmpty) 'planCode': planCode,
     };
 
     final uri = Uri.parse(_paystackInitUrl());
@@ -1953,7 +1916,7 @@ class _HomeScreenState extends State<HomeScreen> {
           .post(uri, headers: headers, body: jsonEncode(payload))
           .timeout(const Duration(seconds: 30));
     } catch (e) {
-      debugPrint('Paystack init request failed: $e');
+      debugPrint('Paystack ${isRecurring ? 'recurring' : 'once-off'} init request failed: $e');
       return null;
     }
 
@@ -1966,13 +1929,14 @@ class _HomeScreenState extends State<HomeScreen> {
             .post(uri, headers: refreshedHeaders, body: jsonEncode(payload))
             .timeout(const Duration(seconds: 30));
       } catch (e) {
-        debugPrint('Paystack init retry failed: $e');
+        debugPrint('Paystack ${isRecurring ? 'recurring' : 'once-off'} init retry failed: $e');
         return null;
       }
     }
 
     if (response.statusCode != 200) {
-      debugPrint('Paystack init HTTP ${response.statusCode}: ${response.body}');
+      debugPrint(
+          'Paystack ${isRecurring ? 'recurring' : 'once-off'} init HTTP ${response.statusCode}: ${response.body}');
       return null;
     }
 
@@ -1984,7 +1948,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ? accessCode.trim()
           : null;
     } catch (e) {
-      debugPrint('Paystack init response parse failed: $e');
+      debugPrint('Paystack ${isRecurring ? 'recurring' : 'once-off'} init response parse failed: $e');
       return null;
     }
   }
@@ -2648,6 +2612,81 @@ class _HomeScreenState extends State<HomeScreen> {
     await _saveAudioToFirestore(text, voiceKey, audioBase64);
   }
 
+  Future<String> getSharedAudioUrlOnly({
+    required String text,
+    required String languageCode,
+  }) async {
+    final cleanedText = text.trim();
+    if (cleanedText.isEmpty) {
+      throw StateError('Shared audio generation requires non-empty text.');
+    }
+
+    final hash = buildSharedAudioCacheHash(cleanedText, languageCode);
+    final docRef = FirebaseFirestore.instance.collection('audio_cache').doc(hash);
+    final docSnapshot = await docRef.get();
+
+    final cachedUrl = docSnapshot.data()?['url'] as String?;
+    if (docSnapshot.exists && cachedUrl != null && cachedUrl.trim().isNotEmpty) {
+      return cachedUrl;
+    }
+
+    final audioBytes = await _translationService.generateTranslation(
+      cleanedText,
+      languageCode,
+      voiceName: _voiceNameForLanguage(languageCode),
+      ttsProvider: _ttsProviderForLanguage(languageCode),
+      skipTranslation: true,
+    );
+
+    if (audioBytes == null || audioBytes.isEmpty) {
+      throw StateError('Unable to generate audio for the shared cache.');
+    }
+
+    final storageRef = FirebaseStorage.instance
+        .ref()
+        .child('shared_audio/$hash.mp3');
+    final uploadTask = await storageRef.putData(
+      audioBytes,
+      SettableMetadata(
+        contentType: 'audio/mpeg',
+        cacheControl: 'public, max-age=31536000',
+      ),
+    );
+
+    final downloadUrl = await uploadTask.ref.getDownloadURL();
+    await docRef.set({
+      'text': cleanedText,
+      'language': languageCode,
+      'url': downloadUrl,
+      'createdAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    return downloadUrl;
+  }
+
+  Future<String> handleInitialTranslationWithAudio({
+    required String userId,
+    required String text,
+    required String languageCode,
+  }) async {
+    if (userId.isNotEmpty && _credits < _usageCostCredits) {
+      throw StateError('Not enough credits available for a new initial translation.');
+    }
+
+    if (userId.isNotEmpty) {
+      final allowed = await _consumeUsageAllowance(
+        silent: true,
+        inputText: text,
+        outputText: text,
+      );
+      if (!allowed) {
+        throw StateError('Initial translation credit deduction was rejected.');
+      }
+    }
+
+    return getSharedAudioUrlOnly(text: text, languageCode: languageCode);
+  }
+
   Future<void> _configureAudioPlayback() async {
     try {
       await _audioPlayer.setAudioContext(
@@ -2934,15 +2973,12 @@ class _HomeScreenState extends State<HomeScreen> {
       _spokenText = '';
       _translatedText = '';
       _phoneticText = '';
-      _spokenLang = '';
-      _translatedLang = '';
     });
     await _speech.listen(
       onResult: (r) {
         setState(() {
           _spokenRawText = r.recognizedWords;
           _spokenText = _maskProfanityForDisplay(_spokenRawText);
-          _spokenLang = _selectedInputLang;
         });
         if (r.finalResult && _spokenRawText.isNotEmpty) {
           _doTranslate(_spokenRawText);
@@ -3120,9 +3156,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     setState(() {
-      _translatedRawText = result;
       _translatedText = _maskProfanityForDisplay(result);
-      _translatedLang = _selectedOutputLang;
       _isTranslating = false;
     });
 
@@ -3568,11 +3602,8 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _spokenRawText = t;
       _spokenText = _maskProfanityForDisplay(t);
-      _spokenLang = _selectedInputLang;
-      _translatedRawText = '';
       _translatedText = '';
       _phoneticText = '';
-      _translatedLang = '';
     });
     _doTranslate(t);
     _tttController.clear();
@@ -3582,10 +3613,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _spokenText = '';
         _spokenRawText = '';
         _translatedText = '';
-        _translatedRawText = '';
         _phoneticText = '';
-        _spokenLang = '';
-        _translatedLang = '';
       });
 
   void _editSpokenText() {
@@ -3598,141 +3626,6 @@ class _HomeScreenState extends State<HomeScreen> {
       });
       FocusScope.of(context).requestFocus(_inputFocusNode);
       _showSnack('Edit mode activated. You can now edit the text.');
-    }
-  }
-
-  Future<void> _shareCurrentTranslationPackage() async {
-    final inputDisplay = _spokenText.trim();
-    final outputDisplay = _translatedText.trim();
-    if (inputDisplay.isEmpty || outputDisplay.isEmpty) {
-      _showSnack('Translate first so input and output can be shared.');
-      return;
-    }
-
-    if (_sharingCurrentTranslation) return;
-    setState(() => _sharingCurrentTranslation = true);
-
-    try {
-      final inputRaw = _spokenRawText.trim().isNotEmpty
-          ? _spokenRawText.trim()
-          : inputDisplay;
-      final outputRaw = _translatedRawText.trim().isNotEmpty
-          ? _translatedRawText.trim()
-          : outputDisplay;
-      final inputLang =
-          _spokenLang.isNotEmpty ? _spokenLang : _selectedInputLang;
-      final outputLang =
-          _translatedLang.isNotEmpty ? _translatedLang : _selectedOutputLang;
-      final dir = await getTemporaryDirectory();
-      final nowSuffix = DateTime.now().millisecondsSinceEpoch;
-
-      final payload = StringBuffer()
-        ..writeln('Let\'s Talk Translation')
-        ..writeln()
-        ..writeln('Input ($inputLang):')
-        ..writeln(inputDisplay)
-        ..writeln()
-        ..writeln('Output ($outputLang):')
-        ..writeln(outputDisplay);
-
-      if (_phoneticText.trim().isNotEmpty) {
-        payload
-          ..writeln()
-          ..writeln('Phonetics:')
-          ..writeln(_phoneticText.trim());
-      }
-
-      final files = <XFile>[];
-
-      final inputProvider = _ttsProviderForLanguage(inputLang);
-      final inputVoice = _voiceNameForLanguage(inputLang);
-      final safeInputForSpeech = _silenceProfanityForSpeech(inputRaw);
-      final inputSpeechText =
-          safeInputForSpeech.isNotEmpty ? safeInputForSpeech : inputRaw;
-      var hasInputMp3 = false;
-      if (inputSpeechText.isNotEmpty) {
-        var inputAudio = await _generateAudioWithCache(
-          inputSpeechText,
-          inputLang,
-          inputVoice,
-          provider: inputProvider,
-        );
-        inputAudio ??= await _translationService.generateTranslation(
-          inputSpeechText,
-          inputLang,
-          voiceName: inputVoice,
-          ttsProvider: inputProvider,
-        );
-        if (inputAudio != null && inputAudio.isNotEmpty) {
-          final inFile = File('${dir.path}/lets_talk_input_$nowSuffix.mp3');
-          await inFile.writeAsBytes(inputAudio, flush: true);
-          files.add(XFile(inFile.path, mimeType: 'audio/mpeg'));
-          hasInputMp3 = true;
-        }
-      }
-
-      final outputProvider = _ttsProviderForLanguage(outputLang);
-      final outputVoice = _voiceNameForLanguage(outputLang);
-      final safeOutputForSpeech = _silenceProfanityForSpeech(outputRaw);
-      final outputSpeechText =
-          safeOutputForSpeech.isNotEmpty ? safeOutputForSpeech : outputRaw;
-      var hasOutputMp3 = false;
-      if (outputSpeechText.isNotEmpty) {
-        var outputAudio = await _generateAudioWithCache(
-          outputSpeechText,
-          outputLang,
-          outputVoice,
-          provider: outputProvider,
-        );
-        outputAudio ??= await _translationService.generateTranslation(
-          outputSpeechText,
-          outputLang,
-          voiceName: outputVoice,
-          ttsProvider: outputProvider,
-        );
-        if (outputAudio != null && outputAudio.isNotEmpty) {
-          final outFile = File('${dir.path}/lets_talk_output_$nowSuffix.mp3');
-          await outFile.writeAsBytes(outputAudio, flush: true);
-          files.add(XFile(outFile.path, mimeType: 'audio/mpeg'));
-          hasOutputMp3 = true;
-        }
-      }
-
-      if (!hasInputMp3 || !hasOutputMp3) {
-        _showSnack(
-            'Could not generate both input and output MP3 files. Please try again.');
-        return;
-      }
-
-      final inputTextFile = File('${dir.path}/lets_talk_input_$nowSuffix.txt');
-      await inputTextFile.writeAsString(
-        'Input Language: $inputLang\n\n$inputDisplay\n',
-        flush: true,
-      );
-      files.add(XFile(inputTextFile.path, mimeType: 'text/plain'));
-
-      final outputTextFile =
-          File('${dir.path}/lets_talk_output_$nowSuffix.txt');
-      await outputTextFile.writeAsString(
-        'Output Language: $outputLang\n\n$outputDisplay\n',
-        flush: true,
-      );
-      files.add(XFile(outputTextFile.path, mimeType: 'text/plain'));
-
-      await SharePlus.instance.share(
-        ShareParams(
-          files: files,
-          subject: 'Let\'s Talk Translation',
-          text: payload.toString(),
-        ),
-      );
-    } catch (e) {
-      debugPrint('Share translation package error: $e');
-      _showSnack('Could not prepare share package. Try again.');
-    } finally {
-      if (mounted) {
-        setState(() => _sharingCurrentTranslation = false);
-      }
     }
   }
 
@@ -4165,17 +4058,9 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  String _paystackPlanCodeForTier(_CreditTier tier) {
-    switch (tier.credits) {
-      case 100:
-        return 'PLN_2t2fvh0gmfjshy7';
-      case 300:
-        return 'PLN_ietxwof2rdpsfpt';
-      case 700:
-        return 'PLN_qq7y0nbwj2x75ff';
-      default:
-        return '';
-    }
+  Future<String> _paystackPlanCodeForTier(_CreditTier tier) async {
+    final creditsToCode = await PaymentPlans.loadCreditsToCode();
+    return creditsToCode[tier.credits] ?? '';
   }
 
   double _tierAmountFromPrice(String price) {
@@ -4432,67 +4317,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<String?> _requestPaystackOnceOffAccessCode(_CreditTier tier,
-      double amount,
-      {String? callbackUrl}) async {
-    final headers = await _buildAuthorizedJsonHeaders();
-    if (headers == null) {
-      _showSnack('Could not authenticate payment request.');
-      return null;
-    }
-
-    final payload = {
-      'amountCents': (amount * 100).round(),
-      'email': _authEmail ?? '',
-      'callback_url': callbackUrl,
-      'purchaseType': 'once_off',
-      'creditsToAdd': tier.credits,
-    };
-
-    final uri = Uri.parse(_paystackInitUrl());
-    http.Response response;
-
-    try {
-      response = await http
-          .post(uri, headers: headers, body: jsonEncode(payload))
-          .timeout(const Duration(seconds: 30));
-    } catch (e) {
-      debugPrint('Paystack once-off init request failed: $e');
-      return null;
-    }
-
-    if (response.statusCode == 401) {
-      final refreshedHeaders =
-          await _buildAuthorizedJsonHeaders(forceRefresh: true);
-      if (refreshedHeaders == null) return null;
-      try {
-        response = await http
-            .post(uri, headers: refreshedHeaders, body: jsonEncode(payload))
-            .timeout(const Duration(seconds: 30));
-      } catch (e) {
-        debugPrint('Paystack once-off init retry failed: $e');
-        return null;
-      }
-    }
-
-    if (response.statusCode != 200) {
-      debugPrint('Paystack once-off HTTP ${response.statusCode}: ${response.body}');
-      return null;
-    }
-
-    try {
-      final body = jsonDecode(response.body);
-      if (body is! Map<String, dynamic>) return null;
-      final accessCode = body['access_code'] as String?;
-      return (accessCode != null && accessCode.trim().isNotEmpty)
-          ? accessCode.trim()
-          : null;
-    } catch (e) {
-      debugPrint('Paystack once-off response parse failed: $e');
-      return null;
-    }
-  }
-
   Future<dynamic> _launchPaystackWithViewRetry(String accessCode) async {
     try {
       // Secure approach: Open Paystack Checkout URL in a WebView
@@ -4539,8 +4363,12 @@ class _HomeScreenState extends State<HomeScreen> {
     String? accessCode = safeDotEnvString('PAYSTACK_TEST_ACCESS_CODE');
     accessCode = (accessCode.isNotEmpty)
         ? accessCode
-        : await _requestPaystackAccessCode(tier, amount,
-            callbackUrl: 'https://standard.paystack.co/close');
+        : await _requestPaystackAccessCode(
+            tier,
+            amount,
+            flow: _PaystackPaymentFlow.recurring,
+            callbackUrl: 'https://standard.paystack.co/close',
+          );
 
     if (accessCode == null || accessCode.isEmpty) {
       _showSnack(
@@ -4607,8 +4435,12 @@ class _HomeScreenState extends State<HomeScreen> {
     String? accessCode = safeDotEnvString('PAYSTACK_TEST_ACCESS_CODE');
     accessCode = (accessCode.isNotEmpty)
         ? accessCode
-        : await _requestPaystackOnceOffAccessCode(tier, amount,
-            callbackUrl: 'https://standard.paystack.co/close');
+        : await _requestPaystackAccessCode(
+            tier,
+            amount,
+            flow: _PaystackPaymentFlow.onceOff,
+            callbackUrl: 'https://standard.paystack.co/close',
+          );
 
     if (accessCode == null || accessCode.isEmpty) {
       _showSnack(
@@ -5275,22 +5107,29 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            _buildWordAlignmentBlock(
-                              sourceText: phrase['text'] ?? '',
-                              translatedText: phrase['en'] ?? '',
-                              pairs: (() {
-                                final raw = phrase['alignment'];
-                                if (raw is List) {
-                                  return TranslationService.parseAlignmentPairs(raw)
-                                      .map((pair) => AlignedTokenPair(
-                                            sourceWord: pair['source_word'] ?? '',
-                                            translatedWord: pair['translated_word'] ?? '',
-                                            colorHex: pair['color_hex'] ?? '#FFFFFF',
-                                          ))
-                                      .toList();
-                                }
-                                return null;
-                              })(),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  phrase['text'] ?? '',
+                                  style: TextStyle(
+                                    fontSize: 16 * _currentTextScale,
+                                    fontFamily: 'monospace',
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  phrase['en'] ?? '',
+                                  style: TextStyle(
+                                    fontSize: 12 * _currentTextScale,
+                                    fontFamily: 'monospace',
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.white60,
+                                  ),
+                                ),
+                              ],
                             ),
                             if ((phrase['phonetic'] ?? '').isNotEmpty) ...[
                               const SizedBox(height: 2),
@@ -5414,7 +5253,6 @@ class _HomeScreenState extends State<HomeScreen> {
                                           _spokenText = '';
                                           _spokenRawText = '';
                                           _translatedText = '';
-                                          _translatedRawText = '';
                                           _phoneticText = '';
                                           _tttController.clear();
                                         });
@@ -5443,7 +5281,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 _spokenText,
                                                 style: TextStyle(
                                                   fontFamily: 'monospace',
-                                                  fontSize: 14,
+                                                  fontSize: 16 * _currentTextScale,
                                                   color: isDark
                                                       ? Colors.white
                                                       : Colors.black,
@@ -5467,7 +5305,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                                   : Colors.black,
                                               style: TextStyle(
                                                 fontFamily: 'monospace',
-                                                fontSize: 14,
+                                                fontSize: 16 * _currentTextScale,
                                                 color: isDark
                                                     ? Colors.white
                                                     : Colors.black,
@@ -5584,7 +5422,6 @@ class _HomeScreenState extends State<HomeScreen> {
                                         _spokenText = '';
                                         _spokenRawText = '';
                                         _translatedText = '';
-                                        _translatedRawText = '';
                                         _phoneticText = '';
                                         _tttController.clear();
                                       });
@@ -5610,7 +5447,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                             : '',
                                         style: TextStyle(
                                           fontFamily: 'monospace',
-                                          fontSize: 14,
+                                          fontSize: 16 * _currentTextScale,
                                           color: isDark
                                               ? Colors.white
                                               : Colors.black,
@@ -5707,154 +5544,157 @@ class _HomeScreenState extends State<HomeScreen> {
                   Padding(
                     padding: const EdgeInsets.only(bottom: 16.0),
                     child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        if (isDark)
-                          IconButton(
-                            onPressed: (_spokenText.isNotEmpty &&
-                                    _translatedText.isNotEmpty &&
-                                    !_sharingCurrentTranslation)
-                                ? _shareCurrentTranslationPackage
-                                : null,
-                            icon: Icon(
-                              Icons.share,
-                              size: 24,
-                              color: Colors.white,
-                            ),
-                            tooltip: 'Share',
-                            padding: const EdgeInsets.all(8),
-                          )
-                        else
-                          Container(
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              shape: BoxShape.circle,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.10),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
-                            ),
-                            child: IconButton(
-                              onPressed: (_spokenText.isNotEmpty &&
-                                      _translatedText.isNotEmpty &&
-                                      !_sharingCurrentTranslation)
-                                  ? _shareCurrentTranslationPackage
-                                  : null,
-                              icon: const Icon(
-                                Icons.share,
-                                size: 24,
-                                color: Colors.black,
-                              ),
-                              tooltip: 'Share',
-                              padding: const EdgeInsets.all(8),
-                            ),
-                          ),
-                        GestureDetector(
-                          onTapDown: (_) => _startListening(),
-                          onTapUp: (_) => _stopListening(),
-                          onTapCancel: () => _stopListening(),
-                          child: Stack(
-                            alignment: Alignment.center,
-                            children: [
-                              SizedBox(
-                                width: _isTalking ? 130 : 120,
-                                height: _isTalking ? 130 : 120,
-                                child: CircularProgressIndicator(
-                                  value: _isTalking ? _talkHoldProgress : 0.0,
-                                  strokeWidth: 4,
-                                  backgroundColor:
-                                      Colors.white.withValues(alpha: 0.22),
-                                  valueColor:
-                                      const AlwaysStoppedAnimation<Color>(
-                                          Colors.white),
-                                ),
-                              ),
-                              AnimatedContainer(
-                                duration: const Duration(milliseconds: 150),
-                                width: _isTalking ? 110 : 100,
-                                height: _isTalking ? 110 : 100,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: _isTalking ? Colors.red : Colors.green,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: (_isTalking
-                                              ? Colors.red
-                                              : Colors.green)
-                                          .withValues(alpha: 0.4),
-                                      blurRadius: _isTalking ? 20 : 10,
-                                      spreadRadius: _isTalking ? 4 : 2,
-                                    )
-                                  ],
-                                ),
-                                child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(
-                                          _isTalking
-                                              ? Icons.mic
-                                              : Icons.mic_none,
-                                          color: Colors.white,
-                                          size: 40),
-                                      const SizedBox(height: 4),
-                                      if (_showTalkHintText)
-                                        Text(
-                                          _isTalking
-                                              ? 'LISTENING'
-                                              : localizedUiText(
-                                                  'hold_to_talk', _uiLanguage),
-                                          style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 10,
-                                              fontWeight: FontWeight.bold,
-                                              letterSpacing: 0.5),
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: isDark
+                                ? IconButton(
+                                    onPressed: _cycleFontSize,
+                                    icon: Icon(
+                                      Icons.text_fields,
+                                      size: 24,
+                                      color: Colors.white,
+                                    ),
+                                    tooltip: 'Change Font Size',
+                                    padding: const EdgeInsets.all(8),
+                                  )
+                                : Container(
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      shape: BoxShape.circle,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withValues(alpha: 0.10),
+                                          blurRadius: 8,
+                                          offset: const Offset(0, 2),
                                         ),
-                                    ]),
-                              ),
-                            ],
+                                      ],
+                                    ),
+                                    child: IconButton(
+                                      onPressed: _cycleFontSize,
+                                      icon: const Icon(
+                                        Icons.text_fields,
+                                        size: 24,
+                                        color: Colors.black,
+                                      ),
+                                      tooltip: 'Change Font Size',
+                                      padding: const EdgeInsets.all(8),
+                                    ),
+                                  ),
                           ),
                         ),
-                        if (isDark)
-                          IconButton(
-                            onPressed:
-                                _spokenText.isNotEmpty ? _resetOutput : null,
-                            icon: Icon(
-                              Icons.refresh,
-                              size: 28,
-                              color: Colors.white,
-                            ),
-                            tooltip: 'New Translation',
-                            padding: const EdgeInsets.all(12),
-                          )
-                        else
-                          Container(
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              shape: BoxShape.circle,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.10),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
-                            ),
-                            child: IconButton(
-                              onPressed:
-                                  _spokenText.isNotEmpty ? _resetOutput : null,
-                              icon: const Icon(
-                                Icons.refresh,
-                                size: 28,
-                                color: Colors.black,
+                        Expanded(
+                          child: Center(
+                            child: GestureDetector(
+                              onTapDown: (_) => _startListening(),
+                              onTapUp: (_) => _stopListening(),
+                              onTapCancel: () => _stopListening(),
+                              child: Stack(
+                                alignment: Alignment.center,
+                                children: [
+                                  SizedBox(
+                                    width: _isTalking ? 110 : 100,
+                                    height: _isTalking ? 110 : 100,
+                                    child: CircularProgressIndicator(
+                                      value: _isTalking ? _talkHoldProgress : 0.0,
+                                      strokeWidth: 4,
+                                      backgroundColor:
+                                          Colors.white.withValues(alpha: 0.22),
+                                      valueColor:
+                                          const AlwaysStoppedAnimation<Color>(
+                                              Colors.white),
+                                    ),
+                                  ),
+                                  AnimatedContainer(
+                                    duration: const Duration(milliseconds: 150),
+                                    width: _isTalking ? 110 : 100,
+                                    height: _isTalking ? 110 : 100,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: _isTalking ? Colors.red : Colors.green,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: (_isTalking
+                                                  ? Colors.red
+                                                  : Colors.green)
+                                              .withValues(alpha: 0.4),
+                                          blurRadius: _isTalking ? 20 : 10,
+                                          spreadRadius: _isTalking ? 4 : 2,
+                                        )
+                                      ],
+                                    ),
+                                    child: Column(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Icon(
+                                              _isTalking
+                                                  ? Icons.mic
+                                                  : Icons.mic_none,
+                                              color: Colors.white,
+                                              size: 40),
+                                          const SizedBox(height: 4),
+                                          if (_showTalkHintText)
+                                            Text(
+                                              _isTalking
+                                                  ? 'LISTENING'
+                                                  : localizedUiText(
+                                                      'hold_to_talk', _uiLanguage),
+                                              style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 10,
+                                                  fontWeight: FontWeight.bold,
+                                                  letterSpacing: 0.5),
+                                            ),
+                                        ]),
+                                  ),
+                                ],
                               ),
-                              tooltip: localizedUiText(
-                                  'new_translation', _uiLanguage),
-                              padding: const EdgeInsets.all(12),
                             ),
                           ),
+                        ),
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.centerRight,
+                            child: isDark
+                                ? IconButton(
+                                    onPressed:
+                                        _spokenText.isNotEmpty ? _resetOutput : null,
+                                    icon: Icon(
+                                      Icons.refresh,
+                                      size: 28,
+                                      color: Colors.white,
+                                    ),
+                                    tooltip: 'New Translation',
+                                    padding: const EdgeInsets.all(12),
+                                  )
+                                : Container(
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      shape: BoxShape.circle,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withValues(alpha: 0.10),
+                                          blurRadius: 8,
+                                          offset: const Offset(0, 2),
+                                        ),
+                                      ],
+                                    ),
+                                    child: IconButton(
+                                      onPressed:
+                                          _spokenText.isNotEmpty ? _resetOutput : null,
+                                      icon: const Icon(
+                                        Icons.refresh,
+                                        size: 28,
+                                        color: Colors.black,
+                                      ),
+                                      tooltip: localizedUiText(
+                                          'new_translation', _uiLanguage),
+                                      padding: const EdgeInsets.all(12),
+                                    ),
+                                  ),
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -6347,7 +6187,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           title: Text(item.translated,
                               style: TextStyle(
                                   color: isDark ? Colors.white : Colors.black,
-                                  fontWeight: FontWeight.bold)),
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16 * _currentTextScale)),
                           subtitle: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
@@ -6365,7 +6206,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                               Padding(
                                 padding: const EdgeInsets.only(top: 4.0),
-                                child: Text('Original: ${item.original}'),
+                                child: Text('Original: ${item.original}',
+                                    style: TextStyle(
+                                      fontSize: 16 * _currentTextScale,
+                                    )),
                               ),
                             ],
                           ),
@@ -6442,6 +6286,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _authSubscription?.cancel();
     _creditsSubscription?.cancel();
     _speech.stop();
     _audioPlayer.release();

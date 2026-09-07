@@ -1,7 +1,15 @@
 const { HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
+const { GoogleGenAI } = require("@google/genai");
 const cors = require("cors")({ origin: true });
+
+if (!admin.apps.length) {
+    admin.initializeApp();
+}
+
+const db = admin.firestore();
+const ai = new GoogleGenAI({});
 
 // Configuration and Constants
 const API_COST_PER_UNIT = 0.0029;
@@ -386,6 +394,103 @@ function getAllowedOrigins() {
     return raw ? raw.split(",").map((o) => o.trim()).filter(Boolean) : [];
 }
 
+function buildCacheKey(targetLanguage, translatedText) {
+    const normalized = String(translatedText || "").trim().toLowerCase();
+    return crypto
+        .createHash("sha256")
+        .update(`${String(targetLanguage || "").trim()}:${normalized}`)
+        .digest("hex");
+}
+
+async function verifyTokenAndGetUserId(authHeader) {
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        throw new Error("Invalid token format.");
+    }
+    const token = authHeader.split("Bearer ")[1];
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    return decodedToken.uid;
+}
+
+async function deductUserCredits(userId) {
+    if (!userId) {
+        console.warn("[deductUserCredits] No userId provided; skipping credit deduction.");
+        return;
+    }
+
+    const userRef = db.collection("users").doc(userId);
+    try {
+        await db.runTransaction(async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+            if (!userDoc.exists) {
+                console.warn(`[deductUserCredits] User ${userId} document not found; skipping credit deduction.`);
+                return;
+            }
+
+            const credits = Number(userDoc.data()?.credits ?? 0);
+            if (!Number.isFinite(credits) || credits <= 0) {
+                console.warn(`[deductUserCredits] User ${userId} has no available credits; keeping balance at 0.`);
+                transaction.update(userRef, { credits: 0 });
+                return;
+            }
+
+            transaction.update(userRef, { credits: credits - 1 });
+        });
+    } catch (error) {
+        console.error(`[deductUserCredits] Failed to deduct credits for ${userId}:`, error);
+    }
+}
+
+async function translateTextWithGemini(text, targetLanguage) {
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: `Translate the following text accurately into ${targetLanguage}. Provide only the direct translation text without introductory remarks or conversational filler: "${text}"`,
+        });
+        return String(response.text || text).trim();
+    } catch (error) {
+        console.error("Gemini translation error:", error);
+        throw new Error("Translation processing failed via Gemini API.");
+    }
+}
+
+async function handleInitialTranslationWithAudio(userId, text, targetLanguage, ttsProvider) {
+    const translatedText = await translateTextWithGemini(text, targetLanguage);
+    const cacheKey = buildCacheKey(targetLanguage, translatedText);
+    const cacheRef = db.collection("shared_audio_cache").doc(cacheKey);
+    const cacheDoc = await cacheRef.get();
+
+    if (cacheDoc.exists && cacheDoc.data()?.audioUrl) {
+        return cacheDoc.data().audioUrl;
+    }
+
+    await deductUserCredits(userId);
+
+    const generatedAudioUrl = "https://storage.googleapis.com/your-bucket/audio.mp3";
+    await cacheRef.set({
+        originalText: text,
+        translatedText,
+        targetLanguage,
+        ttsProvider,
+        audioUrl: generatedAudioUrl,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    return generatedAudioUrl;
+}
+
+async function getSharedAudioUrlOnly(text, targetLanguage) {
+    const translatedText = await translateTextWithGemini(text, targetLanguage);
+    const cacheKey = buildCacheKey(targetLanguage, translatedText);
+    const cacheRef = db.collection("shared_audio_cache").doc(cacheKey);
+    const cacheDoc = await cacheRef.get();
+
+    if (cacheDoc.exists && cacheDoc.data()?.audioUrl) {
+        return cacheDoc.data().audioUrl;
+    }
+
+    throw new Error("Audio not found in shared cache for replay.");
+}
+
 function isOriginAllowed(origin) {
     const allowed = getAllowedOrigins();
     return allowed.length === 0 || !origin || allowed.includes(origin);
@@ -401,7 +506,7 @@ function enforceRequestGuardrails(req, res) {
 }
 
 // Handlers
-exports.handleProcessSpeech = (req, res) => {
+function handleProcessSpeech(req, res) {
     cors(req, res, async () => {
         console.log("handleProcessSpeech invoked.");
         try {
@@ -454,9 +559,9 @@ exports.handleProcessSpeech = (req, res) => {
             res.status(500).send({ error: "Translation Failed", details, hint: details.includes("API_KEY_INVALID") ? "GEMINI_API_KEY is invalid/expired." : undefined });
         }
     });
-};
+}
 
-exports.handleLiveHealthCheck = (req, res) => {
+function handleLiveHealthCheck(req, res) {
     cors(req, res, async () => {
         try {
             if (!enforceRequestGuardrails(req, res)) return;
@@ -477,12 +582,23 @@ exports.handleLiveHealthCheck = (req, res) => {
             res.status(200).send({ status: "ok", mode: "live-health", availableLiveModels: liveModels.map((m) => m.name) });
         } catch (error) { res.status(500).send({ error: "Live health check failed", details: String(error?.message || error) }); }
     });
-};
+}
 
-exports.handleTtsProviderReadiness = (req, res) => {
+function handleTtsProviderReadiness(req, res) {
     cors(req, res, async () => {
         if (req.method !== "GET") return res.status(405).send({ error: "Method Not Allowed." });
         if (!isOriginAllowed(String(req.headers.origin || "").trim())) return res.status(403).send({ error: "Origin not allowed." });
         res.status(200).send({ status: "ok", providers: { google: { configured: true }, narakeet: { configured: Boolean(process.env.NARAKEET_API_KEY) } } });
     });
+}
+
+module.exports = {
+    verifyTokenAndGetUserId,
+    deductUserCredits,
+    translateTextWithGemini,
+    handleInitialTranslationWithAudio,
+    getSharedAudioUrlOnly,
+    handleProcessSpeech,
+    handleLiveHealthCheck,
+    handleTtsProviderReadiness,
 };

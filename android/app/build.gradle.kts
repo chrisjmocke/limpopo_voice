@@ -64,14 +64,9 @@ android {
             isMinifyEnabled = false
             isShrinkResources = false
         }
-        
+
         debug {
-            // Forces debug builds to use your custom release keystore too
-            signingConfig = if (hasKeystoreProperties) {
-                signingConfigs.getByName("release")
-            } else {
-                signingConfigs.getByName("debug")
-            }
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 }

@@ -1,6 +1,12 @@
+const fs = require("fs");
+const path = require("path");
 const { onCall, HttpsError, onRequest } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
+
+const plansConfig = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "../plans.json"), "utf8"),
+);
 
 const firebaseConfig = (() => {
   try {
@@ -39,36 +45,26 @@ function buildFallbackEmail(uid) {
   return `${safe || "anon"}@letstalk.local`;
 }
 
-function getPlanCreditMap() {
-  return {
-    PLN_100_CREDITS: 100,
-    PLN_300_CREDITS: 300,
-    PLN_700_CREDITS: 700,
-    PLN_2t2fvh0gmfjshy7: 100,
-    PLN_ietxwof2rdpsfpt: 300,
-    PLN_qq7y0nbwj2x75ff: 700,
-  };
+function getCreditsForPlanCode(planCode) {
+  const normalized = String(planCode || "").trim();
+  const plan = (plansConfig.plans || []).find((p) => p.code === normalized);
+  return plan ? Number(plan.credits) : null;
 }
 
-function getPlanAmountMap() {
-  return {
-    PLN_100_CREDITS: 1999,
-    PLN_300_CREDITS: 4999,
-    PLN_700_CREDITS: 9999,
-    PLN_2t2fvh0gmfjshy7: 1999,
-    PLN_ietxwof2rdpsfpt: 4999,
-    PLN_qq7y0nbwj2x75ff: 9999,
-  };
+function getAmountForPlanCode(planCode) {
+  const normalized = String(planCode || "").trim();
+  const plan = (plansConfig.plans || []).find((p) => p.code === normalized);
+  return plan && Number.isFinite(Number(plan.amountCents))
+    ? Number(plan.amountCents)
+    : null;
 }
 
 function resolvePlanCredits(planCode) {
-  const plan = String(planCode || "").trim();
-  return getPlanCreditMap()[plan] || null;
+  return getCreditsForPlanCode(planCode);
 }
 
 function resolvePlanAmount(planCode) {
-  const plan = String(planCode || "").trim();
-  return getPlanAmountMap()[plan] || null;
+  return getAmountForPlanCode(planCode);
 }
 
 function extractSubscriptionMetadata(eventData = {}) {
@@ -611,6 +607,11 @@ const paystackWebhook = onRequest(
     const db = getFirestoreDb();
     const { subscriptionCode, subscriptionToken } = extractSubscriptionMetadata(data);
 
+    if (planCode && getCreditsForPlanCode(planCode) === null) {
+      console.warn(`[Paystack Webhook] Rejected unknown plan code: ${planCode}`);
+      return res.status(400).send(`Unknown or missing plan code: ${planCode}`);
+    }
+
     const resolvedUserId = normalizeUserId(
       metadata.userId ||
       metadata.uid ||
@@ -702,6 +703,12 @@ const paystackWebhook = onRequest(
     if (!effectiveUserRef) {
       console.error("Missing userId in webhook metadata");
       return res.status(400).send("Missing metadata");
+    }
+
+    const onceOffPlanCode = data.plan_code || (data.metadata && data.metadata.plan_code) || null;
+    if (onceOffPlanCode && getCreditsForPlanCode(onceOffPlanCode) === null) {
+      console.warn(`[Paystack Once-Off] Rejected unknown plan code: ${onceOffPlanCode}`);
+      return res.status(400).send(`Unknown or missing plan code: ${onceOffPlanCode}`);
     }
 
     const amount = Number(data.amount || 0);
