@@ -617,8 +617,8 @@ function handleProcessSpeech(req, res) {
             const targetIsEnglish = normalizeTargetLanguageCode(normalizedTargetLanguage) === "en";
             const normalizedInput = normalizeComparableText(inputText);
             const normalizedTranslated = normalizeComparableText(translatedText);
-            const sourceEchoMatch = translatedText != null && normalizedTranslated.length > 0 && normalizedTranslated === normalizedInput && !targetIsEnglish;
-            const shortEchoGuard = translatedText != null && normalizedTranslated.length > 0 && normalizedTranslated === normalizedInput && normalizedInput.length <= 3 && !targetIsEnglish;
+            const sourceEchoMatch = translatedText != null && normalizedTranslated.length > 0 && normalizedTranslated === normalizedInput && !targetIsEnglish && !shouldSkipTranslation;
+            const shortEchoGuard = translatedText != null && normalizedTranslated.length > 0 && normalizedTranslated === normalizedInput && normalizedInput.length <= 3 && !targetIsEnglish && !shouldSkipTranslation;
             const inputLooksLikeEcho = sourceEchoMatch || shortEchoGuard;
             if (translatedText == null || translatedText.trim().length === 0 || inputLooksLikeEcho) {
                 console.error("Translation failed: source text was echoed or no translated text was produced.", { inputText, targetLanguage: normalizedTargetLanguage, translatedText, normalizedInput, normalizedTranslated });

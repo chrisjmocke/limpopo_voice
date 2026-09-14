@@ -724,10 +724,6 @@ class _HomeScreenState extends State<HomeScreen> {
     required String phonetic,
     required List<String> langs,
   }) async {
-    if (_credits <= 0) {
-      _showCreditTiers();
-      return false;
-    }
     bool duplicateFound = false;
     for (final lang in langs) {
       final key = lang;
@@ -977,12 +973,15 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _showTalkHintText = true;
   bool _isScanningText = false;
   int _credits = 10;
+  int _freeTttRemaining = 20;
   String? _authUid;
   String? _authEmail;
   String? _installId;
   String? _deviceId;
 
   bool _authBusy = false;
+  int? _generatingAudioHistoryIndex;
+  dynamic _generatingAudioLearnPhrase;
   static const String _historyPrefsKey = 'device_history_v1';
   static const String _languagePrefsKey = 'device_selected_languages_v1';
   final List<HistoryItem> _history = [];
@@ -2315,7 +2314,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   DocumentReference<Map<String, dynamic>>? _userDocRef() {
-    final id = _authUid;
+    final id = FirebaseAuth.instance.currentUser?.uid ?? _authUid;
     if (id == null || id.isEmpty) return null;
     return FirebaseFirestore.instance.collection('users').doc(id);
   }
@@ -2323,13 +2322,29 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _ensureUserProfileDocument() async {
     final ref = _userDocRef();
     if (ref == null) return;
+    final currentUid = FirebaseAuth.instance.currentUser?.uid ?? _authUid;
     await ref.set({
-      'userId': _authUid,
-      'authUid': _authUid,
+      'userId': currentUid,
+      'authUid': currentUid,
       'email': _authEmail,
       'installId': _installId,
+      'free_ttt_remaining': _freeTttRemaining,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+  }
+
+  Future<void> _saveFreeTttRemainingToFirestore() async {
+    final ref = _userDocRef();
+    if (ref == null) return;
+
+    try {
+      await ref.set({
+        'free_ttt_remaining': _freeTttRemaining,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('Failed to save free TTT allowance: $e');
+    }
   }
 
   Future<void> _loadCreditsFromFirestore() async {
@@ -2348,10 +2363,15 @@ class _HomeScreenState extends State<HomeScreen> {
         final data = doc.data() ?? {};
         credits = data['credits'] ?? 0;
         monthlyCountdownDays = _calculateMonthlyCountdownDays(data);
+        final savedFreeTtt = data['free_ttt_remaining'];
+        if (savedFreeTtt is num) {
+          _freeTttRemaining = savedFreeTtt.toInt().clamp(0, 20);
+        }
       } else {
         // Create initial document structure if it doesn't exist
         await docRef.set({
           'credits': 0,
+          'free_ttt_remaining': 20,
           'monthlyRenewalActive': false,
           'monthlyDebitCancelled': false,
           'cancelledUntil': null,
@@ -2364,10 +2384,12 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) {
         setState(() {
           _credits = credits;
+          _freeTttRemaining = _freeTttRemaining.clamp(0, 20);
           _monthlyCountdownDays = monthlyCountdownDays;
         });
       } else {
         _credits = credits;
+        _freeTttRemaining = _freeTttRemaining.clamp(0, 20);
         _monthlyCountdownDays = monthlyCountdownDays;
       }
     } catch (e) {
@@ -2455,10 +2477,59 @@ class _HomeScreenState extends State<HomeScreen> {
       final docSnapshot = await docRef.get();
 
       return docSnapshot.exists &&
-          docSnapshot.data()?['used_free_trial'] == true;
+          (docSnapshot.data()?['used_free_trial'] == true ||
+           docSnapshot.data()?['free_ttt_remaining'] == 0);
     } catch (e) {
       debugPrint('Failed to check device free trial status: $e');
       return false;
+    }
+  }
+
+  Future<int?> _getDeviceFreeTttRemaining() async {
+    if (!_deviceIdCompleter.isCompleted) {
+      await _deviceIdCompleter.future;
+    }
+    if (_deviceId == null || _deviceId!.isEmpty) {
+      return null;
+    }
+
+    try {
+      final db = FirebaseFirestore.instance;
+      final docRef = db.collection('global_device_installs').doc(_deviceId);
+      final docSnapshot = await docRef.get();
+
+      if (docSnapshot.exists) {
+        final data = docSnapshot.data();
+        if (data != null && data.containsKey('free_ttt_remaining')) {
+          return (data['free_ttt_remaining'] as num).toInt();
+        }
+      }
+    } catch (e) {
+      debugPrint('Failed to check device free TTT remaining: $e');
+    }
+    return null;
+  }
+
+  Future<void> _updateDeviceFreeTttRemaining(int remaining) async {
+    if (!_deviceIdCompleter.isCompleted) {
+      await _deviceIdCompleter.future;
+    }
+    if (_deviceId == null || _deviceId!.isEmpty) {
+      return;
+    }
+
+    try {
+      final db = FirebaseFirestore.instance;
+      final docRef = db.collection('global_device_installs').doc(_deviceId);
+
+      await docRef.set({
+        'free_ttt_remaining': remaining,
+        'last_seen': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true)).catchError((e) {
+        debugPrint('Failed to update device free TTT: $e');
+      });
+    } catch (e) {
+      debugPrint('Error updating device free TTT: $e');
     }
   }
 
@@ -2570,6 +2641,28 @@ class _HomeScreenState extends State<HomeScreen> {
             'updatedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
         }
+      }
+
+      // Enforce device-linked 20-TTT countdown limit as well
+      final deviceFreeTttRemaining = await _getDeviceFreeTttRemaining();
+      if (deviceFreeTttRemaining != null) {
+        if (deviceFreeTttRemaining < _freeTttRemaining) {
+          debugPrint(
+              'Enforcing global device TTT remaining count: $deviceFreeTttRemaining');
+          if (mounted) {
+            setState(() => _freeTttRemaining = deviceFreeTttRemaining);
+          } else {
+            _freeTttRemaining = deviceFreeTttRemaining;
+          }
+          if (ref != null) {
+            await ref.set({
+              'free_ttt_remaining': deviceFreeTttRemaining,
+            }, SetOptions(merge: true));
+          }
+        }
+      } else {
+        // Log current TTT state on device record for first lookup tracking
+        await _updateDeviceFreeTttRemaining(_freeTttRemaining);
       }
 
       await _ensureUserProfileDocument();
@@ -3306,6 +3399,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _startListening() async {
+    if (mounted) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    }
+
     final micStatus = await Permission.microphone.request();
     if (!micStatus.isGranted) {
       if (mounted) {
@@ -3363,6 +3460,10 @@ class _HomeScreenState extends State<HomeScreen> {
         });
 
         if (r.finalResult && recognized.isNotEmpty) {
+          if (_credits <= 0 && _freeTttRemaining <= 0) {
+            _showZeroCreditReminderBanner();
+            return;
+          }
           _doTranslate(recognized);
         }
       },
@@ -3461,9 +3562,69 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _doTranslate(String input) async {
-    // Check credits first - no translation request is allowed on the main page if out of credits
-    if (_credits <= 0) {
-      _showCreditTiers();
+    // Free users get 20 free TTTs before translation is blocked. Paid users can
+    // translate normally regardless of the free TTT counter.
+    final hasNoCredits = _credits <= 0;
+    final freeTttExhausted = _freeTttRemaining <= 0;
+
+    if (hasNoCredits && freeTttExhausted) {
+      _showZeroCreditReminderBanner();
+      return;
+    }
+
+    // Fast-path for zero paid credits: allow the remaining free TTT allowance,
+    // skip audio generation, and still show the working indicator while the
+    // text-only TTT request is in flight.
+    if (hasNoCredits) {
+      _showZeroCreditReminderBanner();
+      if (mounted) {
+        setState(() => _isTranslating = true);
+      } else {
+        _isTranslating = true;
+      }
+
+      String result;
+      try {
+        final cachedTranslation = await _getCachedTranslation(input, _selectedOutputLang);
+        if (cachedTranslation != null && cachedTranslation.isNotEmpty) {
+          result = cachedTranslation;
+        } else {
+          result = await _translateText(input);
+          await _saveCacheTranslation(input, _selectedOutputLang, result);
+        }
+      } catch (e) {
+        debugPrint('0-credit fast-path translation error: $e');
+        result = input; // fallback gracefully
+      }
+
+      final nextAllowed = _freeTttRemaining - 1;
+      if (mounted) {
+        setState(() {
+          _freeTttRemaining = nextAllowed.clamp(0, 20);
+          _translatedText = _maskProfanityForDisplay(result);
+          _isTranslating = false;
+        });
+      } else {
+        _freeTttRemaining = nextAllowed.clamp(0, 20);
+        _translatedText = _maskProfanityForDisplay(result);
+        _isTranslating = false;
+      }
+      unawaited(_saveFreeTttRemainingToFirestore());
+      unawaited(_updateDeviceFreeTttRemaining(_freeTttRemaining));
+
+      _history.insert(
+          0,
+          HistoryItem(
+              _selectedInputLang,
+              _selectedOutputLang,
+              _maskProfanityForDisplay(input),
+              _maskProfanityForDisplay(result),
+              DateTime.now(),
+              phonetic: ''));
+      if (_history.length > 100) {
+        _history.removeRange(100, _history.length);
+      }
+      unawaited(_saveHistoryToDevice());
       return;
     }
 
@@ -3519,7 +3680,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
 
     final safeForSpeech = _silenceProfanityForSpeech(result);
-    if (safeForSpeech.isNotEmpty) {
+    if (safeForSpeech.isNotEmpty && !hasNoCredits) {
       // Start output audio immediately when the translated text is available so it
       // plays alongside the TTT result rather than after a later UI refresh.
       unawaited(
@@ -3541,6 +3702,10 @@ class _HomeScreenState extends State<HomeScreen> {
       _translatedText = _maskProfanityForDisplay(result);
       _isTranslating = false;
     });
+
+    if (hasNoCredits) {
+      _showSnack('Log in to buy credits');
+    }
 
     // 2. Add to history
     _history.insert(
@@ -3671,10 +3836,53 @@ class _HomeScreenState extends State<HomeScreen> {
     return false;
   }
 
+  Future<void> _playHistoryReplayItem(HistoryItem item, int index) async {
+    if (_credits <= 0) {
+      _showZeroCreditReminderBanner();
+      return;
+    }
+    setState(() {
+      _generatingAudioHistoryIndex = index;
+    });
+    try {
+      await _speakText(item.translated, item.outputLang);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _generatingAudioHistoryIndex = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _playLearnReplay(String language, String text, dynamic phraseKey) async {
+    if (_credits <= 0) {
+      _showZeroCreditReminderBanner();
+      return;
+    }
+    setState(() {
+      _generatingAudioLearnPhrase = phraseKey;
+    });
+    try {
+      await _speakText(text, language);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _generatingAudioLearnPhrase = null;
+        });
+      }
+    }
+  }
+
   Future<void> _speakText(String text, String language,
       {double? playbackRate}) async {
     debugPrint(
         '[_speakText] Attempting to speak text: "$text" in language: $language');
+    if (_credits <= 0) {
+      _showZeroCreditReminderBanner();
+      return;
+    }
+
     if (_shouldAbortTts(text, context: 'speakText')) {
       return;
     }
@@ -3722,6 +3930,7 @@ class _HomeScreenState extends State<HomeScreen> {
         language,
         voiceName,
         provider: provider,
+        skipTranslation: true,
       );
 
       if (audioData != null && audioData.isNotEmpty) {
@@ -3761,10 +3970,6 @@ class _HomeScreenState extends State<HomeScreen> {
     required String text,
     required bool isUserPhrase,
   }) async {
-    if (_credits <= 0) {
-      _showCreditTiers();
-      return;
-    }
     final playbackRate = learnPlaybackRateForSelection(_learnPlaybackSpeed);
     final assetPath = _learnAudioAssetPath(language, text);
     if (assetPath != null) {
@@ -3780,6 +3985,11 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
+    if (_credits <= 0) {
+      _showZeroCreditReminderBanner();
+      return;
+    }
+
     if (isUserPhrase) {
       await _speakText(text, language, playbackRate: playbackRate);
       return;
@@ -3788,7 +3998,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<Uint8List?> _generateAudioWithCache(
       String text, String language, String? voice,
-      {required String provider, bool skipTranslation = true}) async {
+      {required String provider, bool skipTranslation = false}) async {
     await _translationService.primeSession();
     debugPrint(
         '[_generateAudioWithCache] Attempting to generate audio for text: "$text", language: $language, voice: $voice, provider: $provider, skipTranslation: $skipTranslation');
@@ -3841,6 +4051,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _speakTranslatedText(String text) async {
+    if (_credits <= 0) {
+      _showZeroCreditReminderBanner();
+      return;
+    }
+
     if (_shouldAbortTts(text, context: 'speakTranslatedText')) {
       return;
     }
@@ -3871,6 +4086,7 @@ class _HomeScreenState extends State<HomeScreen> {
           _selectedOutputLang,
           voiceName,
           provider: provider,
+          skipTranslation: true,
         );
       }).toList(growable: false);
 
@@ -3977,6 +4193,14 @@ class _HomeScreenState extends State<HomeScreen> {
       _showSnack('Please wait for the current translation to finish.');
       return;
     }
+    if (_credits <= 0 && _freeTttRemaining <= 0) {
+      _showZeroCreditReminderBanner();
+      return;
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    }
 
     // Dismiss keyboard immediately
     FocusScope.of(context).unfocus();
@@ -4035,6 +4259,55 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _showZeroCreditReminderBanner() {
+    if (!mounted) return;
+
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final backgroundColor = isDarkMode ? const Color(0xFFF7F5F0) : Colors.black87;
+    final textColor = isDarkMode ? Colors.black87 : Colors.white;
+    final actionTextColor = isDarkMode ? Colors.black87 : Colors.white;
+    final remaining = _freeTttRemaining.clamp(0, 20);
+
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: InkWell(
+          onTap: () {
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            _showAuthOptionsDialog();
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Text(
+              'Sign in to buy credits for audio translations • $remaining free TTTs left',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                color: textColor,
+                fontSize: 14,
+              ),
+            ),
+          ),
+        ),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: backgroundColor,
+        margin: const EdgeInsets.only(bottom: 72, left: 40, right: 40),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        duration: const Duration(days: 1),
+        action: SnackBarAction(
+          label: 'Sign in',
+          textColor: actionTextColor,
+          onPressed: () {
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            _showAuthOptionsDialog();
+          },
+        ),
+      ),
+    );
+  }
+
   Future<void> _sendHistoryToLearn(HistoryItem item) async {
     final phonetic = (item.phonetic ?? '').trim();
     final normalizedOutputLang = _normalizeLanguageLabel(item.outputLang);
@@ -4073,10 +4346,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _openCreditsIfNeededForTab(String tabName) {
-    if (_credits <= 0) {
-      _showCreditTiers();
-      return;
-    }
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
     setState(() => _activeTab = tabName);
   }
 
@@ -5034,11 +5304,7 @@ class _HomeScreenState extends State<HomeScreen> {
         primaryVelocity: primaryVelocity, dragDelta: dragDelta);
     if (targetTab == null) return;
 
-    if (_credits <= 0) {
-      _showCreditTiers();
-      return;
-    }
-
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
     setState(() => _activeTab = targetTab);
     _lastHorizontalDragDistance = 0;
   }
@@ -5616,6 +5882,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 final idx = entry.key;
                 final phrase = entry.value;
                 final isUserPhrase = idx < userPhrases.length;
+                final bool isGeneratingAudio = _generatingAudioLearnPhrase == phrase['text'];
                 return Container(
                   margin: const EdgeInsets.only(bottom: 10),
                   padding:
@@ -5624,88 +5891,106 @@ class _HomeScreenState extends State<HomeScreen> {
                     color: isDark ? Colors.black : const Color(0xFFF7F5F0),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Row(
+                  child: Column(
                     children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Column(
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  phrase['text'] ?? '',
-                                  style: TextStyle(
-                                    fontSize: 16 * _currentTextScale,
-                                    fontFamily: 'monospace',
-                                    fontWeight: FontWeight.w600,
-                                    color: isDark ? Colors.white : Colors.black,
-                                  ),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      phrase['text'] ?? '',
+                                      style: TextStyle(
+                                        fontSize: 16 * _currentTextScale,
+                                        fontFamily: 'monospace',
+                                        fontWeight: FontWeight.w600,
+                                        color: isDark ? Colors.white : Colors.black,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      phrase['en'] ?? '',
+                                      style: TextStyle(
+                                        fontSize: 12 * _currentTextScale,
+                                        fontFamily: 'monospace',
+                                        fontWeight: FontWeight.w500,
+                                        color: isDark
+                                            ? Colors.white60
+                                            : Colors.black54,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                const SizedBox(height: 3),
-                                Text(
-                                  phrase['en'] ?? '',
-                                  style: TextStyle(
-                                    fontSize: 12 * _currentTextScale,
-                                    fontFamily: 'monospace',
-                                    fontWeight: FontWeight.w500,
-                                    color: isDark
-                                        ? Colors.white60
-                                        : Colors.black54,
+                                if ((phrase['phonetic'] ?? '').isNotEmpty) ...[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    phrase['phonetic']!,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontStyle: FontStyle.italic,
+                                      color: isDark
+                                          ? Colors.white70
+                                          : Colors.black54,
+                                    ),
                                   ),
-                                ),
+                                ],
                               ],
                             ),
-                            if ((phrase['phonetic'] ?? '').isNotEmpty) ...[
-                              const SizedBox(height: 2),
-                              Text(
-                                phrase['phonetic']!,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontStyle: FontStyle.italic,
-                                  color: isDark
-                                      ? Colors.white70
-                                      : Colors.black54,
-                                ),
+                          ),
+                          IconButton(
+                            icon: Icon(
+                              Icons.volume_up,
+                              color: isDark ? Colors.white : Colors.black,
+                            ),
+                            tooltip: 'Listen',
+                            onPressed: () {
+                              if (isUserPhrase) {
+                                _playLearnReplay(_selectedLearnLang, phrase['text'] ?? '', phrase['text']);
+                              } else {
+                                _playLearnPhraseAudio(
+                                  language: _selectedLearnLang,
+                                  text: phrase['text'] ?? '',
+                                  isUserPhrase: isUserPhrase,
+                                );
+                              }
+                            },
+                          ),
+                          if (isUserPhrase) ...[
+                            IconButton(
+                              icon: Icon(
+                                (phrase['pinned'] ?? '').trim().toLowerCase() == 'true'
+                                    ? Icons.push_pin
+                                    : Icons.push_pin_outlined,
+                                color: isDark ? Colors.white : Colors.black,
                               ),
-                            ],
+                              tooltip: (phrase['pinned'] ?? '').trim().toLowerCase() == 'true'
+                                  ? 'Unpin from top'
+                                  : 'Pin to top',
+                              onPressed: () => _toggleUserPhrasePin(idx),
+                            ),
+                            IconButton(
+                              icon: Icon(
+                                Icons.close,
+                                color: isDark ? Colors.white70 : Colors.black54,
+                              ),
+                              tooltip: 'Delete',
+                              onPressed: () => _deleteUserPhrase(idx),
+                            ),
                           ],
-                        ),
+                        ],
                       ),
-                      IconButton(
-                        icon: Icon(
-                          Icons.volume_up,
-                          color: isDark ? Colors.white : Colors.black,
-                        ),
-                        tooltip: 'Listen',
-                        onPressed: () => _playLearnPhraseAudio(
-                          language: _selectedLearnLang,
-                          text: phrase['text'] ?? '',
-                          isUserPhrase: isUserPhrase,
-                        ),
-                      ),
-                      if (isUserPhrase) ...[
-                        IconButton(
-                          icon: Icon(
-                            (phrase['pinned'] ?? '').trim().toLowerCase() == 'true'
-                                ? Icons.push_pin
-                                : Icons.push_pin_outlined,
-                            color: isDark ? Colors.white : Colors.black,
+                      if (isGeneratingAudio)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 8.0),
+                          child: LinearProgressIndicator(
+                            color: Colors.white,
+                            backgroundColor: Colors.transparent,
                           ),
-                          tooltip: (phrase['pinned'] ?? '').trim().toLowerCase() == 'true'
-                              ? 'Unpin from top'
-                              : 'Pin to top',
-                          onPressed: () => _toggleUserPhrasePin(idx),
                         ),
-                        IconButton(
-                          icon: Icon(
-                            Icons.close,
-                            color: isDark ? Colors.white70 : Colors.black54,
-                          ),
-                          tooltip: 'Delete',
-                          onPressed: () => _deleteUserPhrase(idx),
-                        ),
-                      ],
                     ],
                   ),
                 );
@@ -5960,10 +6245,12 @@ class _HomeScreenState extends State<HomeScreen> {
                             child: IconButton(
                               icon: const Icon(Icons.replay, size: 26),
                               tooltip: 'Replay Input',
-                              color: isDark ? Colors.white : const Color(0xFF3A2F2A),
-                              onPressed: _spokenText.isNotEmpty
-                                  ? () => _speakText(
-                                      _spokenText, _selectedInputLang)
+                              color: _credits > 0 && _spokenText.isNotEmpty
+                                  ? (isDark ? Colors.white : const Color(0xFF3A2F2A))
+                                  : Colors.transparent,
+                              onPressed: _credits > 0 && _spokenText.isNotEmpty
+                                  ? () => _playLearnReplay(
+                                      _selectedInputLang, _spokenText, 'header_input')
                                   : null,
                             ),
                           ),
@@ -6115,10 +6402,12 @@ class _HomeScreenState extends State<HomeScreen> {
                           child: IconButton(
                             icon: const Icon(Icons.replay, size: 26),
                             tooltip: 'Replay Output',
-                            color: isDark ? Colors.white : const Color(0xFF3A2F2A),
-                            onPressed: _translatedText.isNotEmpty
-                                ? () => _speakText(
-                                    _translatedText, _selectedOutputLang)
+                            color: _credits > 0 && _translatedText.isNotEmpty
+                                ? (isDark ? Colors.white : const Color(0xFF3A2F2A))
+                                : Colors.transparent,
+                            onPressed: _credits > 0 && _translatedText.isNotEmpty
+                                ? () => _playLearnReplay(
+                                    _selectedOutputLang, _translatedText, 'header_output')
                                 : null,
                           ),
                         ),
@@ -6151,10 +6440,6 @@ class _HomeScreenState extends State<HomeScreen> {
                               style: TextStyle(
                                   fontWeight: FontWeight.bold, fontSize: 13.5)),
                           onPressed: () async {
-                            if (_credits <= 0) {
-                              _showCreditTiers();
-                              return;
-                            }
                             final sent = await _sendToLearnMultipleLangs(
                               translated: _translatedText,
                               original: _spokenText.isNotEmpty
@@ -6816,6 +7101,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       itemBuilder: (context, i) {
                         final item = _history[i];
                         final isSelected = _selectedHistoryIndices.contains(i);
+                        final bool isGeneratingAudio = _generatingAudioHistoryIndex == i;
                         return Card(
                           margin: EdgeInsets.zero,
                           color: isDark ? Colors.black : const Color(0xFFF7F5F0),
@@ -6852,7 +7138,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       padding: EdgeInsets.zero,
                                       constraints: const BoxConstraints(),
                                       onPressed: () =>
-                                          _speakText(item.translated, item.outputLang),
+                                          _playHistoryReplayItem(item, i),
                                     ),
                                   ],
                                 ),
@@ -6914,6 +7200,14 @@ class _HomeScreenState extends State<HomeScreen> {
                                     ),
                                   ),
                                 ),
+                                if (isGeneratingAudio)
+                                  const Padding(
+                                    padding: EdgeInsets.only(top: 4.0),
+                                    child: LinearProgressIndicator(
+                                      color: Colors.white,
+                                      backgroundColor: Colors.transparent,
+                                    ),
+                                  ),
                                 const SizedBox(height: 6),
                                 SizedBox(
                                   width: double.infinity,
@@ -6943,10 +7237,6 @@ class _HomeScreenState extends State<HomeScreen> {
                                       ),
                                     ),
                                     onPressed: () async {
-                                      if (_credits <= 0) {
-                                        _showCreditTiers();
-                                        return;
-                                      }
                                       await _sendHistoryToLearn(item);
                                     },
                                   ),
@@ -6964,6 +7254,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       itemBuilder: (context, i) {
                         final item = _history[i];
                         final isSelected = _selectedHistoryIndices.contains(i);
+                        final bool isGeneratingAudio = _generatingAudioHistoryIndex == i;
                         return Card(
                           margin: const EdgeInsets.only(bottom: 12),
                           color: isDark ? Colors.black : const Color(0xFFF7F5F0),
@@ -7026,12 +7317,19 @@ class _HomeScreenState extends State<HomeScreen> {
                                     IconButton(
                                       icon: const Icon(Icons.volume_up),
                                       tooltip: 'Repeat',
-                                      onPressed: () => _speakText(
-                                          item.translated, item.outputLang),
+                                      onPressed: () => _playHistoryReplayItem(item, i),
                                     ),
                                   ],
                                 ),
                               ),
+                              if (isGeneratingAudio)
+                                const Padding(
+                                  padding: EdgeInsets.symmetric(horizontal: 16),
+                                  child: LinearProgressIndicator(
+                                    color: Colors.white,
+                                    backgroundColor: Colors.transparent,
+                                  ),
+                                ),
                               Padding(
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 16, vertical: 4),
@@ -7056,10 +7354,6 @@ class _HomeScreenState extends State<HomeScreen> {
                                           fontWeight: FontWeight.bold,
                                           fontSize: 13.5)),
                                   onPressed: () async {
-                                    if (_credits <= 0) {
-                                      _showCreditTiers();
-                                      return;
-                                    }
                                     await _sendHistoryToLearn(item);
                                   },
                                 ),
@@ -7131,16 +7425,26 @@ class _PaystackWebViewState extends State<_PaystackWebView> {
         NavigationDelegate(
           onNavigationRequest: (request) {
             final url = request.url.toLowerCase();
-            // Paystack callback URL detection
-            if (url.contains('standard.paystack.co/close') ||
-                url.contains('finish') ||
+            final uri = Uri.tryParse(request.url);
+            final status = uri?.queryParameters['status']?.toLowerCase() ?? '';
+            final transactionRef = uri?.queryParameters['trxref'] ?? '';
+            final reference = uri?.queryParameters['reference'] ?? '';
+
+            // Treat Paystack's generic close URL as a user-initiated cancel unless
+            // it explicitly reports a successful payment status.
+            if (status == 'successful' ||
+                status == 'success' ||
                 url.contains('success') ||
                 url.contains('completed') ||
-                (url.contains('trxref=') && url.contains('reference='))) {
+                (transactionRef.isNotEmpty && reference.isNotEmpty)) {
               Navigator.pop(context, 'success');
               return NavigationDecision.prevent;
             }
-            if (url.contains('cancel') || url.contains('close')) {
+
+            if (status == 'cancelled' ||
+                status == 'canceled' ||
+                url.contains('cancel') ||
+                url.contains('close')) {
               Navigator.pop(context, 'cancel');
               return NavigationDecision.prevent;
             }
@@ -7157,6 +7461,13 @@ class _PaystackWebViewState extends State<_PaystackWebView> {
       appBar: AppBar(
         title: const Text('Secure Payment'),
         backgroundColor: Colors.black,
+        actions: [
+          IconButton(
+            onPressed: () => Navigator.of(context).pop('cancel'),
+            icon: const Icon(Icons.close),
+            tooltip: 'Cancel payment',
+          ),
+        ],
       ),
       body: WebViewWidget(controller: _controller),
     );
