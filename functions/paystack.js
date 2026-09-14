@@ -1,12 +1,13 @@
-const fs = require("fs");
-const path = require("path");
-const { onCall, HttpsError, onRequest } = require("firebase-functions/v2/https");
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onRequest } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 
-const plansConfig = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "../plans.json"), "utf8"),
-);
+const plansPath = path.join(__dirname, "plans.json");
+const plansData = JSON.parse(fs.readFileSync(plansPath, "utf8"));
+const plansConfig = plansData;
 
 const firebaseConfig = (() => {
   try {
@@ -76,8 +77,6 @@ function extractSubscriptionMetadata(eventData = {}) {
     direct.subscription?.subscription_code ||
     direct.subscription?.code ||
     direct.subscription?.id ||
-    direct.subscription?.subscription_code ||
-    direct.subscription?.code ||
     direct.authorization?.subscription_code ||
     direct.authorization?.code ||
     metadata.subscriptionCode ||
@@ -183,6 +182,7 @@ const createPaystackTransaction = onCall(
     const secretKey = getPaystackSecret();
     const reference = `limpopo_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
+    const paymentType = normalizedPlanCode ? "subscription" : "once_off";
     const payload = {
       email: payerEmail,
       reference,
@@ -190,6 +190,7 @@ const createPaystackTransaction = onCall(
       metadata: {
         userId: request.auth.uid,
         isSubscription: Boolean(normalizedPlanCode),
+        payment_type: paymentType,
       },
     };
 
@@ -272,6 +273,7 @@ const createPaystackTransactionHttp = onRequest(
       const secretKey = getPaystackSecret();
       const reference = `limpopo_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
+      const paymentType = normalizedPlanCode ? "subscription" : "once_off";
       const payload = {
         email: payerEmail,
         reference,
@@ -279,6 +281,7 @@ const createPaystackTransactionHttp = onRequest(
         metadata: {
           userId: decodedToken.uid,
           isSubscription: Boolean(normalizedPlanCode),
+          payment_type: paymentType,
           creditsToAdd: requestedCredits ?? (normalizedPlanCode ? (resolvePlanCredits(normalizedPlanCode) ?? 0) : 0),
           purchaseType: typeof purchaseType === "string" && purchaseType ? purchaseType : (normalizedPlanCode ? "monthly" : "once_off"),
         },
@@ -287,9 +290,11 @@ const createPaystackTransactionHttp = onRequest(
       if (normalizedPlanCode) {
         payload.plan = normalizedPlanCode;
         payload.channels = ["card"];
+        delete payload.amount;
       } else {
         payload.amount = Math.trunc(amountCents);
         payload.channels = ["card", "bank", "eft", "capitec_pay", "mobile_money"];
+        delete payload.plan;
       }
 
       let response = await fetch("https://api.paystack.co/transaction/initialize", {
@@ -332,12 +337,13 @@ const createPaystackTransactionHttp = onRequest(
 
       if (!response.ok || !result?.status) {
         console.error("Paystack init failed", result);
-        return res.status(502).send({ error: "Paystack transaction creation failed" });
+        return res.status(502).send({ error: "Paystack transaction creation failed", details: result });
       }
 
       if (normalizedPlanCode) {
         const { subscriptionCode, subscriptionToken } = extractSubscriptionMetadata(result?.data || {});
         if (subscriptionCode || subscriptionToken) {
+          const db = getFirestoreDb();
           await persistSubscriptionMetadata(db, decodedToken.uid, {
             subscriptionCode: subscriptionCode || null,
             subscriptionToken: subscriptionToken || null,
@@ -354,9 +360,11 @@ const createPaystackTransactionHttp = onRequest(
         reference,
       });
     } catch (error) {
-      console.error("Paystack HTTP init failed");
+      console.error("Paystack HTTP init triggered an internal exception:", error);
       return res.status(500).send({
         error: "Paystack transaction creation failed",
+        details: error.message || String(error),
+        stack: error.stack || ""
       });
     }
   },
@@ -421,14 +429,6 @@ const cancelPaystackSubscriptionHttp = onRequest(
       userData.subscriptionAuthorizationCode ||
       "",
     ).trim();
-    console.log('Cancel request payload:', {
-      userId,
-      subscriptionCode: subscriptionCode || null,
-      subscriptionToken: subscriptionToken || null,
-      bodyCode: bodyCode || null,
-      bodyToken: bodyToken || null,
-    });
-    const payerEmail = String(userData.email || userData.paystackEmail || "").trim();
 
     const expiryDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
@@ -450,7 +450,6 @@ const cancelPaystackSubscriptionHttp = onRequest(
         cancelled: false,
         reason: "No active Paystack subscription data found. Local record marked as cancelled.",
         subscriptionCode: subscriptionCode || null,
-        payerEmail: payerEmail || null,
       });
     }
 
@@ -472,13 +471,7 @@ const cancelPaystackSubscriptionHttp = onRequest(
       let result = {};
       try {
         result = rawText ? JSON.parse(rawText) : {};
-      } catch (jsonError) {
-        console.error("Paystack cancellation returned non-JSON payload", {
-          status: paystackResponse.status,
-          bodyPreview: String(rawText || "").slice(0, 500),
-          error: String(jsonError),
-        });
-
+      } catch {
         await userRef.set(
           {
             monthlyDebitCancelled: true,
@@ -506,13 +499,6 @@ const cancelPaystackSubscriptionHttp = onRequest(
         /not found|subscription.*not found|invalid.*subscription/i.test(providerMessage);
 
       if (!paystackResponse.ok || (!result?.status && !subscriptionNotFound)) {
-        console.error("Paystack cancellation failed", {
-          status: paystackResponse.status,
-          result,
-          code: subscriptionCode,
-          token: subscriptionToken,
-        });
-
         if (subscriptionNotFound) {
           await userRef.set(
             {
@@ -586,9 +572,6 @@ const paystackWebhook = onRequest(
 
     const secretKey = getPaystackSecret();
     const rawBody = req.rawBody;
-    if (!rawBody) {
-      console.error("Missing rawBody in webhook request. Signature verification might fail.");
-    }
     const bodyToVerify = rawBody || Buffer.from(JSON.stringify(req.body || {}));
     const hash = crypto.createHmac("sha512", secretKey).update(bodyToVerify).digest("hex");
 
@@ -626,25 +609,27 @@ const paystackWebhook = onRequest(
       ? db.collection("users").doc(String(resolvedUserId))
       : await resolveWebhookUserRef(db, metadata, customerInfo, data.customer?.email || "");
 
+    const isSubscriptionEvent =
+      eventName === "subscription.create" ||
+      (eventName === "invoice.update" && data.paid === true) ||
+      metadata.payment_type === "subscription" ||
+      customerMetadata.payment_type === "subscription";
+
     if (
       eventName === "subscription.create" ||
-      (eventName === "invoice.update" && data.paid === true)
+      (eventName === "invoice.update" && data.paid === true) ||
+      (eventName === "charge.success" && isSubscriptionEvent)
     ) {
       const resolvedCredits = resolvePlanCredits(planCode) || 100;
       const effectiveUserId = resolvedUserId || (resolvedUserRef ? resolvedUserRef.id : null) || data.customer?.email || null;
 
       if (!effectiveUserId || !resolvedUserRef) {
-        console.error("Missing userId in plan subscription webhook");
         return res.status(400).send("Missing metadata");
       }
 
-      console.log(
-        `DEBUG webhook metadata dump: event=${eventName}, plan=${planCode || 'unknown'}, user=${effectiveUserId}, subscriptionCode=${subscriptionCode || 'missing'}, subscriptionToken=${subscriptionToken || 'missing'}, email=${data.customer?.email || 'missing'}`,
-      );
-
       await resolvedUserRef.set(
         {
-          credits: admin.firestore.FieldValue.increment(resolvedCredits),
+          subscriptionCredits: admin.firestore.FieldValue.increment(resolvedCredits),
           tierActive: true,
           monthlyRenewalActive: true,
           subscriptionStatus: "active_monthly",
@@ -665,7 +650,6 @@ const paystackWebhook = onRequest(
         subscriptionStatus: "active_monthly",
       });
 
-      console.log(`Added ${resolvedCredits} credits to user ${effectiveUserId} via plan ${planCode}`);
       return res.status(200).send("OK");
     }
 
@@ -701,13 +685,11 @@ const paystackWebhook = onRequest(
 
     const effectiveUserRef = resolvedUserRef || await resolveWebhookUserRef(db, metadata, customerInfo, data.customer?.email || "");
     if (!effectiveUserRef) {
-      console.error("Missing userId in webhook metadata");
       return res.status(400).send("Missing metadata");
     }
 
     const onceOffPlanCode = data.plan_code || (data.metadata && data.metadata.plan_code) || null;
     if (onceOffPlanCode && getCreditsForPlanCode(onceOffPlanCode) === null) {
-      console.warn(`[Paystack Once-Off] Rejected unknown plan code: ${onceOffPlanCode}`);
       return res.status(400).send(`Unknown or missing plan code: ${onceOffPlanCode}`);
     }
 
@@ -720,7 +702,7 @@ const paystackWebhook = onRequest(
 
     await effectiveUserRef.set(
       {
-        credits: admin.firestore.FieldValue.increment(creditsToAdd),
+        onceOffCredits: admin.firestore.FieldValue.increment(creditsToAdd),
         tierActive: true,
         monthlyRenewalActive: false,
         subscriptionStatus: "active_once_off",
@@ -739,7 +721,6 @@ const paystackWebhook = onRequest(
       subscriptionStatus: "active_once_off",
     });
 
-    console.log(`Added ${creditsToAdd} credits and 30-day access to user ${effectiveUserRef.id} via once-off charge`);
     return res.status(200).send("OK");
   },
 );

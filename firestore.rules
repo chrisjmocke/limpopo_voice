@@ -1,47 +1,54 @@
 rules_version = '2';
-
 service cloud.firestore {
   match /databases/{database}/documents {
-    function signedIn() {
+
+    function isAuthenticated() {
       return request.auth != null;
     }
 
-    function isSelf(userId) {
-      return signedIn() && request.auth.uid == userId;
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // Personal user profile data
+    function incomingData() {
+      return request.resource.data;
+    }
+
     match /users/{userId} {
-      allow read, create, update, delete: if isSelf(userId);
+      allow read: if isOwner(userId);
+
+      allow create, update: if isOwner(userId) && (
+        // Ensure balance and credits are numbers and non-negative, and respect up to 3 tiers
+        (
+          (!('creditBalance' in incomingData()) || (incomingData().creditBalance is number && incomingData().creditBalance >= 0)) &&
+          (!('credits' in incomingData()) || (incomingData().credits is number && incomingData().credits >= 0)) &&
+          (!('tierLevel' in incomingData()) || (incomingData().tierLevel is number && incomingData().tierLevel >= 0 && incomingData().tierLevel <= 3))
+        )
+      );
+
+      match /device_installs/{installId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /transactions/{transactionId} {
+        allow read, write: if isOwner(userId);
+      }
     }
 
-    // User sub-documents
-    match /users/{userId}/{document=**} {
-      allow read, write: if isSelf(userId);
+    match /translation_cache/{cacheId} {
+      allow read, write: if isAuthenticated();
     }
 
-    // Payment telemetry events (Write-only for owner, tamper-proof)
-    match /payment_events/{eventId} {
-      allow create: if signedIn() &&
-        request.resource.data.userId == request.auth.uid &&
-        request.resource.data.createdAt == request.time;
-      allow read, update, delete: if false;
+    match /tts_audio_cache/{cacheId} {
+      allow read, write: if isAuthenticated();
     }
 
-    // Global device tracking (Prevent client overwrites/deletes)
     match /global_device_installs/{deviceId} {
-      allow read: if signedIn();
-      // Allow creation only if document does not exist yet (prevents overwrite)
-      allow create: if signedIn() && !exists(/databases/$(database)/documents/global_device_installs/$(deviceId));
-      allow update, delete: if false;
-    }
-
-    // Shared caches for translations and audio.
-    match /translation_cache/{cacheKey} {
-      allow read, write: if signedIn();
-    }
-    match /tts_audio_cache/{cacheKey} {
-      allow read, write: if signedIn();
+      // Allow any client to look up or write a device install to enforce the 10 credit free trial
+      allow read: if true;
+      allow create, update: if request.resource.id == deviceId
+        && incomingData().used_free_trial is bool
+        && (!('credits' in incomingData()) || (incomingData().credits is number && incomingData().credits >= 0));
     }
   }
 }

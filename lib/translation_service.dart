@@ -101,7 +101,7 @@ class TranslationService {
     }
 
     debugPrint(
-        '[TranslationService] Token ready for uid=${user.uid}, length=${(_cachedIdToken ?? '').length}');
+        '[TranslationService] Token ready for uid=${user.uid}, length=${_cachedIdToken?.length ?? 0}');
 
     final headers = <String, String>{
       'Content-Type': 'application/json',
@@ -118,10 +118,16 @@ class TranslationService {
     bool isMale = true,
     bool skipTranslation = false,
     bool includeAlignment = true,
+    String? sourceLanguage,
   }) {
+    final safeTarget = targetLanguage.trim();
+    final safeSource = (sourceLanguage ?? '').trim();
+    final resolvedSource = safeSource.isNotEmpty ? safeSource : 'auto';
+
     return {
       'text': text.trim(),
-      'targetLanguage': targetLanguage,
+      'sourceLanguage': resolvedSource,
+      'targetLanguage': safeTarget,
       'skipTranslation': skipTranslation,
       'isMale': isMale,
       'voiceName': voiceName,
@@ -150,6 +156,7 @@ class TranslationService {
       final requestBody = jsonEncode(buildRequestBody(
         text: input,
         targetLanguage: targetLanguage,
+        sourceLanguage: 'auto',
         voiceName: voiceName,
         ttsProvider: ttsProvider,
         isMale: true,
@@ -226,6 +233,7 @@ class TranslationService {
       final requestBodyMap = buildRequestBody(
         text: input,
         targetLanguage: targetLanguage,
+        sourceLanguage: 'auto',
         voiceName: voiceName,
         ttsProvider: ttsProvider,
         isMale: true,

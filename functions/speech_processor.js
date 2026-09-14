@@ -9,7 +9,18 @@ if (!admin.apps.length) {
 }
 
 const db = admin.firestore();
-const ai = new GoogleGenAI({});
+let aiClient = null;
+
+function getGenAIClient() {
+    const apiKey = String(process.env.GEMINI_API_KEY || "").trim();
+    if (!apiKey) {
+        throw new Error("Missing GEMINI_API_KEY secret in function runtime.");
+    }
+    if (!aiClient) {
+        aiClient = new GoogleGenAI({ apiKey });
+    }
+    return aiClient;
+}
 
 // Configuration and Constants
 const API_COST_PER_UNIT = 0.0029;
@@ -297,9 +308,65 @@ async function synthesizeWithProviderChain({ text, targetLanguage, requestedVoic
     return decorated;
 }
 
+const languageMap = {
+    Afrikaans: "af",
+    English: "en",
+    isiNdebele: "nr",
+    isiXhosa: "xh",
+    isiZulu: "zu",
+    Sepedi: "nso",
+    "Northern Sotho": "nso",
+    Sesotho: "st",
+    Setswana: "tn",
+    siSwati: "ss",
+    Swati: "ss",
+    Tshivenda: "ve",
+    Venda: "ve",
+    Xitsonga: "ts",
+    Tsonga: "ts",
+};
+
+const resolveLanguageCode = (input) => {
+    if (!input) return "en";
+
+    const value = String(input).trim();
+    if (!value) return "en";
+
+    const direct = languageMap[value];
+    if (direct) return direct;
+
+    const matchingKey = Object.keys(languageMap).find(
+        (key) => key.toLowerCase() === value.toLowerCase()
+    );
+    if (matchingKey) return languageMap[matchingKey];
+
+    const normalized = value.toLowerCase();
+    const standardCodeMap = {
+        af: "af",
+        en: "en",
+        nr: "nr",
+        xh: "xh",
+        zu: "zu",
+        nso: "nso",
+        st: "st",
+        tn: "tn",
+        ss: "ss",
+        ve: "ve",
+        ts: "ts",
+    };
+
+    if (standardCodeMap[normalized]) return standardCodeMap[normalized];
+    return normalized;
+};
+
+function normalizeTargetLanguageCode(targetLanguage) {
+    return resolveLanguageCode(targetLanguage);
+}
+
 function mapLanguageCode(targetLanguage) {
-    const map = { English: "en-ZA", Dutch: "nl-NL", isiZulu: "zu-ZA", Sepedi: "nso-ZA", Xitsonga: "ts-ZA", Tshivenda: "ve-ZA", Afrikaans: "af-ZA", Sesotho: "st-ZA", Setswana: "tn-ZA", Yoruba: "yo-NG", Hausa: "ha-NE", "Akan (Ghana)": "ak-GH", "Wolof (Senegal)": "wo-SN", "Kiswahili (Kenya/Tanzania)": "sw-KE", Amharic: "am-ET", "Afaan Oromoo": "om-ET", Somali: "so-SO", "Kinyarwanda (Rwanda)": "rw-RW" };
-    return map[targetLanguage] || "en-ZA";
+    const targetCode = normalizeTargetLanguageCode(targetLanguage);
+    const map = { "af": "af-ZA", "en": "en-ZA", "nr": "nr-ZA", "xh": "xh-ZA", "zu": "zu-ZA", "nso": "nso-ZA", "ts": "ts-ZA", "ve": "ve-ZA", "st": "st-ZA", "tn": "tn-ZA", "ss": "ss-ZA", Dutch: "nl-NL", Yoruba: "yo-NG", Hausa: "ha-NE", "Akan (Ghana)": "ak-GH", "Wolof (Senegal)": "wo-SN", "Kiswahili (Kenya/Tanzania)": "sw-KE", Amharic: "am-ET", "Afaan Oromoo": "om-ET", Somali: "so-SO", "Kinyarwanda (Rwanda)": "rw-RW" };
+    return map[targetCode] || map[targetLanguage] || "en-ZA";
 }
 
 function mapGender(isMale) { return isMale ? "MALE" : "FEMALE"; }
@@ -330,10 +397,22 @@ function extractTextFromGeminiStreamPayload(payload) {
     } catch { return null; }
 }
 
+function normalizeComparableText(value) {
+    if (value == null) return "";
+    return String(value)
+        .normalize("NFKC")
+        .toLowerCase()
+        .replace(/[\u2019’]/g, "'")
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
 async function translateWithGemini(text, targetLanguage, isRespectMode, preferredModel) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error("Missing GEMINI_API_KEY secret in function runtime.");
-    const prompt = `You are an expert translator for South African languages. Translate the following text into ${targetLanguage || "isiZulu"}. ${isRespectMode ? "IMPORTANT: Use the most formal, respectful version." : "Use casual language."} Text: "${text}" Return ONLY the translated string.`;
+    const normalizedTarget = targetLanguage || "isiZulu";
+    const prompt = `You are an expert translator for South African languages. Translate the following text accurately into ${normalizedTarget}. ${isRespectMode ? "IMPORTANT: Use the most formal, respectful version." : "Use casual language."} Do not repeat or echo the source text if a direct translation cannot be found; instead, provide the closest contextual equivalent. If the source phrase is already in the target language, preserve it only when it is genuinely the same language and meaning. Text: "${text}" Return ONLY the translated string.`;
     const modelCandidates = [preferredModel, process.env.GEMINI_MODEL, "gemini-2.0-flash-live-001", "gemini-2.5-flash"].filter((v, i, arr) => typeof v === "string" && v.trim() && arr.indexOf(v) === i);
     let lastError = null;
     for (const model of modelCandidates) {
@@ -350,19 +429,7 @@ async function translateWithGemini(text, targetLanguage, isRespectMode, preferre
 
 async function translateWithGoogleFallback(text, targetLanguage) {
     const sourceCode = "auto";
-    const targetCode = String({
-        Afrikaans: "af",
-        English: "en",
-        isiNdebele: "nr",
-        isiXhosa: "xh",
-        isiZulu: "zu",
-        Sepedi: "nso",
-        Sesotho: "st",
-        Setswana: "tn",
-        siSwati: "ss",
-        Tshivenda: "ve",
-        Xitsonga: "ts",
-    }[targetLanguage] || "en");
+    const targetCode = normalizeTargetLanguageCode(targetLanguage);
 
     const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${encodeURIComponent(sourceCode)}&tl=${encodeURIComponent(targetCode)}&dt=t&q=${encodeURIComponent(text)}`;
     const response = await fetch(url, { method: "GET" });
@@ -442,6 +509,7 @@ async function deductUserCredits(userId) {
 
 async function translateTextWithGemini(text, targetLanguage) {
     try {
+        const ai = getGenAIClient();
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
             contents: `Translate the following text accurately into ${targetLanguage}. Provide only the direct translation text without introductory remarks or conversational filler: "${text}"`,
@@ -515,31 +583,57 @@ function handleProcessSpeech(req, res) {
             if (!authHeader.startsWith("Bearer ")) return res.status(401).send({ error: "Missing Authorization bearer token." });
             const idToken = authHeader.slice("Bearer ".length).trim();
             if (!idToken) return res.status(401).send({ error: "Empty Authorization bearer token." });
-            try { await admin.auth().verifyIdToken(idToken); } catch { return res.status(401).send({ error: "Unauthorized" }); }
+            let decodedToken;
+            try { 
+                decodedToken = await admin.auth().verifyIdToken(idToken); 
+            } catch { 
+                return res.status(401).send({ error: "Unauthorized" }); 
+            }
+            const userId = decodedToken.uid;
             const { text, targetLanguage, isRespectMode, isMale, model, ttsProvider, skipTranslation, voiceName } = req.body;
             const inputText = String(text || "").trim();
             if (!inputText) return res.status(400).send({ error: "No text provided" });
             if (inputText.length > MAX_TEXT_LENGTH) return res.status(413).send({ error: "Input text too long", maxCharacters: MAX_TEXT_LENGTH });
+            const normalizedTargetLanguage = normalizeTargetLanguageCode(targetLanguage);
             const shouldSkipTranslation = skipTranslation === true;
-            let translatedText = inputText; let modelUsed = null;
-            if (!shouldSkipTranslation) {
+            let translatedText = null; let modelUsed = null;
+            if (shouldSkipTranslation) {
+                translatedText = inputText; // Fallback to original text if skipping translation
+            } else {
                 try {
-                    const translationResult = await translateWithGemini(inputText, targetLanguage, isRespectMode, model);
+                    const translationResult = await translateWithGemini(inputText, normalizedTargetLanguage, isRespectMode, model);
                     translatedText = translationResult.translatedText; modelUsed = translationResult.modelUsed;
                 } catch (translationError) {
-                    console.warn("Gemini translation failed, using Google Translate fallback.", translationError?.message || translationError);
+                    console.warn("Gemini translation failed, trying Google Translate fallback.", translationError?.message || translationError);
                     try {
                         translatedText = await translateWithGoogleFallback(inputText, targetLanguage);
                         modelUsed = "google-translate-fallback";
                     } catch (fallbackError) {
                         console.error("Google Translate fallback failed too.", fallbackError?.message || fallbackError);
-                        translatedText = inputText;
+                        translatedText = null;
                     }
                 }
             }
-            const requestedCode = mapLanguageCode(targetLanguage);
+            const targetIsEnglish = normalizeTargetLanguageCode(normalizedTargetLanguage) === "en";
+            const normalizedInput = normalizeComparableText(inputText);
+            const normalizedTranslated = normalizeComparableText(translatedText);
+            const sourceEchoMatch = translatedText != null && normalizedTranslated.length > 0 && normalizedTranslated === normalizedInput && !targetIsEnglish;
+            const shortEchoGuard = translatedText != null && normalizedTranslated.length > 0 && normalizedTranslated === normalizedInput && normalizedInput.length <= 3 && !targetIsEnglish;
+            const inputLooksLikeEcho = sourceEchoMatch || shortEchoGuard;
+            if (translatedText == null || translatedText.trim().length === 0 || inputLooksLikeEcho) {
+                console.error("Translation failed: source text was echoed or no translated text was produced.", { inputText, targetLanguage: normalizedTargetLanguage, translatedText, normalizedInput, normalizedTranslated });
+                return res.status(424).send({
+                    error: "Translation failed",
+                    details: "Translation could not be generated. No valid translated output was returned.",
+                    status: "failed",
+                    translation: null,
+                    modelUsed: modelUsed || null,
+                    skipTranslation: shouldSkipTranslation,
+                });
+            }
+            const requestedCode = mapLanguageCode(normalizedTargetLanguage);
             const requestedGender = mapGender(isMale !== false);
-            const ttsResult = await synthesizeWithProviderChain({ text: translatedText, targetLanguage, requestedVoiceName: voiceName });
+            const ttsResult = await synthesizeWithProviderChain({ text: translatedText, targetLanguage: normalizedTargetLanguage, requestedVoiceName: voiceName });
             if (!ttsResult?.audioContent) {
                 console.error("Speech synthesis unavailable: Narakeet returned no audioContent.");
                 return res.status(503).send({
@@ -552,6 +646,10 @@ function handleProcessSpeech(req, res) {
                     skipTranslation: shouldSkipTranslation,
                 });
             }
+
+            // Deduct user credits globally after successful translation and TTS completion
+            await deductUserCredits(userId);
+
             res.status(200).send({ translation: translatedText, audioContent: ttsResult.audioContent, voiceLanguageUsed: ttsResult.voiceLanguageUsed, voiceGenderUsed: ttsResult.voiceGenderUsed, voiceNameUsed: ttsResult.voiceNameUsed, ttsProviderUsed: ttsResult.ttsProviderUsed, ttsProviderChain: ttsResult.ttsProviderChain, cacheHit: ttsResult.cacheHit === true, cacheLayer: ttsResult.cacheLayer || null, cacheKey: ttsResult.cacheKey || null, audioUrl: ttsResult.audioUrl || null, modelUsed, skipTranslation: shouldSkipTranslation, status: "success" });
         } catch (error) {
             console.error("Translation Error:", error);

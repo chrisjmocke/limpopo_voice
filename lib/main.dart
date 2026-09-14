@@ -35,19 +35,28 @@ import 'translation_service.dart';
 // const _paystackChannel = MethodChannel('com.limpopovoice.translate/paystack');
 
 Future<void> _loadEnvFile() async {
+  // First, attempt to load from local filesystem files (common in native desktop/local debug execution)
   const candidates = ["lib/.env", ".env"];
   for (final candidate in candidates) {
     try {
       final file = File(candidate);
-      if (!await file.exists()) continue;
-      await dotenv.load(fileName: candidate);
-      debugPrint('Loaded environment from $candidate');
-      return;
+      if (await file.exists()) {
+        await dotenv.load(fileName: candidate);
+        debugPrint('Loaded environment from filesystem: $candidate');
+        return;
+      }
     } catch (e) {
-      debugPrint('Env load error for $candidate: $e');
+      debugPrint('Filesystem env load error for $candidate: $e');
     }
   }
-  debugPrint('No environment file found in project root or lib/.env');
+
+  // Graceful fallback: load .env from Flutter's bundled asset bundle (production behavior)
+  try {
+    await dotenv.load(fileName: '.env');
+    debugPrint('Loaded environment from bundled asset bundle: .env');
+  } catch (e) {
+    debugPrint('Graceful fallback: Bundled .env asset load failed or omitted: $e');
+  }
 }
 
 String safeDotEnvString(String key) {
@@ -126,7 +135,7 @@ class _LetsTalkAppState extends State<LetsTalkApp> {
     final overlayStyle = SystemUiOverlayStyle(
       statusBarColor: isLightTheme ? const Color(0xFFF7F5F0) : Colors.black,
       statusBarIconBrightness: isLightTheme ? Brightness.dark : Brightness.light,
-      statusBarBrightness: isLightTheme ? Brightness.light : Brightness.dark,
+      statusBarBrightness: isLightTheme ? Brightness.dark : Brightness.light,
       systemNavigationBarColor: isLightTheme
           ? const Color(0xFFF7F5F0)
           : Colors.black,
@@ -292,19 +301,82 @@ class PaymentPlans {
     };
   }
 
-  static Future<Map<int, String>> loadCreditsToCode() async {
+  static Future<Map<int, String>> loadMonthlyCreditsToCode() async {
     try {
-      final codeToCredits = await loadCodeToCredits();
+      final raw = await rootBundle.loadString(_plansAssetPath);
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) {
+        throw StateError('Invalid payment plan config payload');
+      }
+
+      final plans = decoded['plans'];
+      if (plans is! List) {
+        throw StateError('Payment plan config missing plans list');
+      }
+
       final creditsToCode = <int, String>{};
-      for (final entry in codeToCredits.entries) {
-        creditsToCode[entry.value] = entry.key;
+      for (final item in plans) {
+        if (item is! Map<String, dynamic>) continue;
+        final code = item['code']?.toString();
+        final credits = item['credits'];
+        final id = item['id']?.toString() ?? '';
+        if (code == null || credits is! int) continue;
+        final isMonthly = !id.toLowerCase().contains('once') &&
+            !code.toLowerCase().contains('once');
+        if (!isMonthly) continue;
+        creditsToCode[credits] = code;
       }
       if (creditsToCode.isNotEmpty) return creditsToCode;
     } catch (_) {
       // Fall through to fallback map below.
     }
 
-    return fallbackCreditsToCode;
+    return {
+      100: 'PLN_2t2fvh0gmfjshy7',
+      300: 'PLN_ietxwof2rdpsfpt',
+      700: 'PLN_qq7y0nbwj2x75ff',
+    };
+  }
+
+  static Future<Map<int, String>> loadOnceOffCreditsToCode() async {
+    try {
+      final raw = await rootBundle.loadString(_plansAssetPath);
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) {
+        throw StateError('Invalid payment plan config payload');
+      }
+
+      final plans = decoded['plans'];
+      if (plans is! List) {
+        throw StateError('Payment plan config missing plans list');
+      }
+
+      final creditsToCode = <int, String>{};
+      for (final item in plans) {
+        if (item is! Map<String, dynamic>) continue;
+        final code = item['code']?.toString();
+        final credits = item['credits'];
+        final id = item['id']?.toString() ?? '';
+        if (code == null || credits is! int) continue;
+        final isOnceOff = id.toLowerCase().contains('once') ||
+            code.toLowerCase().contains('once');
+        if (!isOnceOff) continue;
+        creditsToCode[credits] = code;
+      }
+      if (creditsToCode.isNotEmpty) return creditsToCode;
+    } catch (_) {
+      // Fall through to fallback map below.
+    }
+
+    return {
+      100: 'plan_once_100',
+      300: 'plan_once_300',
+      700: 'plan_once_700',
+    };
+  }
+
+  static Future<Map<int, String>> loadCreditsToCode() async {
+    return loadMonthlyCreditsToCode();
   }
 }
 
@@ -381,6 +453,21 @@ String? nextTabForSwipe(String currentTab,
 List<T> limitEntries<T>(List<T> items, int maxItems) {
   if (items.length <= maxItems) return items;
   return items.take(maxItems).toList();
+}
+
+List<Map<String, String>> sortLearnPhrasesByPinned(
+    List<Map<String, String>> phrases) {
+  final pinned = phrases.where((phrase) {
+    final value = (phrase['pinned'] ?? '').trim().toLowerCase();
+    return value == 'true';
+  }).toList(growable: false);
+
+  final unpinned = phrases.where((phrase) {
+    final value = (phrase['pinned'] ?? '').trim().toLowerCase();
+    return value != 'true';
+  }).toList(growable: false);
+
+  return [...pinned, ...unpinned];
 }
 
 String normalizeCacheText(String text) {
@@ -556,6 +643,26 @@ class _HomeScreenState extends State<HomeScreen> {
     _userProfileImage = (photoUrl != null && photoUrl.isNotEmpty)
         ? NetworkImage(photoUrl)
         : null;
+  }
+
+  Future<void> _toggleUserPhrasePin(int idx) async {
+    setState(() {
+      final lang = _selectedLearnLang;
+      final list = (_userLearnPhrasesByLang[lang] ?? []).toList(growable: true);
+      if (idx < 0 || idx >= list.length) return;
+
+      final phrase = list[idx];
+      final currentPinned = (phrase['pinned'] ?? '').trim().toLowerCase() == 'true';
+      phrase['pinned'] = currentPinned ? 'false' : 'true';
+      list.sort((a, b) {
+        final aPinned = (a['pinned'] ?? '').trim().toLowerCase() == 'true';
+        final bPinned = (b['pinned'] ?? '').trim().toLowerCase() == 'true';
+        if (aPinned == bPinned) return 0;
+        return aPinned ? -1 : 1;
+      });
+      _userLearnPhrasesByLang[lang] = List<Map<String, String>>.from(list);
+    });
+    await _persistUserLearnPhrases();
   }
 
   Future<void> _deleteUserPhrase(int idx) async {
@@ -880,6 +987,7 @@ class _HomeScreenState extends State<HomeScreen> {
   static const String _languagePrefsKey = 'device_selected_languages_v1';
   final List<HistoryItem> _history = [];
   bool _historyEditMode = false;
+  bool _historyGridMode = false;
   HistoryEditAction _historyEditAction = HistoryEditAction.share;
   final Set<int> _selectedHistoryIndices = {};
   String _selectedLearnLang = 'Sepedi';
@@ -3229,18 +3337,33 @@ class _HomeScreenState extends State<HomeScreen> {
       _isTalking = true;
       _showHintText = false;
       _showTalkHintText = false;
+      _spokenRawText = '';
       _spokenText = '';
       _translatedText = '';
       _phoneticText = '';
+      _tttController.clear();
     });
     await _speech.listen(
       onResult: (r) {
+        final recognized = r.recognizedWords.trim();
+        if (recognized.isEmpty) {
+          return;
+        }
+
         setState(() {
-          _spokenRawText = r.recognizedWords;
-          _spokenText = _maskProfanityForDisplay(_spokenRawText);
+          _spokenRawText = '';
+          _spokenText = '';
+          _translatedText = '';
+          _phoneticText = '';
+          _tttController.clear();
+          _tttController.text = recognized;
+          _tttController.selection =
+              TextSelection.collapsed(offset: recognized.length);
+          _showHintText = false;
         });
-        if (r.finalResult && _spokenRawText.isNotEmpty) {
-          _doTranslate(_spokenRawText);
+
+        if (r.finalResult && recognized.isNotEmpty) {
+          _doTranslate(recognized);
         }
       },
       localeId: _locales[_selectedInputLang] ?? 'en-ZA',
@@ -3889,8 +4012,27 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _showSnack(String m) {
-    // Toasts disabled by request.
-    debugPrint('Snack suppressed: $m');
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          m,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            fontWeight: FontWeight.w600,
+            color: Colors.white,
+          ),
+        ),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: Colors.black87,
+        margin: const EdgeInsets.only(bottom: 72, left: 40, right: 40),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   Future<void> _sendHistoryToLearn(HistoryItem item) async {
@@ -3943,15 +4085,18 @@ class _HomeScreenState extends State<HomeScreen> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      barrierColor: isDark
+          ? Colors.black.withOpacity(0.6)
+          : const Color(0xFFF7F5F0).withOpacity(0.8),
       backgroundColor:
-          isDark ? Colors.black : const Color(0xFFFFFFFF),
+          isDark ? Colors.black : const Color(0xFFF7F5F0),
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) {
         return Material(
-          color: isDark ? Colors.black : const Color(0xFFFFFFFF),
+          color: isDark ? Colors.black : const Color(0xFFF7F5F0),
           surfaceTintColor:
-              isDark ? Colors.black : const Color(0xFFFFFFFF),
+              isDark ? Colors.black : const Color(0xFFF7F5F0),
           child: SafeArea(
             top: false,
             child: ConstrainedBox(
@@ -3985,39 +4130,20 @@ class _HomeScreenState extends State<HomeScreen> {
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
+                          IconButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            icon: const Icon(Icons.close),
+                            color: isDark ? Colors.white : Colors.black,
+                            tooltip: 'Close',
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                          ),
                         ],
                       ),
                       const SizedBox(height: 8),
                       Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Expanded(
-                            child: Center(
-                              child: Column(
-                                children: [
-                                  Text(
-                                    'Translations capped',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: isDark
-                                          ? Colors.white70
-                                          : Colors.black54,
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                  Text(
-                                    'at 5 seconds',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: isDark
-                                          ? Colors.white70
-                                          : Colors.black54,
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
                           Chip(
                             label: Text(
                               'Balance: $_credits translations',
@@ -4035,46 +4161,78 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 12),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color:
-                              isDark ? Colors.white10 : const Color(0xFFF5F5F5),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Your plan renews automatically every month.',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: isDark ? Colors.white70 : Colors.black87,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: TextButton(
-                                onPressed: _confirmCancelMonthlyDebit,
-                                style: TextButton.styleFrom(
-                                  foregroundColor:
-                                      isDark ? Colors.white : Colors.black,
-                                  backgroundColor:
-                                      isDark ? Colors.black : const Color(0xFFFFFFFF),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                ),
-                                child: const Text('Cancel renewals'),
-                              ),
-                            ),
-                          ],
+                      const SizedBox(height: 6),
+                      Center(
+                        child: Text(
+                          'Translations capped at 5 seconds',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isDark ? Colors.white70 : Colors.black54,
+                          ),
+                          textAlign: TextAlign.center,
                         ),
                       ),
+                      const SizedBox(height: 12),
                       const SizedBox(height: 16),
+                      Text(
+                        'One-off credit plans',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: isDark ? Colors.white70 : Colors.black54,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      ..._onceOffTiers.map((tier) => Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor:
+                                    isDark ? Colors.white10 : Colors.black,
+                                foregroundColor: Colors.white,
+                                minimumSize: const Size(double.infinity, 52),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              onPressed: () {
+                                Navigator.pop(ctx);
+                                _showPaymentGateways(tier, isOnceOff: true);
+                              },
+                              child: Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      tier.name,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16,
+                                        color: Colors.white,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    '${tier.credits} translations',
+                                    style:
+                                        const TextStyle(color: Colors.white70),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    tier.price,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )),
+                      const SizedBox(height: 18),
                       Text(
                         'Monthly plans',
                         style: TextStyle(
@@ -4134,64 +4292,34 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           )),
                       const SizedBox(height: 18),
-                      Text(
-                        'One-off credit plans',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: isDark ? Colors.white70 : Colors.black54,
+                      Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: isDark ? Colors.black : const Color(0xFFFFFFFF),
+                            border: Border.all(
+                              color: isDark ? Colors.white24 : Colors.black12,
+                              width: 1,
+                            ),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: TextButton(
+                            onPressed: _confirmCancelMonthlyDebit,
+                            style: TextButton.styleFrom(
+                              foregroundColor:
+                                  isDark ? Colors.white : Colors.black,
+                              backgroundColor: Colors.transparent,
+                              padding: EdgeInsets.zero,
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: const Text('Cancel monthly subscription'),
+                          ),
                         ),
                       ),
-                      const SizedBox(height: 10),
-                      ..._onceOffTiers.map((tier) => Padding(
-                            padding: const EdgeInsets.only(bottom: 10),
-                            child: ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor:
-                                    isDark ? Colors.white10 : Colors.black,
-                                foregroundColor: Colors.white,
-                                minimumSize: const Size(double.infinity, 52),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                              onPressed: () {
-                                Navigator.pop(ctx);
-                                _showPaymentGateways(tier, isOnceOff: true);
-                              },
-                              child: Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      tier.name,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 16,
-                                        color: Colors.white,
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    '${tier.credits} translations',
-                                    style:
-                                        const TextStyle(color: Colors.white70),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    tier.price,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          )),
                     ],
                   ),
                 ),
@@ -4243,10 +4371,19 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        '${isOnceOff ? 'One-off' : 'Monthly'} • ${tier.name} • ${tier.credits} translations • ${tier.price}',
+                        '${isOnceOff ? 'One-off credit pack' : 'Monthly subscription'} • ${tier.name} • ${tier.credits} translations • ${tier.price}',
                         style: TextStyle(
                           fontSize: 13,
                           color: isDark ? Colors.white70 : Colors.black54,
+                        ),
+                      ),
+                      Text(
+                        isOnceOff
+                            ? 'Payment methods: Card, bank, EFT, mobile money'
+                            : 'Payment method: Card only',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isDark ? Colors.white60 : Colors.black54,
                         ),
                       ),
                       const SizedBox(height: 14),
@@ -4302,8 +4439,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<String> _paystackPlanCodeForTier(_CreditTier tier) async {
-    final creditsToCode = await PaymentPlans.loadCreditsToCode();
-    return creditsToCode[tier.credits] ?? '';
+    final monthlyCreditsToCode = await PaymentPlans.loadMonthlyCreditsToCode();
+    return monthlyCreditsToCode[tier.credits] ?? '';
   }
 
   double _tierAmountFromPrice(String price) {
@@ -4472,6 +4609,7 @@ class _HomeScreenState extends State<HomeScreen> {
         'subscriptionStatus': serverCancelled
             ? 'cancelled_pending_expiry'
             : 'cancelled_local_only',
+        'subscriptionType': 'monthly',
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
@@ -4508,6 +4646,9 @@ class _HomeScreenState extends State<HomeScreen> {
         'monthlyRenewalActive': true,
         'monthlyDebitCancelled': false,
         'cancelledUntil': null,
+        'subscriptionStatus': 'active_monthly',
+        'subscriptionType': 'monthly',
+        'subscriptionPeriodEnd': Timestamp.fromDate(monthlyRenewalAt),
         'creditsRollOver': false,
         'lastTierName': tier.name,
         'updatedAt': FieldValue.serverTimestamp(),
@@ -4565,6 +4706,7 @@ class _HomeScreenState extends State<HomeScreen> {
         'nextAutoDebitAt': null,
         'lastTierName': tier.name,
         'subscriptionStatus': 'active_once_off',
+        'subscriptionType': 'once_off',
         'subscriptionPeriodEnd': Timestamp.fromDate(now.add(const Duration(days: 30))),
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
@@ -4612,14 +4754,14 @@ class _HomeScreenState extends State<HomeScreen> {
           reference: accessCode,
           message: 'Payment Successful',
         );
-      } else {
-        return _PaystackResponse(
-          status: 'error',
-          reference: '',
-          message:
-              'Payment window closed. If you completed payment, your credits will update shortly.',
-        );
       }
+
+      _showSnack('Transaction Cancelled');
+      return _PaystackResponse(
+        status: 'error',
+        reference: '',
+        message: 'Transaction Cancelled',
+      );
     } catch (e) {
       debugPrint('Paystack error: $e');
       return _PaystackResponse(
@@ -5389,7 +5531,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildLearnTab(bool isDark) {
     final learnPhraseKey = _selectedLearnLang;
-    final userPhrases = _userLearnPhrasesByLang[learnPhraseKey] ?? [];
+    final userPhrases = sortLearnPhrasesByPinned(
+      (_userLearnPhrasesByLang[learnPhraseKey] ?? []).toList(growable: true),
+    );
     final defaultPhrases =
         _learnPhrasesByLang[learnPhraseKey] ?? _learnPhrasesByLang['English']!;
     final phrases = [
@@ -5540,7 +5684,19 @@ class _HomeScreenState extends State<HomeScreen> {
                           isUserPhrase: isUserPhrase,
                         ),
                       ),
-                      if (isUserPhrase)
+                      if (isUserPhrase) ...[
+                        IconButton(
+                          icon: Icon(
+                            (phrase['pinned'] ?? '').trim().toLowerCase() == 'true'
+                                ? Icons.push_pin
+                                : Icons.push_pin_outlined,
+                            color: isDark ? Colors.white : Colors.black,
+                          ),
+                          tooltip: (phrase['pinned'] ?? '').trim().toLowerCase() == 'true'
+                              ? 'Unpin from top'
+                              : 'Pin to top',
+                          onPressed: () => _toggleUserPhrasePin(idx),
+                        ),
                         IconButton(
                           icon: Icon(
                             Icons.close,
@@ -5549,6 +5705,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           tooltip: 'Delete',
                           onPressed: () => _deleteUserPhrase(idx),
                         ),
+                      ],
                     ],
                   ),
                 );
@@ -5876,14 +6033,39 @@ class _HomeScreenState extends State<HomeScreen> {
                                     _selectedOutputLang,
                                     _outputLangs,
                                     (v) {
+                                      final nextOutputLang = v!;
+                                      final currentInputText =
+                                          (_tttController.text.trim().isNotEmpty
+                                                  ? _tttController.text
+                                                  : _spokenRawText)
+                                              .trim();
+
                                       setState(() {
-                                        _selectedOutputLang = v!;
-                                        _spokenText = '';
-                                        _spokenRawText = '';
+                                        _selectedOutputLang = nextOutputLang;
                                         _translatedText = '';
                                         _phoneticText = '';
-                                        _tttController.clear();
+
+                                        if (currentInputText.isNotEmpty) {
+                                          _spokenText =
+                                              _maskProfanityForDisplay(
+                                                  currentInputText);
+                                          _spokenRawText = currentInputText;
+                                          _tttController.text = currentInputText;
+                                          _tttController.selection =
+                                              TextSelection.fromPosition(
+                                            TextPosition(
+                                                offset: currentInputText.length),
+                                          );
+                                        } else {
+                                          _spokenText = '';
+                                          _spokenRawText = '';
+                                          _tttController.clear();
+                                        }
                                       });
+
+                                      if (currentInputText.isNotEmpty) {
+                                        unawaited(_doTranslate(currentInputText));
+                                      }
                                       unawaited(_saveSelectedLanguagesToDevice());
                                     },
                                     isDark,
@@ -6515,6 +6697,28 @@ class _HomeScreenState extends State<HomeScreen> {
                         padding: const EdgeInsets.all(12),
                       ),
                     ),
+                    const SizedBox(width: 8),
+                    Material(
+                      color: isDark ? Colors.black : const Color(0xFFF7F5F0),
+                      shape: const CircleBorder(),
+                      elevation: 0,
+                      child: IconButton(
+                        onPressed: () {
+                          setState(() {
+                            _historyGridMode = !_historyGridMode;
+                          });
+                        },
+                        icon: Icon(
+                          _historyGridMode ? Icons.view_list : Icons.grid_view,
+                          size: 20,
+                          color: isDark ? Colors.white : Colors.black,
+                        ),
+                        tooltip: _historyGridMode
+                            ? 'Switch to list view'
+                            : 'Switch to grid view',
+                        padding: const EdgeInsets.all(12),
+                      ),
+                    ),
                   ],
                   const Spacer(),
                   // Clear History Icon Button (far right)
@@ -6597,118 +6801,274 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             Expanded(
-              child: ListView.builder(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                itemCount: _history.length,
-                itemBuilder: (context, i) {
-                  final item = _history[i];
-                  final isSelected = _selectedHistoryIndices.contains(i);
-                  return Card(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    color: isDark ? Colors.black : const Color(0xFFF7F5F0),
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        ListTile(
-                          leading: _historyEditMode
-                              ? Checkbox(
-                                  activeColor: Colors.black,
-                                  checkColor: Colors.white,
-                                  value: isSelected,
-                                  onChanged: (val) {
-                                    setState(() {
-                                      if (val == true) {
-                                        _selectedHistoryIndices.add(i);
-                                      } else {
-                                        _selectedHistoryIndices.remove(i);
-                                      }
-                                    });
-                                  },
-                                )
-                              : null,
-                          title: Text(item.translated,
-                              style: TextStyle(
-                                  color: isDark ? Colors.white : Colors.black,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16 * _currentTextScale)),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('From: ${item.inputLang}'),
-                              Text('To: ${item.outputLang}'),
-                              if ((item.phonetic ?? '').isNotEmpty)
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 4.0),
-                                  child: Text('Phonetics: ${item.phonetic}',
-                                      style: TextStyle(
-                                          fontStyle: FontStyle.italic,
-                                          color: isDark
-                                              ? Colors.white70
-                                              : Colors.black87)),
+              child: _historyGridMode
+                  ? GridView.builder(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 2,
+                        crossAxisSpacing: 8,
+                        mainAxisSpacing: 8,
+                        childAspectRatio: 0.95,
+                      ),
+                      itemCount: _history.length,
+                      itemBuilder: (context, i) {
+                        final item = _history[i];
+                        final isSelected = _selectedHistoryIndices.contains(i);
+                        return Card(
+                          margin: EdgeInsets.zero,
+                          color: isDark ? Colors.black : const Color(0xFFF7F5F0),
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.all(8),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    if (_historyEditMode)
+                                      Checkbox(
+                                        activeColor: Colors.black,
+                                        checkColor: Colors.white,
+                                        value: isSelected,
+                                        onChanged: (val) {
+                                          setState(() {
+                                            if (val == true) {
+                                              _selectedHistoryIndices.add(i);
+                                            } else {
+                                              _selectedHistoryIndices.remove(i);
+                                            }
+                                          });
+                                        },
+                                      ),
+                                    const Spacer(),
+                                    IconButton(
+                                      icon: const Icon(Icons.volume_up, size: 18),
+                                      tooltip: 'Repeat',
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(),
+                                      onPressed: () =>
+                                          _speakText(item.translated, item.outputLang),
+                                    ),
+                                  ],
                                 ),
-                              Padding(
-                                padding: const EdgeInsets.only(top: 4.0),
-                                child: Text('Original: ${item.original}',
-                                    style: TextStyle(
-                                      fontSize: 16 * _currentTextScale,
-                                    )),
-                              ),
-                            ],
-                          ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: const Icon(Icons.volume_up),
-                                tooltip: 'Repeat',
-                                onPressed: () => _speakText(
-                                    item.translated, item.outputLang),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 4),
-                          child: ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: isDark
-                                  ? Colors.transparent
-                                  : const Color(0xFFF7F5F0),
-                              foregroundColor:
-                                  isDark ? Colors.white : Colors.black,
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 9, vertical: 5),
-                              minimumSize: const Size(0, 24),
-                              shape: const RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.zero,
-                                  side: BorderSide.none),
-                              elevation: 0,
+                                Expanded(
+                                  child: SingleChildScrollView(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          item.translated,
+                                          maxLines: 3,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            color: isDark
+                                                ? Colors.white
+                                                : Colors.black,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 12 * _currentTextScale,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          'From: ${item.inputLang}',
+                                          style: const TextStyle(fontSize: 10),
+                                        ),
+                                        Text(
+                                          'To: ${item.outputLang}',
+                                          style: const TextStyle(fontSize: 10),
+                                        ),
+                                        if ((item.phonetic ?? '').isNotEmpty) ...[
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            'Phonetics: ${item.phonetic}',
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              fontStyle: FontStyle.italic,
+                                              color: isDark
+                                                  ? Colors.white70
+                                                  : Colors.black87,
+                                              fontSize: 9,
+                                            ),
+                                          ),
+                                        ],
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          item.original,
+                                          maxLines: 3,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontSize: 10 * _currentTextScale,
+                                            color: isDark
+                                                ? Colors.white70
+                                                : Colors.black87,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: ElevatedButton.icon(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: isDark
+                                          ? Colors.transparent
+                                          : const Color(0xFFF7F5F0),
+                                      foregroundColor: isDark
+                                          ? Colors.white
+                                          : Colors.black,
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 4),
+                                      minimumSize: const Size(0, 24),
+                                      shape: const RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.zero,
+                                        side: BorderSide.none,
+                                      ),
+                                      elevation: 0,
+                                    ),
+                                    icon: const Icon(Icons.school, size: 10),
+                                    label: const Text(
+                                      'Send to Learn',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 10.5,
+                                      ),
+                                    ),
+                                    onPressed: () async {
+                                      if (_credits <= 0) {
+                                        _showCreditTiers();
+                                        return;
+                                      }
+                                      await _sendHistoryToLearn(item);
+                                    },
+                                  ),
+                                ),
+                              ],
                             ),
-                            icon: const Icon(Icons.school, size: 10),
-                            label: const Text('Send to Learn',
-                                style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 13.5)),
-                            onPressed: () async {
-                              if (_credits <= 0) {
-                                _showCreditTiers();
-                                return;
-                              }
-                              await _sendHistoryToLearn(item);
-                            },
                           ),
-                        ),
-                      ],
+                        );
+                      },
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                      itemCount: _history.length,
+                      itemBuilder: (context, i) {
+                        final item = _history[i];
+                        final isSelected = _selectedHistoryIndices.contains(i);
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          color: isDark ? Colors.black : const Color(0xFFF7F5F0),
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              ListTile(
+                                leading: _historyEditMode
+                                    ? Checkbox(
+                                        activeColor: Colors.black,
+                                        checkColor: Colors.white,
+                                        value: isSelected,
+                                        onChanged: (val) {
+                                          setState(() {
+                                            if (val == true) {
+                                              _selectedHistoryIndices.add(i);
+                                            } else {
+                                              _selectedHistoryIndices.remove(i);
+                                            }
+                                          });
+                                        },
+                                      )
+                                    : null,
+                                title: Text(item.translated,
+                                    style: TextStyle(
+                                        color: isDark ? Colors.white : Colors.black,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16 * _currentTextScale)),
+                                subtitle: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text('From: ${item.inputLang}'),
+                                    Text('To: ${item.outputLang}'),
+                                    if ((item.phonetic ?? '').isNotEmpty)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 4.0),
+                                        child: Text('Phonetics: ${item.phonetic}',
+                                            style: TextStyle(
+                                                fontStyle: FontStyle.italic,
+                                                color: isDark
+                                                    ? Colors.white70
+                                                    : Colors.black87)),
+                                      ),
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 4.0),
+                                      child: Text('Original: ${item.original}',
+                                          style: TextStyle(
+                                            fontSize: 16 * _currentTextScale,
+                                          )),
+                                    ),
+                                  ],
+                                ),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(Icons.volume_up),
+                                      tooltip: 'Repeat',
+                                      onPressed: () => _speakText(
+                                          item.translated, item.outputLang),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 4),
+                                child: ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: isDark
+                                        ? Colors.transparent
+                                        : const Color(0xFFF7F5F0),
+                                    foregroundColor:
+                                        isDark ? Colors.white : Colors.black,
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 9, vertical: 5),
+                                    minimumSize: const Size(0, 24),
+                                    shape: const RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.zero,
+                                        side: BorderSide.none),
+                                    elevation: 0,
+                                  ),
+                                  icon: const Icon(Icons.school, size: 10),
+                                  label: const Text('Send to Learn',
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13.5)),
+                                  onPressed: () async {
+                                    if (_credits <= 0) {
+                                      _showCreditTiers();
+                                      return;
+                                    }
+                                    await _sendHistoryToLearn(item);
+                                  },
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
                     ),
-                  );
-                },
-              ),
             ),
           ],
         ),

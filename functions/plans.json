@@ -20,6 +20,27 @@
       "credits": 700,
       "amountCents": 9999,
       "priceZar": 99.99
+    },
+    {
+      "id": "PLAN_ONCE_100",
+      "code": "plan_once_100",
+      "credits": 100,
+      "amountCents": 2499,
+      "priceZar": 24.99
+    },
+    {
+      "id": "PLAN_ONCE_300",
+      "code": "plan_once_300",
+      "credits": 300,
+      "amountCents": 5999,
+      "priceZar": 59.99
+    },
+    {
+      "id": "PLAN_ONCE_700",
+      "code": "plan_once_700",
+      "credits": 700,
+      "amountCents": 11999,
+      "priceZar": 119.99
     }
   ]
 }
