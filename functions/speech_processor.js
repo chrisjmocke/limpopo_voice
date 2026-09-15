@@ -590,15 +590,19 @@ function handleProcessSpeech(req, res) {
                 return res.status(401).send({ error: "Unauthorized" }); 
             }
             const userId = decodedToken.uid;
-            const { text, targetLanguage, isRespectMode, isMale, model, ttsProvider, skipTranslation, voiceName } = req.body;
-            const inputText = String(text || "").trim();
+            const { text, targetLanguage, isRespectMode, isMale, model, ttsProvider, skipTranslation, voiceName, translatedText: clientTranslatedText } = req.body;
+            
+            // If skipTranslation is true, prioritize client-provided translatedText over text
+            const isSkip = skipTranslation === true;
+            const inputText = String((isSkip ? (clientTranslatedText || text) : text) || "").trim();
+            
             if (!inputText) return res.status(400).send({ error: "No text provided" });
             if (inputText.length > MAX_TEXT_LENGTH) return res.status(413).send({ error: "Input text too long", maxCharacters: MAX_TEXT_LENGTH });
             const normalizedTargetLanguage = normalizeTargetLanguageCode(targetLanguage);
-            const shouldSkipTranslation = skipTranslation === true;
+            const shouldSkipTranslation = isSkip;
             let translatedText = null; let modelUsed = null;
             if (shouldSkipTranslation) {
-                translatedText = inputText; // Fallback to original text if skipping translation
+                translatedText = inputText; // This is clientTranslatedText or text, directly used to send to Narakeet!
             } else {
                 try {
                     const translationResult = await translateWithGemini(inputText, normalizedTargetLanguage, isRespectMode, model);

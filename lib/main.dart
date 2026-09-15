@@ -597,9 +597,11 @@ class HistoryItem {
   final String inputLang, outputLang, original, translated;
   final String? phonetic;
   final DateTime time;
+  final bool audioGenerated;
+  final bool hasAudio;
   HistoryItem(this.inputLang, this.outputLang, this.original, this.translated,
       this.time,
-      {this.phonetic});
+      {this.phonetic, this.audioGenerated = true, this.hasAudio = true});
 
   Map<String, dynamic> toJson() => {
         'inputLang': inputLang,
@@ -608,6 +610,8 @@ class HistoryItem {
         'translated': translated,
         'phonetic': phonetic,
         'time': time.toIso8601String(),
+        'audioGenerated': audioGenerated,
+        'hasAudio': hasAudio,
       };
 
   factory HistoryItem.fromJson(Map<String, dynamic> json) => HistoryItem(
@@ -619,6 +623,8 @@ class HistoryItem {
         phonetic: (json['phonetic'] ?? '').toString().isEmpty
             ? null
             : (json['phonetic'] ?? '').toString(),
+        audioGenerated: json['audioGenerated'] == null ? true : json['audioGenerated'] as bool,
+        hasAudio: json['hasAudio'] == null ? (json['audioGenerated'] == null ? true : json['audioGenerated'] as bool) : json['hasAudio'] as bool,
       );
 }
 
@@ -766,11 +772,21 @@ class _HomeScreenState extends State<HomeScreen> {
           'text': translated,
           'en': original,
           if (phonetic.isNotEmpty) 'phonetic': phonetic,
+          'audioGenerated': _credits > 0 ? 'true' : 'false',
+          'hasAudio': _credits > 0 ? 'true' : 'false',
         });
         _userLearnPhrasesByLang[key] = limitEntries(phraseList, 100);
         _learnFocusTextByLang[lang] = translated;
         _learnFocusMeaningByLang[lang] = original;
         _learnFocusPhoneticByLang[lang] = phonetic.isEmpty ? null : phonetic;
+
+        unawaited(_saveDeferredAudioToFirestore(
+          original: original,
+          translated: translated,
+          inputLang: 'English',
+          outputLang: lang,
+          audioGenerated: _credits > 0,
+        ));
       }
     });
     await _persistUserLearnPhrases();
@@ -2873,6 +2889,173 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _saveDeferredAudioToFirestore({
+    required String original,
+    required String translated,
+    required String inputLang,
+    required String outputLang,
+    required bool audioGenerated,
+  }) async {
+    try {
+      final docId = '${translated.toLowerCase().trim()}_$outputLang';
+      await _firestore.collection('deferred_audio').doc(docId).set({
+        'original': original,
+        'translated': translated,
+        'inputLang': inputLang,
+        'outputLang': outputLang,
+        'audioGenerated': audioGenerated,
+        'isPendingAudio': !audioGenerated,
+        'userId': FirebaseAuth.instance.currentUser?.uid,
+        'deviceId': _deviceId,
+        'createdAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      debugPrint('Saved deferred audio record to Firestore: $docId (audioGenerated: $audioGenerated)');
+    } catch (e) {
+      if (!_isFirestorePermissionDenied(e)) {
+        debugPrint('Firestore deferred audio save error: $e');
+      }
+    }
+  }
+
+  Future<void> _generateAudioOnDemandForHistory(int index) async {
+    final item = _history[index];
+    if (item.audioGenerated && item.hasAudio) {
+      // Just play normally
+      return;
+    }
+    if (_credits <= 0) {
+      _showCreditTiers();
+      _showSnack('No audio credits available. Please purchase more credits to generate audio.');
+      return;
+    }
+    // We have credits! Let's deduct 1 credit, generate audio, and update Firestore & local cache.
+    setState(() {
+      _generatingAudioHistoryIndex = index;
+    });
+    try {
+      final provider = _ttsProviderForLanguage(item.outputLang);
+      final voiceName = _voiceNameForLanguage(item.outputLang);
+      final safeForSpeech = _silenceProfanityForSpeech(item.translated);
+      
+      final audioData = await _generateAudioWithCache(
+        safeForSpeech,
+        item.outputLang,
+        voiceName,
+        provider: provider,
+        skipTranslation: true,
+      );
+
+      if (audioData != null && audioData.isNotEmpty) {
+        if (!await _consumeUsageAllowance(inputText: safeForSpeech)) {
+          return;
+        }
+        // Update local item
+        _history[index] = HistoryItem(
+          item.inputLang,
+          item.outputLang,
+          item.original,
+          item.translated,
+          item.time,
+          phonetic: item.phonetic,
+          audioGenerated: true,
+          hasAudio: true,
+        );
+        unawaited(_saveHistoryToDevice());
+        
+        // Update Firestore
+        await _saveDeferredAudioToFirestore(
+          original: item.original,
+          translated: item.translated,
+          inputLang: item.inputLang,
+          outputLang: item.outputLang,
+          audioGenerated: true,
+        );
+
+        // Play it
+        await _audioPlayer.play(BytesSource(audioData));
+      } else {
+        _showSnack(_speechServiceUnavailableMessage());
+      }
+    } catch (e) {
+      debugPrint('On-demand audio generation error: $e');
+      _showSnack('Audio generation error: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _generatingAudioHistoryIndex = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _generateAudioOnDemandForLearn(int index, Map<String, String> phrase) async {
+    final text = phrase['text'] ?? '';
+    final en = phrase['en'] ?? '';
+    final isGen = phrase['audioGenerated'] != 'false';
+    if (isGen) {
+      // Just play normally
+      return;
+    }
+    if (_credits <= 0) {
+      _showCreditTiers();
+      _showSnack('No audio credits available. Please purchase more credits to generate audio.');
+      return;
+    }
+    setState(() {
+      _generatingAudioLearnPhrase = text;
+    });
+    try {
+      final provider = _ttsProviderForLanguage(_selectedLearnLang);
+      final voiceName = _voiceNameForLanguage(_selectedLearnLang);
+      final safeForSpeech = _silenceProfanityForSpeech(text);
+      
+      final audioData = await _generateAudioWithCache(
+        safeForSpeech,
+        _selectedLearnLang,
+        voiceName,
+        provider: provider,
+        skipTranslation: true,
+      );
+
+      if (audioData != null && audioData.isNotEmpty) {
+        if (!await _consumeUsageAllowance(inputText: safeForSpeech)) {
+          return;
+        }
+        // Update local map
+        final list = (_userLearnPhrasesByLang[_selectedLearnLang] ?? []).toList();
+        list[index] = {
+          ...phrase,
+          'audioGenerated': 'true',
+        };
+        _userLearnPhrasesByLang[_selectedLearnLang] = List<Map<String, String>>.from(list);
+        await _persistUserLearnPhrases();
+
+        // Update Firestore
+        await _saveDeferredAudioToFirestore(
+          original: en,
+          translated: text,
+          inputLang: 'English',
+          outputLang: _selectedLearnLang,
+          audioGenerated: true,
+        );
+
+        // Play it
+        await _audioPlayer.play(BytesSource(audioData));
+      } else {
+        _showSnack(_speechServiceUnavailableMessage());
+      }
+    } catch (e) {
+      debugPrint('On-demand audio generation error for Learn: $e');
+      _showSnack('Audio generation error: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _generatingAudioLearnPhrase = null;
+        });
+      }
+    }
+  }
+
   bool _isFirestorePermissionDenied(Object error) {
     final msg = error.toString().toLowerCase();
     return msg.contains('permission-denied') ||
@@ -3620,7 +3803,16 @@ class _HomeScreenState extends State<HomeScreen> {
               _maskProfanityForDisplay(input),
               _maskProfanityForDisplay(result),
               DateTime.now(),
-              phonetic: ''));
+              phonetic: '',
+              audioGenerated: false,
+              hasAudio: false));
+      unawaited(_saveDeferredAudioToFirestore(
+        original: input,
+        translated: result,
+        inputLang: _selectedInputLang,
+        outputLang: _selectedOutputLang,
+        audioGenerated: false,
+      ));
       if (_history.length > 100) {
         _history.removeRange(100, _history.length);
       }
@@ -3716,7 +3908,16 @@ class _HomeScreenState extends State<HomeScreen> {
             _maskProfanityForDisplay(input),
             _maskProfanityForDisplay(result),
             DateTime.now(),
-            phonetic: _phoneticText));
+            phonetic: _phoneticText,
+            audioGenerated: !hasNoCredits,
+            hasAudio: !hasNoCredits));
+    unawaited(_saveDeferredAudioToFirestore(
+      original: input,
+      translated: result,
+      inputLang: _selectedInputLang,
+      outputLang: _selectedOutputLang,
+      audioGenerated: !hasNoCredits,
+    ));
     if (_history.length > 100) {
       _history.removeRange(100, _history.length);
     }
@@ -5938,18 +6139,47 @@ class _HomeScreenState extends State<HomeScreen> {
                                     ),
                                   ),
                                 ],
+                                if (isUserPhrase && (phrase['audioGenerated'] ?? 'true') != 'true') ...[
+                                  const SizedBox(height: 4),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.amber.withOpacity(0.12),
+                                      border: Border.all(color: Colors.amber.shade700, width: 0.5),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      'Audio Deferred (Tap volume to generate)',
+                                      style: TextStyle(
+                                        color: Colors.amber.shade800,
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ],
                             ),
                           ),
                           IconButton(
                             icon: Icon(
-                              Icons.volume_up,
-                              color: isDark ? Colors.white : Colors.black,
+                              isUserPhrase && (phrase['audioGenerated'] ?? 'true') != 'true'
+                                  ? Icons.volume_down_outlined
+                                  : Icons.volume_up,
+                              color: isUserPhrase && (phrase['audioGenerated'] ?? 'true') != 'true'
+                                  ? Colors.amber.shade700
+                                  : (isDark ? Colors.white : Colors.black),
                             ),
-                            tooltip: 'Listen',
+                            tooltip: isUserPhrase && (phrase['audioGenerated'] ?? 'true') != 'true'
+                                ? 'Generate Audio (1 credit)'
+                                : 'Listen',
                             onPressed: () {
                               if (isUserPhrase) {
-                                _playLearnReplay(_selectedLearnLang, phrase['text'] ?? '', phrase['text']);
+                                if ((phrase['audioGenerated'] ?? 'true') == 'true') {
+                                  _playLearnReplay(_selectedLearnLang, phrase['text'] ?? '', phrase['text']);
+                                } else {
+                                  _generateAudioOnDemandForLearn(idx, phrase);
+                                }
                               } else {
                                 _playLearnPhraseAudio(
                                   language: _selectedLearnLang,
@@ -7133,12 +7363,21 @@ class _HomeScreenState extends State<HomeScreen> {
                                       ),
                                     const Spacer(),
                                     IconButton(
-                                      icon: const Icon(Icons.volume_up, size: 18),
-                                      tooltip: 'Repeat',
+                                      icon: Icon(
+                                        (item.audioGenerated && item.hasAudio) ? Icons.volume_up : Icons.volume_down_outlined,
+                                        size: 18,
+                                        color: (item.audioGenerated && item.hasAudio) ? null : Colors.amber.shade700,
+                                      ),
+                                      tooltip: (item.audioGenerated && item.hasAudio) ? 'Repeat' : 'Generate Audio (1 credit)',
                                       padding: EdgeInsets.zero,
                                       constraints: const BoxConstraints(),
-                                      onPressed: () =>
-                                          _playHistoryReplayItem(item, i),
+                                      onPressed: () {
+                                        if (item.audioGenerated && item.hasAudio) {
+                                          _playHistoryReplayItem(item, i);
+                                        } else {
+                                          _generateAudioOnDemandForHistory(i);
+                                        }
+                                      },
                                     ),
                                   ],
                                 ),
@@ -7196,6 +7435,25 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 : Colors.black87,
                                           ),
                                         ),
+                                        if (!item.audioGenerated || !item.hasAudio) ...[
+                                          const SizedBox(height: 4),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: Colors.amber.withOpacity(0.12),
+                                              border: Border.all(color: Colors.amber.shade700, width: 0.5),
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                            child: Text(
+                                              'Audio Deferred',
+                                              style: TextStyle(
+                                                color: Colors.amber.shade800,
+                                                fontSize: 8,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
                                       ],
                                     ),
                                   ),
@@ -7309,15 +7567,47 @@ class _HomeScreenState extends State<HomeScreen> {
                                             fontSize: 16 * _currentTextScale,
                                           )),
                                     ),
+                                    if (!item.audioGenerated || !item.hasAudio)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 4.0),
+                                        child: Align(
+                                          alignment: Alignment.centerLeft,
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                            decoration: BoxDecoration(
+                                              color: Colors.amber.withOpacity(0.12),
+                                              border: Border.all(color: Colors.amber.shade700, width: 0.5),
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                            child: Text(
+                                              'Audio Deferred (Tap speaker to generate)',
+                                              style: TextStyle(
+                                                color: Colors.amber.shade800,
+                                                fontSize: 9,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
                                   ],
                                 ),
                                 trailing: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     IconButton(
-                                      icon: const Icon(Icons.volume_up),
-                                      tooltip: 'Repeat',
-                                      onPressed: () => _playHistoryReplayItem(item, i),
+                                      icon: Icon(
+                                        (item.audioGenerated && item.hasAudio) ? Icons.volume_up : Icons.volume_down_outlined,
+                                        color: (item.audioGenerated && item.hasAudio) ? null : Colors.amber.shade700,
+                                      ),
+                                      tooltip: (item.audioGenerated && item.hasAudio) ? 'Repeat' : 'Generate Audio (1 credit)',
+                                      onPressed: () {
+                                        if (item.audioGenerated && item.hasAudio) {
+                                          _playHistoryReplayItem(item, i);
+                                        } else {
+                                          _generateAudioOnDemandForHistory(i);
+                                        }
+                                      },
                                     ),
                                   ],
                                 ),

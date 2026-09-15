@@ -125,7 +125,7 @@ class TranslationService {
     final resolvedSource = safeSource.isNotEmpty ? safeSource : 'auto';
 
     return {
-      'text': text.trim(),
+      'text': text.trim(), // Always send main 'text' to prevent 400 No Text errors on older cloud functions
       'sourceLanguage': resolvedSource,
       'targetLanguage': safeTarget,
       'skipTranslation': skipTranslation,
@@ -134,6 +134,7 @@ class TranslationService {
       'ttsProvider': ttsProvider,
       'includeAlignment': includeAlignment,
       'alignmentMode': 'word_level',
+      if (skipTranslation) 'translatedText': text.trim(),
     };
   }
 

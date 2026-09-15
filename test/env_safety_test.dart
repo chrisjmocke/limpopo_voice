@@ -54,6 +54,7 @@ void main() {
       'Dumela',
       DateTime.utc(2024, 1, 2, 3, 4, 5),
       phonetic: 'du-me-la',
+      audioGenerated: false,
     );
 
     final encoded = item.toJson();
@@ -64,6 +65,7 @@ void main() {
     expect(decoded.original, 'Hello');
     expect(decoded.translated, 'Dumela');
     expect(decoded.phonetic, 'du-me-la');
+    expect(decoded.audioGenerated, isFalse);
     expect(decoded.time.isAtSameMomentAs(item.time), isTrue);
   });
 
