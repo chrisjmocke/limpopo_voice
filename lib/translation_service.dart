@@ -125,7 +125,7 @@ class TranslationService {
     final resolvedSource = safeSource.isNotEmpty ? safeSource : 'auto';
 
     return {
-      if (!skipTranslation) 'text': text.trim(), // Comply with requirement 1: when skipTranslation: true, completely omit or unset the root "text" field if "translatedText" is used.
+      'text': text.trim(), // Explicitly send the target/pre-translated string to "text" root field so the backend avoids the 400 "No text provided" error.
       'sourceLanguage': resolvedSource,
       'targetLanguage': safeTarget,
       'skipTranslation': skipTranslation,
@@ -134,7 +134,7 @@ class TranslationService {
       'ttsProvider': ttsProvider,
       'includeAlignment': includeAlignment,
       'alignmentMode': 'word_level',
-      'translatedText': text.trim(), // Set the pre-translated string to translatedText so the backend matches and routes it directly to Narakeet.
+      'translatedText': text.trim(), // Explicitly populate BOTH "text" and "translatedText" with the target string.
     };
   }
 

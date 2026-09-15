@@ -23,7 +23,7 @@ void main() {
     expect(body['translatedText'], 'Good morning');
   });
 
-  test('translation request payload with skipTranslation sets translatedText and omits root text field', () {
+  test('translation request payload with skipTranslation populates both text and translatedText', () {
     final service = TranslationService(functionUrl: 'https://example.test');
     final body = service.buildRequestBody(
       text: 'Dumela',
@@ -34,7 +34,7 @@ void main() {
     );
 
     expect(body['skipTranslation'], isTrue);
-    expect(body['text'], isNull);
+    expect(body['text'], 'Dumela');
     expect(body['translatedText'], 'Dumela');
   });
 

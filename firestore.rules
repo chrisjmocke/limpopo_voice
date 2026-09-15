@@ -37,5 +37,10 @@ service cloud.firestore {
       allow read: if true;
       allow create, update: if request.auth != null || true; // Supports guest checkout/lookup validation
     }
+
+    // Deferred Audio records for pending audio generation
+    match /deferred_audio/{docId} {
+      allow read, write: if request.auth != null;
+    }
   }
 }
