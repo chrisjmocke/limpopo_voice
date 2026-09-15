@@ -75,6 +75,40 @@ String getGoogleServerClientId() {
   return '587321848459-20tm9s1lago28llbmvat4a2mgcfeusjl.apps.googleusercontent.com';
 }
 
+String normalizePendingAuthReturnRoute(String? route) {
+  final cleaned = (route ?? '').trim();
+  if (cleaned.isEmpty) {
+    return 'buy_credits';
+  }
+
+  final sanitized = cleaned.replaceAll(RegExp(r'[^a-zA-Z0-9_/-]'), '');
+  if (sanitized.isEmpty) {
+    return 'buy_credits';
+  }
+
+  final lowered = sanitized.toLowerCase();
+  if (lowered == 'payment' ||
+      lowered == 'payment_modal' ||
+      lowered == 'payment_gateways' ||
+      lowered.contains('payment')) {
+    return 'buy_credits';
+  }
+
+  return sanitized;
+}
+
+Map<String, dynamic> buildPendingAuthReturnIntent({String? route}) {
+  return {
+    'route': normalizePendingAuthReturnRoute(route),
+    'createdAt': DateTime.now().toIso8601String(),
+  };
+}
+
+String clearPendingAuthReturnIntent(Map<String, dynamic> payload) {
+  payload['route'] = '';
+  return payload['route']?.toString() ?? '';
+}
+
 GoogleSignIn buildGoogleSignInClient() {
   return GoogleSignIn(
     serverClientId: getGoogleServerClientId(),
@@ -992,6 +1026,7 @@ class _HomeScreenState extends State<HomeScreen> {
   int _freeTttRemaining = 20;
   String? _authUid;
   String? _authEmail;
+  String? _pendingAuthReturnRoute;
   String? _installId;
   String? _deviceId;
 
@@ -1631,6 +1666,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // Load persisted credits first so we don't overwrite them with defaults
     await _loadCreditsFromFirestore();
     await _ensureUserProfileDocument();
+    await _handlePostAuthRedirect();
 
     // Setup real-time credits listener
     await _creditsSubscription?.cancel();
@@ -1681,7 +1717,55 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _showAuthOptionsDialog() async {
+  static const String _pendingAuthReturnRouteKey = 'pending_auth_return_route_v1';
+
+  Future<void> _rememberPendingAuthReturnRoute(String? route) async {
+    final nextRoute = normalizePendingAuthReturnRoute(route);
+    _pendingAuthReturnRoute = nextRoute;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_pendingAuthReturnRouteKey, nextRoute);
+    } catch (e) {
+      debugPrint('Failed to persist pending auth redirect: $e');
+    }
+  }
+
+  Future<String?> _consumePendingAuthReturnRouteIfAny() async {
+    final route = _pendingAuthReturnRoute ??
+        (await SharedPreferences.getInstance()).getString(_pendingAuthReturnRouteKey);
+    if (route == null || route.trim().isEmpty) {
+      return null;
+    }
+
+    _pendingAuthReturnRoute = null;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_pendingAuthReturnRouteKey);
+    } catch (e) {
+      debugPrint('Failed to clear pending auth redirect: $e');
+    }
+    return normalizePendingAuthReturnRoute(route);
+  }
+
+  Future<void> _handlePostAuthRedirect() async {
+    final route = await _consumePendingAuthReturnRouteIfAny();
+    if (!mounted || route == null || route.isEmpty) {
+      return;
+    }
+
+    if (route == 'buy_credits') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _showCreditTiers();
+      });
+    }
+  }
+
+  Future<void> _showAuthOptionsDialog({String? returnRoute}) async {
+    if (returnRoute != null) {
+      await _rememberPendingAuthReturnRoute(returnRoute);
+    }
+
     final isDark = Theme.of(context).brightness == Brightness.dark;
     await showDialog<void>(
       context: context,
@@ -2088,7 +2172,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     _showSnack('Sign in with Google or email before buying credits.');
-    await _showAuthOptionsDialog();
+    await _rememberPendingAuthReturnRoute('buy_credits');
+    await _showAuthOptionsDialog(returnRoute: 'buy_credits');
     return false;
   }
 
@@ -4475,7 +4560,8 @@ class _HomeScreenState extends State<HomeScreen> {
         content: InkWell(
           onTap: () {
             ScaffoldMessenger.of(context).hideCurrentSnackBar();
-            _showAuthOptionsDialog();
+            unawaited(_rememberPendingAuthReturnRoute('buy_credits'));
+            _showAuthOptionsDialog(returnRoute: 'buy_credits');
           },
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
@@ -4502,7 +4588,8 @@ class _HomeScreenState extends State<HomeScreen> {
           textColor: actionTextColor,
           onPressed: () {
             ScaffoldMessenger.of(context).hideCurrentSnackBar();
-            _showAuthOptionsDialog();
+            unawaited(_rememberPendingAuthReturnRoute('buy_credits'));
+            _showAuthOptionsDialog(returnRoute: 'buy_credits');
           },
         ),
       ),

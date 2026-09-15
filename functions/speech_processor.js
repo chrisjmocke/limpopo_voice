@@ -594,6 +594,7 @@ function handleProcessSpeech(req, res) {
             
             // If skipTranslation is true, prioritize client-provided translatedText over text
             const isSkip = skipTranslation === true;
+            // Requirement 1 & 2: backend handles request where root "text" was completely omitted by reading "translatedText" (clientTranslatedText) directly
             const inputText = String((isSkip ? (clientTranslatedText || text) : text) || "").trim();
             
             if (!inputText) return res.status(400).send({ error: "No text provided" });

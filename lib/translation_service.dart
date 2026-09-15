@@ -125,7 +125,7 @@ class TranslationService {
     final resolvedSource = safeSource.isNotEmpty ? safeSource : 'auto';
 
     return {
-      'text': text.trim(), // Always send main 'text' to prevent 400 No Text errors on older cloud functions
+      if (!skipTranslation) 'text': text.trim(), // Comply with requirement 1: when skipTranslation: true, completely omit or unset the root "text" field if "translatedText" is used.
       'sourceLanguage': resolvedSource,
       'targetLanguage': safeTarget,
       'skipTranslation': skipTranslation,
@@ -134,7 +134,7 @@ class TranslationService {
       'ttsProvider': ttsProvider,
       'includeAlignment': includeAlignment,
       'alignmentMode': 'word_level',
-      if (skipTranslation) 'translatedText': text.trim(),
+      'translatedText': text.trim(), // Set the pre-translated string to translatedText so the backend matches and routes it directly to Narakeet.
     };
   }
 

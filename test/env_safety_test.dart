@@ -20,6 +20,22 @@ void main() {
     expect(body['skipTranslation'], isFalse);
     expect(body['targetLanguage'], 'Sepedi');
     expect(body['text'], 'Good morning');
+    expect(body['translatedText'], 'Good morning');
+  });
+
+  test('translation request payload with skipTranslation sets translatedText and omits root text field', () {
+    final service = TranslationService(functionUrl: 'https://example.test');
+    final body = service.buildRequestBody(
+      text: 'Dumela',
+      targetLanguage: 'Sepedi',
+      voiceName: 'Mpho',
+      ttsProvider: 'narakeet',
+      skipTranslation: true,
+    );
+
+    expect(body['skipTranslation'], isTrue);
+    expect(body['text'], isNull);
+    expect(body['translatedText'], 'Dumela');
   });
 
   test('Google sign-in uses the Firebase web client ID for Android release builds', () {
@@ -104,6 +120,15 @@ void main() {
     expect(keys, contains('world'));
     expect(keys, contains('hello world'));
     expect(keys.length, greaterThanOrEqualTo(3));
+  });
+
+  test('pending auth return intent preserves the buy credits route and clears safely', () {
+    final route = normalizePendingAuthReturnRoute('buy_credits');
+    final payload = buildPendingAuthReturnIntent(route: route);
+
+    expect(route, 'buy_credits');
+    expect(payload['route'], 'buy_credits');
+    expect(clearPendingAuthReturnIntent(payload), isEmpty);
   });
 
 }
