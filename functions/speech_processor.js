@@ -590,28 +590,31 @@ function handleProcessSpeech(req, res) {
                 return res.status(401).send({ error: "Unauthorized" }); 
             }
             const userId = decodedToken.uid;
-            const { text, targetLanguage, isRespectMode, isMale, model, ttsProvider, skipTranslation, voiceName, translatedText: clientTranslatedText } = req.body;
+            const { text, targetLanguage, isRespectMode, isMale, model, ttsProvider, skipTranslation, voiceName, translatedText: clientTranslatedText, directTtsText } = req.body;
             
-            // If skipTranslation is true, prioritize client-provided translatedText over text
             const isSkip = skipTranslation === true;
-            // Requirement 1 & 2: backend handles request where root "text" was completely omitted by reading "translatedText" (clientTranslatedText) directly
-            const inputText = String((isSkip ? (clientTranslatedText || text) : text) || "").trim();
+            const explicitTranslatedText = String(clientTranslatedText || directTtsText || text || "").trim();
+            const sourceText = String(text || "").trim();
+
+            // If skipTranslation is enabled, bypass the LLM completely and use the already-translated text directly.
+            const inputText = isSkip ? explicitTranslatedText : sourceText;
             
             if (!inputText) return res.status(400).send({ error: "No text provided" });
             if (inputText.length > MAX_TEXT_LENGTH) return res.status(413).send({ error: "Input text too long", maxCharacters: MAX_TEXT_LENGTH });
             const normalizedTargetLanguage = normalizeTargetLanguageCode(targetLanguage);
             const shouldSkipTranslation = isSkip;
             let translatedText = null; let modelUsed = null;
+
             if (shouldSkipTranslation) {
-                translatedText = inputText; // This is clientTranslatedText or text, directly used to send to Narakeet!
+                translatedText = explicitTranslatedText || sourceText;
             } else {
                 try {
-                    const translationResult = await translateWithGemini(inputText, normalizedTargetLanguage, isRespectMode, model);
+                    const translationResult = await translateWithGemini(sourceText, normalizedTargetLanguage, isRespectMode, model);
                     translatedText = translationResult.translatedText; modelUsed = translationResult.modelUsed;
                 } catch (translationError) {
                     console.warn("Gemini translation failed, trying Google Translate fallback.", translationError?.message || translationError);
                     try {
-                        translatedText = await translateWithGoogleFallback(inputText, targetLanguage);
+                        translatedText = await translateWithGoogleFallback(sourceText, targetLanguage);
                         modelUsed = "google-translate-fallback";
                     } catch (fallbackError) {
                         console.error("Google Translate fallback failed too.", fallbackError?.message || fallbackError);
@@ -619,6 +622,26 @@ function handleProcessSpeech(req, res) {
                     }
                 }
             }
+
+            if (shouldSkipTranslation && translatedText != null && translatedText.trim().length > 0) {
+                const requestedCode = mapLanguageCode(normalizedTargetLanguage);
+                const requestedGender = mapGender(isMale !== false);
+                const ttsResult = await synthesizeWithProviderChain({ text: translatedText, targetLanguage: normalizedTargetLanguage, requestedVoiceName: voiceName });
+                if (!ttsResult?.audioContent) {
+                    console.error("Speech synthesis unavailable for skipTranslation direct TTS request.");
+                    return res.status(503).send({
+                        error: "Speech synthesis unavailable",
+                        details: "Narakeet is unavailable or not configured for a direct skip-translation TTS request.",
+                        provider: "narakeet",
+                        status: "error",
+                        translation: translatedText,
+                        modelUsed: modelUsed || null,
+                        skipTranslation: shouldSkipTranslation,
+                    });
+                }
+                return res.status(200).send({ translation: translatedText, audioContent: ttsResult.audioContent, voiceLanguageUsed: ttsResult.voiceLanguageUsed, voiceGenderUsed: ttsResult.voiceGenderUsed, voiceNameUsed: ttsResult.voiceNameUsed, ttsProviderUsed: ttsResult.ttsProviderUsed, ttsProviderChain: ttsResult.ttsProviderChain, cacheHit: ttsResult.cacheHit === true, cacheLayer: ttsResult.cacheLayer || null, cacheKey: ttsResult.cacheKey || null, audioUrl: ttsResult.audioUrl || null, modelUsed, skipTranslation: shouldSkipTranslation, status: "success" });
+            }
+
             const targetIsEnglish = normalizeTargetLanguageCode(normalizedTargetLanguage) === "en";
             const normalizedInput = normalizeComparableText(inputText);
             const normalizedTranslated = normalizeComparableText(translatedText);

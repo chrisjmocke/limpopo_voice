@@ -32,6 +32,7 @@ dependencies:
   payfast: ^1.0.2
   webview_flutter: ^4.13.1
   shared_preferences: ^2.3.3
+  flutter_secure_storage: ^9.2.2
   qr_flutter: ^4.1.0
   device_info_plus: ^12.3.0
   google_mlkit_text_recognition: ^0.15.1

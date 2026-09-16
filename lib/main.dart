@@ -17,6 +17,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
@@ -64,6 +65,24 @@ String safeDotEnvString(String key) {
     return (dotenv.env[key] ?? '').trim();
   } catch (_) {
     return '';
+  }
+}
+
+final storage = const FlutterSecureStorage();
+final ValueNotifier<Set<String>> resolvedAudioNotifier =
+    ValueNotifier<Set<String>>(<String>{});
+
+Future<String?> safeRead(String key) async {
+  try {
+    return await storage.read(key: key);
+  } catch (e) {
+    debugPrint('Secure storage read failed, resetting storage: $e');
+    try {
+      await storage.deleteAll();
+    } catch (resetError) {
+      debugPrint('Secure storage reset failed: $resetError');
+    }
+    return null;
   }
 }
 
@@ -632,10 +651,29 @@ class HistoryItem {
   final String? phonetic;
   final DateTime time;
   final bool audioGenerated;
-  final bool hasAudio;
-  HistoryItem(this.inputLang, this.outputLang, this.original, this.translated,
-      this.time,
-      {this.phonetic, this.audioGenerated = true, this.hasAudio = true});
+  final bool isDeferred;
+  final String audioStatus;
+
+  bool get hasAudio => audioGenerated;
+
+  HistoryItem(
+    this.inputLang,
+    this.outputLang,
+    this.original,
+    this.translated,
+    this.time, {
+    this.phonetic,
+    bool? audioGenerated,
+    bool? hasAudio,
+    bool isDeferred = false,
+    String? audioStatus,
+  })  : audioGenerated = audioGenerated ?? hasAudio ?? true,
+        isDeferred = isDeferred || (audioGenerated == null && hasAudio == false),
+        audioStatus = (audioStatus ??
+                (audioGenerated == false || hasAudio == false
+                    ? 'unrendered'
+                    : 'rendered'))
+            .toString();
 
   Map<String, dynamic> toJson() => {
         'inputLang': inputLang,
@@ -645,21 +683,51 @@ class HistoryItem {
         'phonetic': phonetic,
         'time': time.toIso8601String(),
         'audioGenerated': audioGenerated,
-        'hasAudio': hasAudio,
+        'isDeferred': isDeferred,
+        'hasAudio': audioGenerated,
+        'audioStatus': audioStatus,
       };
 
-  factory HistoryItem.fromJson(Map<String, dynamic> json) => HistoryItem(
-        (json['inputLang'] ?? '').toString(),
-        (json['outputLang'] ?? '').toString(),
-        (json['original'] ?? '').toString(),
-        (json['translated'] ?? '').toString(),
-        DateTime.tryParse((json['time'] ?? '').toString()) ?? DateTime.now(),
-        phonetic: (json['phonetic'] ?? '').toString().isEmpty
-            ? null
-            : (json['phonetic'] ?? '').toString(),
-        audioGenerated: json['audioGenerated'] == null ? true : json['audioGenerated'] as bool,
-        hasAudio: json['hasAudio'] == null ? (json['audioGenerated'] == null ? true : json['audioGenerated'] as bool) : json['hasAudio'] as bool,
-      );
+  factory HistoryItem.fromJson(Map<String, dynamic> json) {
+    final rawAudioGenerated = json['audioGenerated'];
+    final rawHasAudio = json['hasAudio'];
+    final rawIsDeferred = json['isDeferred'];
+    final rawAudioStatus = json['audioStatus'];
+
+    final resolvedAudioGenerated = rawAudioGenerated is bool
+        ? rawAudioGenerated
+        : rawHasAudio is bool
+            ? rawHasAudio
+            : rawAudioStatus is String && rawAudioStatus.toLowerCase() == 'unrendered'
+                ? false
+                : true;
+
+    final resolvedIsDeferred = rawIsDeferred is bool
+        ? rawIsDeferred
+        : rawAudioGenerated == null && rawHasAudio == null && rawAudioStatus == null
+            ? false
+            : !resolvedAudioGenerated;
+
+    final resolvedAudioStatus = rawAudioStatus is String
+        ? rawAudioStatus
+        : resolvedAudioGenerated
+            ? 'rendered'
+            : 'unrendered';
+
+    return HistoryItem(
+      (json['inputLang'] ?? '').toString(),
+      (json['outputLang'] ?? '').toString(),
+      (json['original'] ?? '').toString(),
+      (json['translated'] ?? '').toString(),
+      DateTime.tryParse((json['time'] ?? '').toString()) ?? DateTime.now(),
+      phonetic: (json['phonetic'] ?? '').toString().isEmpty
+          ? null
+          : (json['phonetic'] ?? '').toString(),
+      audioGenerated: resolvedAudioGenerated,
+      isDeferred: resolvedIsDeferred,
+      audioStatus: resolvedAudioStatus,
+    );
+  }
 }
 
 enum HistoryEditAction { share, delete }
@@ -758,6 +826,69 @@ class _HomeScreenState extends State<HomeScreen> {
   final Map<String, Uint8List> _hotAudioCache = {};
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
+  bool _learnAudioGenerated(Map<String, String> phrase, {bool defaultValue = true}) {
+    final stored = phrase['audioGenerated'] ?? phrase['hasAudio'];
+    if (stored == null || stored.trim().isEmpty) {
+      final status = phrase['audioStatus']?.trim().toLowerCase();
+      if (status == 'unrendered') return false;
+      return defaultValue;
+    }
+    final lowered = stored.trim().toLowerCase();
+    return lowered == 'true' || lowered == '1';
+  }
+
+  bool _learnIsDeferred(Map<String, String> phrase, {bool defaultValue = false}) {
+    final stored = phrase['isDeferred'];
+    if (stored != null && stored.trim().isNotEmpty) {
+      final lowered = stored.trim().toLowerCase();
+      return lowered == 'true' || lowered == '1';
+    }
+
+    final audioStatus = phrase['audioStatus']?.trim().toLowerCase();
+    if (audioStatus == 'unrendered') return true;
+
+    final legacyHasAudio = phrase['hasAudio'];
+    if (legacyHasAudio != null && legacyHasAudio.trim().isNotEmpty) {
+      final lowered = legacyHasAudio.trim().toLowerCase();
+      return lowered == 'false' || lowered == '0';
+    }
+
+    final audioGenerated = phrase['audioGenerated'];
+    if (audioGenerated != null && audioGenerated.trim().isNotEmpty) {
+      final lowered = audioGenerated.trim().toLowerCase();
+      return lowered == 'false' || lowered == '0';
+    }
+
+    return defaultValue;
+  }
+
+  Future<bool> _hasActivePaidAudioAccess() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? _authUid;
+    if (uid == null || uid.isEmpty) return false;
+
+    try {
+      final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      if (!doc.exists) return false;
+
+      final data = doc.data() ?? const <String, dynamic>{};
+      final status = (data['subscriptionStatus'] ?? '').toString().toLowerCase();
+      final tierActive = data['tierActive'] == true;
+      final monthlyActive = data['monthlyRenewalActive'] == true;
+      final subscriptionEnd = data['subscriptionPeriodEnd'];
+      final hasValidExpiry = subscriptionEnd is Timestamp &&
+          subscriptionEnd.toDate().isAfter(DateTime.now());
+
+      return tierActive ||
+          monthlyActive ||
+          status == 'active_monthly' ||
+          status == 'active_once_off' ||
+          (status == 'active' && hasValidExpiry);
+    } catch (e) {
+      debugPrint('Failed to determine active paid audio access: $e');
+      return false;
+    }
+  }
+
   Future<bool> _sendToLearnMultipleLangs({
     required String translated,
     required String original,
@@ -807,6 +938,7 @@ class _HomeScreenState extends State<HomeScreen> {
           'en': original,
           if (phonetic.isNotEmpty) 'phonetic': phonetic,
           'audioGenerated': _credits > 0 ? 'true' : 'false',
+          'isDeferred': _credits > 0 ? 'false' : 'true',
           'hasAudio': _credits > 0 ? 'true' : 'false',
         });
         _userLearnPhrasesByLang[key] = limitEntries(phraseList, 100);
@@ -1033,6 +1165,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _authBusy = false;
   int? _generatingAudioHistoryIndex;
   dynamic _generatingAudioLearnPhrase;
+  final Set<String> _resolvedAudioKeys = <String>{};
   static const String _historyPrefsKey = 'device_history_v1';
   static const String _languagePrefsKey = 'device_selected_languages_v1';
   final List<HistoryItem> _history = [];
@@ -1731,8 +1864,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<String?> _consumePendingAuthReturnRouteIfAny() async {
-    final route = _pendingAuthReturnRoute ??
-        (await SharedPreferences.getInstance()).getString(_pendingAuthReturnRouteKey);
+    final cachedRoute = _pendingAuthReturnRoute;
+    final route = cachedRoute ??
+        await SharedPreferences.getInstance()
+            .then((prefs) => prefs.getString(_pendingAuthReturnRouteKey));
     if (route == null || route.trim().isEmpty) {
       return null;
     }
@@ -1763,12 +1898,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _showAuthOptionsDialog({String? returnRoute}) async {
     if (returnRoute != null) {
-      await _rememberPendingAuthReturnRoute(returnRoute);
+      unawaited(_rememberPendingAuthReturnRoute(returnRoute));
     }
 
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final authContext = context;
+    final isDark = Theme.of(authContext).brightness == Brightness.dark;
     await showDialog<void>(
-      context: context,
+      context: authContext,
       builder: (ctx) => AlertDialog(
         scrollable: true,
         backgroundColor:
@@ -2329,7 +2465,10 @@ class _HomeScreenState extends State<HomeScreen> {
       {bool forceRefresh = false}) async {
     try {
       User? user = FirebaseAuth.instance.currentUser;
-      user ??= (await FirebaseAuth.instance.signInAnonymously()).user;
+      if (user == null) {
+        await _ensureSignedIn();
+        user = FirebaseAuth.instance.currentUser;
+      }
       if (user == null) return null;
 
       final idToken = await user.getIdToken(forceRefresh);
@@ -2980,21 +3119,39 @@ class _HomeScreenState extends State<HomeScreen> {
     required String inputLang,
     required String outputLang,
     required bool audioGenerated,
+    String? audioUrl,
   }) async {
     try {
+      final uid = FirebaseAuth.instance.currentUser?.uid ?? _authUid;
+      if (uid == null || uid.isEmpty) {
+        debugPrint('Skipping deferred audio save because no authenticated user is available.');
+        return;
+      }
+
       final docId = '${translated.toLowerCase().trim()}_$outputLang';
-      await _firestore.collection('deferred_audio').doc(docId).set({
+      final payload = <String, dynamic>{
         'original': original,
         'translated': translated,
         'inputLang': inputLang,
         'outputLang': outputLang,
         'audioGenerated': audioGenerated,
+        'audioStatus': audioGenerated ? 'rendered' : 'unrendered',
         'isPendingAudio': !audioGenerated,
-        'userId': FirebaseAuth.instance.currentUser?.uid,
+        'userId': uid,
         'deviceId': _deviceId,
+        'updatedAt': FieldValue.serverTimestamp(),
         'createdAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-      debugPrint('Saved deferred audio record to Firestore: $docId (audioGenerated: $audioGenerated)');
+      };
+      if (audioUrl != null && audioUrl.trim().isNotEmpty) {
+        payload['audioUrl'] = audioUrl;
+      }
+      final userDeferredAudioRef = _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('deferred_audio')
+          .doc(docId);
+      await userDeferredAudioRef.set(payload, SetOptions(merge: true));
+      debugPrint('Saved deferred audio record under user path: users/$uid/deferred_audio/$docId (audioStatus: ${payload['audioStatus']})');
     } catch (e) {
       if (!_isFirestorePermissionDenied(e)) {
         debugPrint('Firestore deferred audio save error: $e');
@@ -3002,18 +3159,42 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  void _markAudioResolved(String cacheLookupKey) {
+    if (cacheLookupKey.trim().isEmpty) {
+      return;
+    }
+    if (_resolvedAudioKeys.add(cacheLookupKey)) {
+      final next = Set<String>.from(resolvedAudioNotifier.value);
+      next.add(cacheLookupKey);
+      resolvedAudioNotifier.value = next;
+      if (mounted) {
+        setState(() {});
+      }
+    }
+  }
+
+  bool _isAudioResolvedForKey(String text, String language, String voiceName,
+      {required String provider}) {
+    final cacheVoiceKey = '$provider|$voiceName';
+    final cacheLookupKey = _getCacheKey(text, language, cacheVoiceKey);
+    return resolvedAudioNotifier.value.contains(cacheLookupKey) ||
+        _resolvedAudioKeys.contains(cacheLookupKey);
+  }
+
   Future<void> _generateAudioOnDemandForHistory(int index) async {
     final item = _history[index];
     if (item.audioGenerated && item.hasAudio) {
-      // Just play normally
       return;
     }
-    if (_credits <= 0) {
+
+    final hasPaidAccess = await _hasActivePaidAudioAccess();
+    final hasTopUpBalance = _credits > 0;
+    if (!hasPaidAccess && !hasTopUpBalance) {
       _showCreditTiers();
-      _showSnack('No audio credits available. Please purchase more credits to generate audio.');
+      _showSnack('Please top up your account to generate audio for text-only items.');
       return;
     }
-    // We have credits! Let's deduct 1 credit, generate audio, and update Firestore & local cache.
+
     setState(() {
       _generatingAudioHistoryIndex = index;
     });
@@ -3021,20 +3202,33 @@ class _HomeScreenState extends State<HomeScreen> {
       final provider = _ttsProviderForLanguage(item.outputLang);
       final voiceName = _voiceNameForLanguage(item.outputLang);
       final safeForSpeech = _silenceProfanityForSpeech(item.translated);
-      
+      final sanitizedText = safeForSpeech.isNotEmpty ? safeForSpeech : item.translated;
+
       final audioData = await _generateAudioWithCache(
-        safeForSpeech,
+        item.original,
         item.outputLang,
         voiceName,
         provider: provider,
+        translatedText: sanitizedText,
         skipTranslation: true,
       );
 
       if (audioData != null && audioData.isNotEmpty) {
-        if (!await _consumeUsageAllowance(inputText: safeForSpeech)) {
+        final deducted = await _consumeUsageAllowance(
+          inputText: sanitizedText,
+          outputText: item.translated,
+        );
+        if (!deducted) {
+          debugPrint('[_generateAudioOnDemandForHistory] Deferred render denied by credit allowance check.');
           return;
         }
-        // Update local item
+
+        final provider = _ttsProviderForLanguage(item.outputLang);
+        final voiceName = _voiceNameForLanguage(item.outputLang);
+        final cacheVoiceKey = '$provider|${voiceName ?? ''}';
+        final cacheLookupKey = _getCacheKey(item.translated, item.outputLang, cacheVoiceKey);
+        _markAudioResolved(cacheLookupKey);
+
         _history[index] = HistoryItem(
           item.inputLang,
           item.outputLang,
@@ -3044,10 +3238,10 @@ class _HomeScreenState extends State<HomeScreen> {
           phonetic: item.phonetic,
           audioGenerated: true,
           hasAudio: true,
+          audioStatus: 'rendered',
         );
         unawaited(_saveHistoryToDevice());
-        
-        // Update Firestore
+
         await _saveDeferredAudioToFirestore(
           original: item.original,
           translated: item.translated,
@@ -3056,7 +3250,6 @@ class _HomeScreenState extends State<HomeScreen> {
           audioGenerated: true,
         );
 
-        // Play it
         await _audioPlayer.play(BytesSource(audioData));
       } else {
         _showSnack(_speechServiceUnavailableMessage());
@@ -3076,16 +3269,19 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _generateAudioOnDemandForLearn(int index, Map<String, String> phrase) async {
     final text = phrase['text'] ?? '';
     final en = phrase['en'] ?? '';
-    final isGen = phrase['audioGenerated'] != 'false';
+    final isGen = _learnAudioGenerated(phrase);
     if (isGen) {
-      // Just play normally
       return;
     }
-    if (_credits <= 0) {
+
+    final hasPaidAccess = await _hasActivePaidAudioAccess();
+    final hasTopUpBalance = _credits > 0;
+    if (!hasPaidAccess && !hasTopUpBalance) {
       _showCreditTiers();
-      _showSnack('No audio credits available. Please purchase more credits to generate audio.');
+      _showSnack('Please top up your account to generate audio for text-only items.');
       return;
     }
+
     setState(() {
       _generatingAudioLearnPhrase = text;
     });
@@ -3093,29 +3289,44 @@ class _HomeScreenState extends State<HomeScreen> {
       final provider = _ttsProviderForLanguage(_selectedLearnLang);
       final voiceName = _voiceNameForLanguage(_selectedLearnLang);
       final safeForSpeech = _silenceProfanityForSpeech(text);
-      
+      final sanitizedText = safeForSpeech.isNotEmpty ? safeForSpeech : text;
+
       final audioData = await _generateAudioWithCache(
-        safeForSpeech,
+        text,
         _selectedLearnLang,
         voiceName,
         provider: provider,
+        translatedText: sanitizedText,
         skipTranslation: true,
       );
 
       if (audioData != null && audioData.isNotEmpty) {
-        if (!await _consumeUsageAllowance(inputText: safeForSpeech)) {
+        final deducted = await _consumeUsageAllowance(
+          inputText: sanitizedText,
+          outputText: text,
+        );
+        if (!deducted) {
+          debugPrint('[_generateAudioOnDemandForLearn] Deferred render denied by credit allowance check.');
           return;
         }
-        // Update local map
+
+        final provider = _ttsProviderForLanguage(_selectedLearnLang);
+        final voiceName = _voiceNameForLanguage(_selectedLearnLang);
+        final cacheVoiceKey = '$provider|${voiceName ?? ''}';
+        final cacheLookupKey = _getCacheKey(text, _selectedLearnLang, cacheVoiceKey);
+        _markAudioResolved(cacheLookupKey);
+
         final list = (_userLearnPhrasesByLang[_selectedLearnLang] ?? []).toList();
         list[index] = {
           ...phrase,
           'audioGenerated': 'true',
+          'isDeferred': 'false',
+          'hasAudio': 'true',
+          'audioStatus': 'rendered',
         };
         _userLearnPhrasesByLang[_selectedLearnLang] = List<Map<String, String>>.from(list);
         await _persistUserLearnPhrases();
 
-        // Update Firestore
         await _saveDeferredAudioToFirestore(
           original: en,
           translated: text,
@@ -3124,7 +3335,6 @@ class _HomeScreenState extends State<HomeScreen> {
           audioGenerated: true,
         );
 
-        // Play it
         await _audioPlayer.play(BytesSource(audioData));
       } else {
         _showSnack(_speechServiceUnavailableMessage());
@@ -3443,7 +3653,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _grantStarterCreditsAfterDisclaimer() async {
     final ref = _userDocRef();
     if (ref == null) {
-      if (mounted) setState(() => _credits = 10);
+      if (mounted) {
+        setState(() => _credits = 0);
+      } else {
+        _credits = 0;
+      }
       return;
     }
 
@@ -3489,7 +3703,13 @@ class _HomeScreenState extends State<HomeScreen> {
         }, SetOptions(merge: true));
       }
     } catch (e) {
-      debugPrint('Failed to grant starter 10 credits after disclaimer: $e');
+      debugPrint('Failed to grant starter credits after disclaimer: $e');
+      if (mounted) {
+        setState(() => _credits = 0);
+      } else {
+        _credits = 0;
+      }
+      return;
     }
 
     if (mounted) {
@@ -4123,15 +4343,19 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _playHistoryReplayItem(HistoryItem item, int index) async {
-    if (_credits <= 0) {
-      _showZeroCreditReminderBanner();
+    final hasPaidAccess = await _hasActivePaidAudioAccess();
+    final hasAudioBalance = _credits > 0;
+    if (!hasPaidAccess && !hasAudioBalance) {
+      _showCreditTiers();
+      _showSnack('Please top up your account to generate audio for text-only items.');
       return;
     }
     setState(() {
       _generatingAudioHistoryIndex = index;
     });
     try {
-      await _speakText(item.translated, item.outputLang);
+      await _speakText(item.translated, item.outputLang,
+          allowUsageDeduction: false);
     } finally {
       if (mounted) {
         setState(() {
@@ -4142,15 +4366,18 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _playLearnReplay(String language, String text, dynamic phraseKey) async {
-    if (_credits <= 0) {
-      _showZeroCreditReminderBanner();
+    final hasPaidAccess = await _hasActivePaidAudioAccess();
+    final hasAudioBalance = _credits > 0;
+    if (!hasPaidAccess && !hasAudioBalance) {
+      _showCreditTiers();
+      _showSnack('Please top up your account to generate audio for text-only items.');
       return;
     }
     setState(() {
       _generatingAudioLearnPhrase = phraseKey;
     });
     try {
-      await _speakText(text, language);
+      await _speakText(text, language, allowUsageDeduction: false);
     } finally {
       if (mounted) {
         setState(() {
@@ -4161,10 +4388,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _speakText(String text, String language,
-      {double? playbackRate}) async {
+      {double? playbackRate, bool allowUsageDeduction = true}) async {
     debugPrint(
         '[_speakText] Attempting to speak text: "$text" in language: $language');
-    if (_credits <= 0) {
+    if (allowUsageDeduction && _credits <= 0) {
       _showZeroCreditReminderBanner();
       return;
     }
@@ -4217,10 +4444,11 @@ class _HomeScreenState extends State<HomeScreen> {
         voiceName,
         provider: provider,
         skipTranslation: true,
+        allowUsageDeduction: allowUsageDeduction,
       );
 
       if (audioData != null && audioData.isNotEmpty) {
-        if (!await _consumeUsageAllowance(inputText: safeForSpeech)) {
+        if (allowUsageDeduction && !await _consumeUsageAllowance(inputText: safeForSpeech)) {
           debugPrint(
               '[_speakText] Failed to consume usage allowance after generation, ignoring.');
           return;
@@ -4284,10 +4512,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<Uint8List?> _generateAudioWithCache(
       String text, String language, String? voice,
-      {required String provider, bool skipTranslation = false}) async {
+      {required String provider,
+      String? translatedText,
+      bool skipTranslation = false,
+      bool allowUsageDeduction = true}) async {
     await _translationService.primeSession();
     debugPrint(
-        '[_generateAudioWithCache] Attempting to generate audio for text: "$text", language: $language, voice: $voice, provider: $provider, skipTranslation: $skipTranslation');
+        '[_generateAudioWithCache] Attempting to generate audio for text: "$text", language: $language, voice: $voice, provider: $provider, skipTranslation: $skipTranslation, allowUsageDeduction: $allowUsageDeduction');
     final cacheVoiceKey = '$provider|${voice ?? ''}';
     final cacheLookupKey = _getCacheKey(text, language, cacheVoiceKey);
     debugPrint('[_generateAudioWithCache] Cache lookup key: $cacheLookupKey');
@@ -4320,6 +4551,7 @@ class _HomeScreenState extends State<HomeScreen> {
       voiceName: voice,
       ttsProvider: provider,
       skipTranslation: skipTranslation,
+      translatedText: translatedText ?? text,
     );
 
     if (audioData != null && audioData.isNotEmpty) {
@@ -4328,6 +4560,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final audioBase64 = base64Encode(audioData);
       await _saveCacheAudio(text, language, cacheVoiceKey, audioBase64);
       await _saveLocalCachedAudio(cacheLookupKey, audioData);
+      _markAudioResolved(cacheLookupKey);
     } else {
       debugPrint(
           '[_generateAudioWithCache] No audio data received from translation service.');
@@ -6171,145 +6404,171 @@ class _HomeScreenState extends State<HomeScreen> {
                 final phrase = entry.value;
                 final isUserPhrase = idx < userPhrases.length;
                 final bool isGeneratingAudio = _generatingAudioLearnPhrase == phrase['text'];
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 10),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: isDark ? Colors.black : const Color(0xFFF7F5F0),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Column(
-                    children: [
-                      Row(
+                final localResolved = _isAudioResolvedForKey(
+                  phrase['text'] ?? '',
+                  _selectedLearnLang,
+                  _voiceNameForLanguage(_selectedLearnLang) ?? '',
+                  provider: _ttsProviderForLanguage(_selectedLearnLang),
+                );
+                return ValueListenableBuilder<Set<String>>(
+                  valueListenable: resolvedAudioNotifier,
+                  builder: (context, resolvedAudioKeys, _) {
+                    final resolved = localResolved ||
+                        _isAudioResolvedForKey(
+                          phrase['text'] ?? '',
+                          _selectedLearnLang,
+                          _voiceNameForLanguage(_selectedLearnLang) ?? '',
+                          provider: _ttsProviderForLanguage(_selectedLearnLang),
+                        );
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: isDark ? Colors.black : const Color(0xFFF7F5F0),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Column(
                         children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Column(
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text(
-                                      phrase['text'] ?? '',
-                                      style: TextStyle(
-                                        fontSize: 16 * _currentTextScale,
-                                        fontFamily: 'monospace',
-                                        fontWeight: FontWeight.w600,
-                                        color: isDark ? Colors.white : Colors.black,
-                                      ),
+                                    Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          phrase['text'] ?? '',
+                                          style: TextStyle(
+                                            fontSize: 16 * _currentTextScale,
+                                            fontFamily: 'monospace',
+                                            fontWeight: FontWeight.w600,
+                                            color: isDark ? Colors.white : Colors.black,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 3),
+                                        Text(
+                                          phrase['en'] ?? '',
+                                          style: TextStyle(
+                                            fontSize: 12 * _currentTextScale,
+                                            fontFamily: 'monospace',
+                                            fontWeight: FontWeight.w500,
+                                            color: isDark
+                                                ? Colors.white60
+                                                : Colors.black54,
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                    const SizedBox(height: 3),
-                                    Text(
-                                      phrase['en'] ?? '',
-                                      style: TextStyle(
-                                        fontSize: 12 * _currentTextScale,
-                                        fontFamily: 'monospace',
-                                        fontWeight: FontWeight.w500,
-                                        color: isDark
-                                            ? Colors.white60
-                                            : Colors.black54,
+                                    if ((phrase['phonetic'] ?? '').isNotEmpty) ...[
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        phrase['phonetic']!,
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontStyle: FontStyle.italic,
+                                          color: isDark
+                                              ? Colors.white70
+                                              : Colors.black54,
+                                        ),
                                       ),
-                                    ),
+                                    ],
+                                    if (isUserPhrase &&
+                                        (_learnIsDeferred(phrase) || !_learnAudioGenerated(phrase)) &&
+                                        !resolved) ...[
+                                      const SizedBox(height: 4),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: Colors.amber.withOpacity(0.12),
+                                          border: Border.all(color: Colors.amber.shade700, width: 0.5),
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: Text(
+                                          'Audio Deferred (Tap speaker to generate)',
+                                          style: TextStyle(
+                                            color: Colors.amber.shade800,
+                                            fontSize: 9,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ],
                                 ),
-                                if ((phrase['phonetic'] ?? '').isNotEmpty) ...[
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    phrase['phonetic']!,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontStyle: FontStyle.italic,
-                                      color: isDark
-                                          ? Colors.white70
-                                          : Colors.black54,
-                                    ),
+                              ),
+                              IconButton(
+                                icon: Icon(
+                                  isUserPhrase &&
+                                          (_learnIsDeferred(phrase) || !_learnAudioGenerated(phrase)) &&
+                                          !resolved
+                                      ? Icons.volume_down_outlined
+                                      : Icons.volume_up,
+                                  color: isUserPhrase &&
+                                          (_learnIsDeferred(phrase) || !_learnAudioGenerated(phrase)) &&
+                                          !resolved
+                                      ? Colors.amber.shade700
+                                      : (isDark ? Colors.white : Colors.black),
+                                ),
+                                tooltip: isUserPhrase &&
+                                        (_learnIsDeferred(phrase) || !_learnAudioGenerated(phrase)) &&
+                                        !resolved
+                                    ? 'Generate Audio (1 credit)'
+                                    : 'Listen',
+                                onPressed: () {
+                                  if (isUserPhrase) {
+                                    if ((_learnAudioGenerated(phrase) && !_learnIsDeferred(phrase)) || resolved) {
+                                      _playLearnReplay(_selectedLearnLang, phrase['text'] ?? '', phrase['text']);
+                                    } else {
+                                      _generateAudioOnDemandForLearn(idx, phrase);
+                                    }
+                                  } else {
+                                    _playLearnPhraseAudio(
+                                      language: _selectedLearnLang,
+                                      text: phrase['text'] ?? '',
+                                      isUserPhrase: isUserPhrase,
+                                    );
+                                  }
+                                },
+                              ),
+                              if (isUserPhrase) ...[
+                                IconButton(
+                                  icon: Icon(
+                                    (phrase['pinned'] ?? '').trim().toLowerCase() == 'true'
+                                        ? Icons.push_pin
+                                        : Icons.push_pin_outlined,
+                                    color: isDark ? Colors.white : Colors.black,
                                   ),
-                                ],
-                                if (isUserPhrase && (phrase['audioGenerated'] ?? 'true') != 'true') ...[
-                                  const SizedBox(height: 4),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: Colors.amber.withOpacity(0.12),
-                                      border: Border.all(color: Colors.amber.shade700, width: 0.5),
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: Text(
-                                      'Audio Deferred (Tap volume to generate)',
-                                      style: TextStyle(
-                                        color: Colors.amber.shade800,
-                                        fontSize: 9,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
+                                  tooltip: (phrase['pinned'] ?? '').trim().toLowerCase() == 'true'
+                                      ? 'Unpin from top'
+                                      : 'Pin to top',
+                                  onPressed: () => _toggleUserPhrasePin(idx),
+                                ),
+                                IconButton(
+                                  icon: Icon(
+                                    Icons.close,
+                                    color: isDark ? Colors.white70 : Colors.black54,
                                   ),
-                                ],
+                                  tooltip: 'Delete',
+                                  onPressed: () => _deleteUserPhrase(idx),
+                                ),
                               ],
-                            ),
+                            ],
                           ),
-                          IconButton(
-                            icon: Icon(
-                              isUserPhrase && (phrase['audioGenerated'] ?? 'true') != 'true'
-                                  ? Icons.volume_down_outlined
-                                  : Icons.volume_up,
-                              color: isUserPhrase && (phrase['audioGenerated'] ?? 'true') != 'true'
-                                  ? Colors.amber.shade700
-                                  : (isDark ? Colors.white : Colors.black),
-                            ),
-                            tooltip: isUserPhrase && (phrase['audioGenerated'] ?? 'true') != 'true'
-                                ? 'Generate Audio (1 credit)'
-                                : 'Listen',
-                            onPressed: () {
-                              if (isUserPhrase) {
-                                if ((phrase['audioGenerated'] ?? 'true') == 'true') {
-                                  _playLearnReplay(_selectedLearnLang, phrase['text'] ?? '', phrase['text']);
-                                } else {
-                                  _generateAudioOnDemandForLearn(idx, phrase);
-                                }
-                              } else {
-                                _playLearnPhraseAudio(
-                                  language: _selectedLearnLang,
-                                  text: phrase['text'] ?? '',
-                                  isUserPhrase: isUserPhrase,
-                                );
-                              }
-                            },
-                          ),
-                          if (isUserPhrase) ...[
-                            IconButton(
-                              icon: Icon(
-                                (phrase['pinned'] ?? '').trim().toLowerCase() == 'true'
-                                    ? Icons.push_pin
-                                    : Icons.push_pin_outlined,
-                                color: isDark ? Colors.white : Colors.black,
+                          if (isGeneratingAudio)
+                            const Padding(
+                              padding: EdgeInsets.only(top: 8.0),
+                              child: LinearProgressIndicator(
+                                color: Colors.white,
+                                backgroundColor: Colors.transparent,
                               ),
-                              tooltip: (phrase['pinned'] ?? '').trim().toLowerCase() == 'true'
-                                  ? 'Unpin from top'
-                                  : 'Pin to top',
-                              onPressed: () => _toggleUserPhrasePin(idx),
                             ),
-                            IconButton(
-                              icon: Icon(
-                                Icons.close,
-                                color: isDark ? Colors.white70 : Colors.black54,
-                              ),
-                              tooltip: 'Delete',
-                              onPressed: () => _deleteUserPhrase(idx),
-                            ),
-                          ],
                         ],
                       ),
-                      if (isGeneratingAudio)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 8.0),
-                          child: LinearProgressIndicator(
-                            color: Colors.white,
-                            backgroundColor: Colors.transparent,
-                          ),
-                        ),
-                    ],
-                  ),
+                    );
+                  },
                 );
               }),
             ],
@@ -7115,6 +7374,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       );
     }
+
     return Stack(
       children: [
         Column(
@@ -7125,7 +7385,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   if (_historyEditMode) ...[
-                    // Cancel selection
                     Material(
                       color: isDark ? Colors.black : const Color(0xFFF7F5F0),
                       shape: const CircleBorder(),
@@ -7148,7 +7407,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     const SizedBox(width: 8),
                     if (_historyEditAction == HistoryEditAction.share)
-                      // Export chosen selected items (Share)
                       Material(
                         color: isDark ? Colors.black : const Color(0xFFF7F5F0),
                         shape: const CircleBorder(),
@@ -7178,7 +7436,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                     if (_historyEditAction == HistoryEditAction.delete)
-                      // Delete chosen selected items
                       Material(
                         color: isDark ? Colors.black : const Color(0xFFF7F5F0),
                         shape: const CircleBorder(),
@@ -7190,8 +7447,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   final sure = await showDialog<bool>(
                                     context: context,
                                     builder: (ctx) {
-                                      final isDark = Theme.of(ctx).brightness ==
-                                          Brightness.dark;
+                                      final isDark = Theme.of(ctx).brightness == Brightness.dark;
                                       return AlertDialog(
                                         title: const Text('Delete Selected?'),
                                         content: Text(
@@ -7204,25 +7460,21 @@ class _HomeScreenState extends State<HomeScreen> {
                                             : const Color(0xFFFFFFFF),
                                         actions: [
                                           TextButton(
-                                            onPressed: () =>
-                                                Navigator.of(ctx).pop(false),
+                                            onPressed: () => Navigator.of(ctx).pop(false),
                                             child: Text('Cancel',
                                                 style: TextStyle(
                                                     color: isDark
                                                         ? Colors.white
-                                                        : Color(0xFF000000))),
+                                                        : const Color(0xFF000000))),
                                           ),
                                           TextButton(
                                             style: TextButton.styleFrom(
-                                              backgroundColor:
-                                                  Colors.black,
+                                              backgroundColor: Colors.black,
                                               foregroundColor: Colors.white,
                                             ),
-                                            onPressed: () =>
-                                                Navigator.of(ctx).pop(true),
+                                            onPressed: () => Navigator.of(ctx).pop(true),
                                             child: const Text('Delete',
-                                                style: TextStyle(
-                                                    color: Colors.white)),
+                                                style: TextStyle(color: Colors.white)),
                                           ),
                                         ],
                                       );
@@ -7230,9 +7482,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                   );
                                   if (sure == true) {
                                     setState(() {
-                                      final sortedIndices =
-                                          _selectedHistoryIndices.toList()
-                                            ..sort((a, b) => b.compareTo(a));
+                                      final sortedIndices = _selectedHistoryIndices.toList()
+                                        ..sort((a, b) => b.compareTo(a));
                                       for (final idx in sortedIndices) {
                                         _history.removeAt(idx);
                                       }
@@ -7254,7 +7505,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                   ] else ...[
-                    // Toggle Share Select Mode
                     Material(
                       color: isDark ? Colors.black : const Color(0xFFF7F5F0),
                       shape: const CircleBorder(),
@@ -7277,7 +7527,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    // Toggle Delete Select Mode
                     Material(
                       color: isDark ? Colors.black : const Color(0xFFF7F5F0),
                       shape: const CircleBorder(),
@@ -7323,7 +7572,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ],
                   const Spacer(),
-                  // Clear History Icon Button (far right)
                   Material(
                     color: isDark ? Colors.black : const Color(0xFFF7F5F0),
                     shape: const StadiumBorder(),
@@ -7334,8 +7582,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         final sure = await showDialog<bool>(
                           context: context,
                           builder: (ctx) {
-                            final isDark =
-                                Theme.of(ctx).brightness == Brightness.dark;
+                            final isDark = Theme.of(ctx).brightness == Brightness.dark;
                             return AlertDialog(
                               title: const Text('Are you sure?'),
                               content: const Text('Clear all History?'),
@@ -7352,7 +7599,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       style: TextStyle(
                                           color: isDark
                                               ? Colors.white
-                                              : Color(0xFF000000))),
+                                              : const Color(0xFF000000))),
                                 ),
                                 TextButton(
                                   style: TextButton.styleFrom(
@@ -7407,8 +7654,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ? GridView.builder(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 12, vertical: 8),
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                         crossAxisCount: 2,
                         crossAxisSpacing: 8,
                         mainAxisSpacing: 8,
@@ -7419,6 +7665,13 @@ class _HomeScreenState extends State<HomeScreen> {
                         final item = _history[i];
                         final isSelected = _selectedHistoryIndices.contains(i);
                         final bool isGeneratingAudio = _generatingAudioHistoryIndex == i;
+                        final bool audioReady = (item.audioGenerated && item.hasAudio) ||
+                            _isAudioResolvedForKey(
+                              item.translated,
+                              item.outputLang,
+                              _voiceNameForLanguage(item.outputLang) ?? '',
+                              provider: _ttsProviderForLanguage(item.outputLang),
+                            );
                         return Card(
                           margin: EdgeInsets.zero,
                           color: isDark ? Colors.black : const Color(0xFFF7F5F0),
@@ -7451,15 +7704,17 @@ class _HomeScreenState extends State<HomeScreen> {
                                     const Spacer(),
                                     IconButton(
                                       icon: Icon(
-                                        (item.audioGenerated && item.hasAudio) ? Icons.volume_up : Icons.volume_down_outlined,
+                                        audioReady ? Icons.volume_up : Icons.volume_down_outlined,
                                         size: 18,
-                                        color: (item.audioGenerated && item.hasAudio) ? null : Colors.amber.shade700,
+                                        color: audioReady ? null : Colors.amber.shade700,
                                       ),
-                                      tooltip: (item.audioGenerated && item.hasAudio) ? 'Repeat' : 'Generate Audio (1 credit)',
+                                      tooltip: audioReady
+                                          ? 'Repeat'
+                                          : 'Generate Audio (1 credit)',
                                       padding: EdgeInsets.zero,
                                       constraints: const BoxConstraints(),
                                       onPressed: () {
-                                        if (item.audioGenerated && item.hasAudio) {
+                                        if (audioReady) {
                                           _playHistoryReplayItem(item, i);
                                         } else {
                                           _generateAudioOnDemandForHistory(i);
@@ -7471,17 +7726,14 @@ class _HomeScreenState extends State<HomeScreen> {
                                 Expanded(
                                   child: SingleChildScrollView(
                                     child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
+                                      crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
                                         Text(
                                           item.translated,
                                           maxLines: 3,
                                           overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
-                                            color: isDark
-                                                ? Colors.white
-                                                : Colors.black,
+                                            color: isDark ? Colors.white : Colors.black,
                                             fontWeight: FontWeight.bold,
                                             fontSize: 12 * _currentTextScale,
                                           ),
@@ -7503,9 +7755,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                             overflow: TextOverflow.ellipsis,
                                             style: TextStyle(
                                               fontStyle: FontStyle.italic,
-                                              color: isDark
-                                                  ? Colors.white70
-                                                  : Colors.black87,
+                                              color: isDark ? Colors.white70 : Colors.black87,
                                               fontSize: 9,
                                             ),
                                           ),
@@ -7517,12 +7767,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                           overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
                                             fontSize: 10 * _currentTextScale,
-                                            color: isDark
-                                                ? Colors.white70
-                                                : Colors.black87,
+                                            color: isDark ? Colors.white70 : Colors.black87,
                                           ),
                                         ),
-                                        if (!item.audioGenerated || !item.hasAudio) ...[
+                                        if (!item.audioGenerated || item.isDeferred) ...[
                                           const SizedBox(height: 4),
                                           Container(
                                             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -7558,14 +7806,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                   width: double.infinity,
                                   child: ElevatedButton.icon(
                                     style: ElevatedButton.styleFrom(
-                                      backgroundColor: isDark
-                                          ? Colors.transparent
-                                          : const Color(0xFFF7F5F0),
-                                      foregroundColor: isDark
-                                          ? Colors.white
-                                          : Colors.black,
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 8, vertical: 4),
+                                      backgroundColor: isDark ? Colors.transparent : const Color(0xFFF7F5F0),
+                                      foregroundColor: isDark ? Colors.white : Colors.black,
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                       minimumSize: const Size(0, 24),
                                       shape: const RoundedRectangleBorder(
                                         borderRadius: BorderRadius.zero,
@@ -7593,13 +7836,19 @@ class _HomeScreenState extends State<HomeScreen> {
                       },
                     )
                   : ListView.builder(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                       itemCount: _history.length,
                       itemBuilder: (context, i) {
                         final item = _history[i];
                         final isSelected = _selectedHistoryIndices.contains(i);
                         final bool isGeneratingAudio = _generatingAudioHistoryIndex == i;
+                        final bool audioReady = (item.audioGenerated && item.hasAudio) ||
+                            _isAudioResolvedForKey(
+                              item.translated,
+                              item.outputLang,
+                              _voiceNameForLanguage(item.outputLang) ?? '',
+                              provider: _ttsProviderForLanguage(item.outputLang),
+                            );
                         return Card(
                           margin: const EdgeInsets.only(bottom: 12),
                           color: isDark ? Colors.black : const Color(0xFFF7F5F0),
@@ -7627,11 +7876,14 @@ class _HomeScreenState extends State<HomeScreen> {
                                         },
                                       )
                                     : null,
-                                title: Text(item.translated,
-                                    style: TextStyle(
-                                        color: isDark ? Colors.white : Colors.black,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 16 * _currentTextScale)),
+                                title: Text(
+                                  item.translated,
+                                  style: TextStyle(
+                                    color: isDark ? Colors.white : Colors.black,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16 * _currentTextScale,
+                                  ),
+                                ),
                                 subtitle: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
@@ -7640,19 +7892,22 @@ class _HomeScreenState extends State<HomeScreen> {
                                     if ((item.phonetic ?? '').isNotEmpty)
                                       Padding(
                                         padding: const EdgeInsets.only(top: 4.0),
-                                        child: Text('Phonetics: ${item.phonetic}',
-                                            style: TextStyle(
-                                                fontStyle: FontStyle.italic,
-                                                color: isDark
-                                                    ? Colors.white70
-                                                    : Colors.black87)),
+                                        child: Text(
+                                          'Phonetics: ${item.phonetic}',
+                                          style: TextStyle(
+                                            fontStyle: FontStyle.italic,
+                                            color: isDark ? Colors.white70 : Colors.black87,
+                                          ),
+                                        ),
                                       ),
                                     Padding(
                                       padding: const EdgeInsets.only(top: 4.0),
-                                      child: Text('Original: ${item.original}',
-                                          style: TextStyle(
-                                            fontSize: 16 * _currentTextScale,
-                                          )),
+                                      child: Text(
+                                        'Original: ${item.original}',
+                                        style: TextStyle(
+                                          fontSize: 16 * _currentTextScale,
+                                        ),
+                                      ),
                                     ),
                                     if (!item.audioGenerated || !item.hasAudio)
                                       Padding(
@@ -7684,12 +7939,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                   children: [
                                     IconButton(
                                       icon: Icon(
-                                        (item.audioGenerated && item.hasAudio) ? Icons.volume_up : Icons.volume_down_outlined,
-                                        color: (item.audioGenerated && item.hasAudio) ? null : Colors.amber.shade700,
+                                        audioReady ? Icons.volume_up : Icons.volume_down_outlined,
+                                        color: audioReady ? null : Colors.amber.shade700,
                                       ),
-                                      tooltip: (item.audioGenerated && item.hasAudio) ? 'Repeat' : 'Generate Audio (1 credit)',
+                                      tooltip: audioReady ? 'Repeat' : 'Generate Audio (1 credit)',
                                       onPressed: () {
-                                        if (item.audioGenerated && item.hasAudio) {
+                                        if (audioReady) {
                                           _playHistoryReplayItem(item, i);
                                         } else {
                                           _generateAudioOnDemandForHistory(i);
@@ -7708,28 +7963,27 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                 ),
                               Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 16, vertical: 4),
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                                 child: ElevatedButton.icon(
                                   style: ElevatedButton.styleFrom(
-                                    backgroundColor: isDark
-                                        ? Colors.transparent
-                                        : const Color(0xFFF7F5F0),
-                                    foregroundColor:
-                                        isDark ? Colors.white : Colors.black,
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 9, vertical: 5),
+                                    backgroundColor: isDark ? Colors.transparent : const Color(0xFFF7F5F0),
+                                    foregroundColor: isDark ? Colors.white : Colors.black,
+                                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
                                     minimumSize: const Size(0, 24),
                                     shape: const RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.zero,
-                                        side: BorderSide.none),
+                                      borderRadius: BorderRadius.zero,
+                                      side: BorderSide.none,
+                                    ),
                                     elevation: 0,
                                   ),
                                   icon: const Icon(Icons.school, size: 10),
-                                  label: const Text('Send to Learn',
-                                      style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 13.5)),
+                                  label: const Text(
+                                    'Send to Learn',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13.5,
+                                    ),
+                                  ),
                                   onPressed: () async {
                                     await _sendHistoryToLearn(item);
                                   },
@@ -7743,7 +7997,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ],
         ),
-        // Bottom right home icon
         Positioned(
           bottom: 18,
           right: 18,

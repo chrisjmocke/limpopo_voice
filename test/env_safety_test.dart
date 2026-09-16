@@ -38,6 +38,21 @@ void main() {
     expect(body['translatedText'], 'Dumela');
   });
 
+  test('legacy hasAudio payloads map to audioGenerated and isDeferred safely', () {
+    final legacy = HistoryItem.fromJson({
+      'inputLang': 'English',
+      'outputLang': 'Sepedi',
+      'original': 'Hello',
+      'translated': 'Dumela',
+      'time': DateTime.utc(2024, 1, 2, 3, 4, 5).toIso8601String(),
+      'hasAudio': false,
+    });
+
+    expect(legacy.audioGenerated, isFalse);
+    expect(legacy.isDeferred, isTrue);
+    expect(legacy.hasAudio, isFalse);
+  });
+
   test('Google sign-in uses the Firebase web client ID for Android release builds', () {
     final id = getGoogleServerClientId();
 

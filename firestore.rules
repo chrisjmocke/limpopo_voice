@@ -1,45 +1,28 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Core User Profiles and Sub-collections
+    // Allow devices to manage their own install / free-trial record.
+    match /global_device_installs/{deviceId} {
+      allow read, write: if true;
+    }
+
+    // Allow authenticated users to use the shared translation cache.
+    match /translation_cache/{cacheId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // User data paths
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
-      
-      // Allow read/write access to any nested subcollections (like device_installs, transactions, etc.)
+
+      // Match all subcollections under the user document (like history, credits, deferred audio)
       match /{allSubcollections=**} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
     }
 
-    // Translation & Text Caching (Global)
-    match /translation_cache/{cacheId} {
-      allow read, write: if request.auth != null;
-    }
-
-    // TTS Audio URL Map Caching (Global)
-    match /tts_audio_cache/{cacheId} {
-      allow read, write: if request.auth != null;
-    }
-
-    // Shared Audio Assets lookup for share sheets (Global)
-    match /audio_cache/{cacheId} {
-      allow read, write: if request.auth != null;
-    }
-
-    // Transaction Events logged during successful checkouts
-    match /payment_events/{eventId} {
-      allow create: if request.auth != null;
-    }
-
-    // Global Device Installs lookup to block trial bypasses
-    match /global_device_installs/{deviceId} {
-      allow read: if true;
-      allow create, update: if request.auth != null || true; // Supports guest checkout/lookup validation
-    }
-
-    // Deferred Audio records for pending audio generation
-    match /deferred_audio/{docId} {
+    // Allow authenticated users to read and write to the global audio cache
+    match /tts_audio_cache/{document=**} {
       allow read, write: if request.auth != null;
     }
   }

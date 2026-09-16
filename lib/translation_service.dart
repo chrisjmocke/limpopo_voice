@@ -119,13 +119,17 @@ class TranslationService {
     bool skipTranslation = false,
     bool includeAlignment = true,
     String? sourceLanguage,
+    String? translatedText,
   }) {
     final safeTarget = targetLanguage.trim();
     final safeSource = (sourceLanguage ?? '').trim();
     final resolvedSource = safeSource.isNotEmpty ? safeSource : 'auto';
+    final normalizedText = text.trim();
+    final normalizedTranslatedText = (translatedText ?? normalizedText).trim();
+    final directTtsText = skipTranslation ? normalizedTranslatedText : normalizedText;
 
     return {
-      'text': text.trim(), // Explicitly send the target/pre-translated string to "text" root field so the backend avoids the 400 "No text provided" error.
+      'text': normalizedText,
       'sourceLanguage': resolvedSource,
       'targetLanguage': safeTarget,
       'skipTranslation': skipTranslation,
@@ -134,7 +138,8 @@ class TranslationService {
       'ttsProvider': ttsProvider,
       'includeAlignment': includeAlignment,
       'alignmentMode': 'word_level',
-      'translatedText': text.trim(), // Explicitly populate BOTH "text" and "translatedText" with the target string.
+      'translatedText': normalizedTranslatedText,
+      'directTtsText': directTtsText,
     };
   }
 
@@ -211,6 +216,7 @@ class TranslationService {
     String? voiceName,
     String ttsProvider = 'narakeet',
     bool skipTranslation = false,
+    String? translatedText,
   }) async {
     debugPrint(
         '[TranslationService] Attempting to generate translation for text: "$text", targetLanguage: $targetLanguage, ttsProvider: $ttsProvider, skipTranslation: $skipTranslation');
@@ -239,6 +245,7 @@ class TranslationService {
         ttsProvider: ttsProvider,
         isMale: true,
         skipTranslation: skipTranslation,
+        translatedText: translatedText,
       );
       final requestBody = jsonEncode(requestBodyMap);
       debugPrint('[TranslationService] Request body: $requestBody');
@@ -360,6 +367,7 @@ class TranslationService {
     String? voiceName,
     String ttsProvider = 'narakeet',
     bool skipTranslation = false,
+    String? translatedText,
   }) async {
     debugPrint(
         '[TranslationService] Attempting translateAndSynthesize for text: "$text", targetLanguage: $targetLanguage, ttsProvider: $ttsProvider, skipTranslation: $skipTranslation');
@@ -389,6 +397,7 @@ class TranslationService {
         ttsProvider: ttsProvider,
         isMale: true,
         skipTranslation: skipTranslation,
+        translatedText: translatedText,
       );
       final requestBody = jsonEncode(requestBodyMap);
       debugPrint('[TranslationService] Request body: $requestBody');
