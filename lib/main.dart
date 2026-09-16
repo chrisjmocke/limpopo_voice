@@ -1168,9 +1168,11 @@ class _HomeScreenState extends State<HomeScreen> {
   final Set<String> _resolvedAudioKeys = <String>{};
   static const String _historyPrefsKey = 'device_history_v1';
   static const String _languagePrefsKey = 'device_selected_languages_v1';
+  static const String _fontSizePrefsKey = 'device_font_size_level_v1';
   final List<HistoryItem> _history = [];
   bool _historyEditMode = false;
-  bool _historyGridMode = false;
+  bool _historyGridMode = true;
+  bool _audioUsageDeductionInFlight = false;
   HistoryEditAction _historyEditAction = HistoryEditAction.share;
   final Set<int> _selectedHistoryIndices = {};
   String _selectedLearnLang = 'Sepedi';
@@ -1184,9 +1186,11 @@ class _HomeScreenState extends State<HomeScreen> {
   double _talkHoldProgress = 0.0;
 
   void _cycleFontSize() {
+    final nextLevel = (_fontSizeLevel + 1) % 3;
     setState(() {
-      _fontSizeLevel = (_fontSizeLevel + 1) % 3;
+      _fontSizeLevel = nextLevel;
     });
+    unawaited(_saveFontSizeLevelToDevice());
   }
 
   Future<bool> _ensureImagePermission(ImageSource source) async {
@@ -1555,6 +1559,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // Native Paystack initialization is handled in the plugin's onAttachedToEngine
     _tttController.addListener(_onInputChanged);
     unawaited(_loadSelectedLanguagesFromDevice());
+    unawaited(_loadFontSizeLevelFromDevice());
     unawaited(_loadHistoryFromDevice());
     unawaited(_loadLearnSentences());
     unawaited(_loadUserLearnPhrases());
@@ -1574,6 +1579,35 @@ class _HomeScreenState extends State<HomeScreen> {
       await prefs.setString(_languagePrefsKey, payload);
     } catch (e) {
       debugPrint('Failed to save selected languages to device cache: $e');
+    }
+  }
+
+  Future<void> _saveFontSizeLevelToDevice() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_fontSizePrefsKey, _fontSizeLevel.clamp(0, 2));
+    } catch (e) {
+      debugPrint('Failed to save text size level to device cache: $e');
+    }
+  }
+
+  Future<void> _loadFontSizeLevelFromDevice() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedLevel = prefs.getInt(_fontSizePrefsKey);
+      if (savedLevel == null) return;
+
+      final normalizedLevel = savedLevel.clamp(0, 2);
+      if (!mounted) {
+        _fontSizeLevel = normalizedLevel;
+        return;
+      }
+
+      setState(() {
+        _fontSizeLevel = normalizedLevel;
+      });
+    } catch (e) {
+      debugPrint('Failed to read text size level from device cache: $e');
     }
   }
 
@@ -3214,7 +3248,7 @@ class _HomeScreenState extends State<HomeScreen> {
       );
 
       if (audioData != null && audioData.isNotEmpty) {
-        final deducted = await _consumeUsageAllowance(
+        final deducted = await _deductAudioUsageOnce(
           inputText: sanitizedText,
           outputText: item.translated,
         );
@@ -3301,7 +3335,7 @@ class _HomeScreenState extends State<HomeScreen> {
       );
 
       if (audioData != null && audioData.isNotEmpty) {
-        final deducted = await _consumeUsageAllowance(
+        final deducted = await _deductAudioUsageOnce(
           inputText: sanitizedText,
           outputText: text,
         );
@@ -3335,6 +3369,8 @@ class _HomeScreenState extends State<HomeScreen> {
           audioGenerated: true,
         );
 
+        final playbackRate = learnPlaybackRateForSelection(_learnPlaybackSpeed);
+        await _audioPlayer.setPlaybackRate(playbackRate);
         await _audioPlayer.play(BytesSource(audioData));
       } else {
         _showSnack(_speechServiceUnavailableMessage());
@@ -3973,6 +4009,28 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<bool> _deductAudioUsageOnce({
+    bool silent = false,
+    String? inputText,
+    String? outputText,
+  }) async {
+    if (_audioUsageDeductionInFlight) {
+      debugPrint('[_deductAudioUsageOnce] Skipping duplicate deduction while another audio action is in progress.');
+      return false;
+    }
+
+    _audioUsageDeductionInFlight = true;
+    try {
+      return await _consumeUsageAllowance(
+        silent: silent,
+        inputText: inputText,
+        outputText: outputText,
+      );
+    } finally {
+      _audioUsageDeductionInFlight = false;
+    }
+  }
+
   Future<bool> _consumeUsageAllowance({
     bool silent = false,
     String? inputText,
@@ -4373,11 +4431,13 @@ class _HomeScreenState extends State<HomeScreen> {
       _showSnack('Please top up your account to generate audio for text-only items.');
       return;
     }
+    final playbackRate = learnPlaybackRateForSelection(_learnPlaybackSpeed);
     setState(() {
       _generatingAudioLearnPhrase = phraseKey;
     });
     try {
-      await _speakText(text, language, allowUsageDeduction: false);
+      await _speakText(text, language,
+          playbackRate: playbackRate, allowUsageDeduction: false);
     } finally {
       if (mounted) {
         setState(() {
@@ -4418,6 +4478,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final localCached = await _getLocalCachedAudio(cacheLookupKey);
       if (localCached != null && localCached.isNotEmpty) {
+        if (allowUsageDeduction && !await _deductAudioUsageOnce(inputText: safeForSpeech)) {
+          debugPrint(
+              '[_speakText] Failed to consume usage allowance on local cache hit, ignoring playback.');
+          return;
+        }
         debugPrint('[_speakText] Audio cache hit (local)');
         await _audioPlayer.setPlaybackRate(rate);
         await _audioPlayer.play(BytesSource(localCached));
@@ -4427,6 +4492,11 @@ class _HomeScreenState extends State<HomeScreen> {
       final cachedBase64 =
           await _getCachedAudio(safeForSpeech, language, cacheVoiceKey);
       if (cachedBase64 != null) {
+        if (allowUsageDeduction && !await _deductAudioUsageOnce(inputText: safeForSpeech)) {
+          debugPrint(
+              '[_speakText] Failed to consume usage allowance on shared cache hit, ignoring playback.');
+          return;
+        }
         debugPrint('[_speakText] Audio cache hit (shared)');
         final decoded = base64Decode(cachedBase64);
         await _saveLocalCachedAudio(cacheLookupKey, decoded);
@@ -4448,7 +4518,7 @@ class _HomeScreenState extends State<HomeScreen> {
       );
 
       if (audioData != null && audioData.isNotEmpty) {
-        if (allowUsageDeduction && !await _consumeUsageAllowance(inputText: safeForSpeech)) {
+        if (allowUsageDeduction && !await _deductAudioUsageOnce(inputText: safeForSpeech)) {
           debugPrint(
               '[_speakText] Failed to consume usage allowance after generation, ignoring.');
           return;
@@ -4622,7 +4692,7 @@ class _HomeScreenState extends State<HomeScreen> {
         }
 
         if (!playedAny) {
-          if (!await _consumeUsageAllowance(
+          if (!await _deductAudioUsageOnce(
               inputText: _spokenRawText, outputText: text)) {
             debugPrint(
                 '[_speakTranslatedText] Failed to consume usage allowance, aborting.');
@@ -4734,13 +4804,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _tttController.clear();
   }
 
-  void _resetOutput() => setState(() {
-        _spokenText = '';
-        _spokenRawText = '';
-        _translatedText = '';
-        _phoneticText = '';
-      });
-
   void _editSpokenText() {
     final textToEdit = _spokenRawText.isNotEmpty ? _spokenRawText : _spokenText;
     if (textToEdit.isNotEmpty) {
@@ -4799,7 +4862,7 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: Text(
-              'Sign in to buy credits for audio translations • $remaining free TTTs left',
+              'Sign in to buy credits for audio translations • $remaining free translated texts left',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontWeight: FontWeight.w700,
@@ -6558,10 +6621,10 @@ class _HomeScreenState extends State<HomeScreen> {
                             ],
                           ),
                           if (isGeneratingAudio)
-                            const Padding(
-                              padding: EdgeInsets.only(top: 8.0),
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8.0),
                               child: LinearProgressIndicator(
-                                color: Colors.white,
+                                color: isDark ? Colors.white : Colors.black,
                                 backgroundColor: Colors.transparent,
                               ),
                             ),
@@ -7035,10 +7098,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                   if (_isTranslating)
-                    const Padding(
-                      padding: EdgeInsets.only(bottom: 10),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
                       child: LinearProgressIndicator(
-                        color: Colors.white,
+                        color: isDark ? Colors.white : Colors.black,
                         backgroundColor: Colors.transparent,
                       ),
                     ),
@@ -7153,36 +7216,18 @@ class _HomeScreenState extends State<HomeScreen> {
                         Expanded(
                           child: Align(
                             alignment: Alignment.centerRight,
-                            child: isDark
-                                ? IconButton(
-                                    onPressed:
-                                        _spokenText.isNotEmpty ? _resetOutput : null,
-                                    icon: Icon(
-                                      Icons.refresh,
-                                      size: 28,
-                                      color: Colors.white,
-                                    ),
-                                    tooltip: 'New Translation',
-                                    padding: const EdgeInsets.all(12),
-                                  )
-                                : Container(
-                                    decoration: const BoxDecoration(
-                                      color: Color(0xFFF7F5F0),
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: IconButton(
-                                      onPressed:
-                                          _spokenText.isNotEmpty ? _resetOutput : null,
-                                      icon: const Icon(
-                                        Icons.refresh,
-                                        size: 28,
-                                        color: Colors.black,
-                                      ),
-                                      tooltip: localizedUiText(
-                                          'new_translation', _uiLanguage),
-                                      padding: const EdgeInsets.all(12),
-                                    ),
-                                  ),
+                            child: IconButton(
+                              onPressed: () {
+                                _showSnack('Upload audio file');
+                              },
+                              icon: Icon(
+                                Icons.upload_file,
+                                size: 28,
+                                color: isDark ? Colors.white : Colors.black,
+                              ),
+                              tooltip: 'Upload audio file',
+                              padding: const EdgeInsets.all(12),
+                            ),
                           ),
                         ),
                       ],
@@ -7250,6 +7295,59 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  Future<void> _showHistoryShareInfoDialog() async {
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        return Dialog(
+          backgroundColor: isDark ? Colors.black : Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Stack(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Align(
+                      alignment: Alignment.topRight,
+                      child: IconButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        icon: Icon(
+                          Icons.close,
+                          color: isDark ? Colors.white : Colors.black,
+                        ),
+                        tooltip: 'Close',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Sharing one at a time shares the text, original audio, and translated audio together.',
+                      style: TextStyle(
+                        color: isDark ? Colors.white : Colors.black,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -7412,18 +7510,21 @@ class _HomeScreenState extends State<HomeScreen> {
                         shape: const CircleBorder(),
                         elevation: 0,
                         child: IconButton(
-                          onPressed: _selectedHistoryIndices.isEmpty
-                              ? null
-                              : () async {
-                                  final selected = _selectedHistoryIndices
-                                      .map((idx) => _history[idx])
-                                      .toList();
-                                  await _exportHistory(selectedItems: selected);
-                                  setState(() {
-                                    _historyEditMode = false;
-                                    _selectedHistoryIndices.clear();
-                                  });
-                                },
+                          onPressed: () async {
+                            await _showHistoryShareInfoDialog();
+                            if (_selectedHistoryIndices.isEmpty) {
+                              return;
+                            }
+
+                            final selected = _selectedHistoryIndices
+                                .map((idx) => _history[idx])
+                                .toList();
+                            await _exportHistory(selectedItems: selected);
+                            setState(() {
+                              _historyEditMode = false;
+                              _selectedHistoryIndices.clear();
+                            });
+                          },
                           icon: Icon(
                             Icons.send,
                             size: 20,
@@ -7510,7 +7611,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       shape: const CircleBorder(),
                       elevation: 0,
                       child: IconButton(
-                        onPressed: () {
+                        onPressed: () async {
+                          await _showHistoryShareInfoDialog();
+                          if (!mounted) return;
                           setState(() {
                             _historyEditMode = true;
                             _historyEditAction = HistoryEditAction.share;
@@ -7735,7 +7838,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                           style: TextStyle(
                                             color: isDark ? Colors.white : Colors.black,
                                             fontWeight: FontWeight.bold,
-                                            fontSize: 12 * _currentTextScale,
+                                            fontSize: 12,
                                           ),
                                         ),
                                         const SizedBox(height: 4),
@@ -7766,7 +7869,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                           maxLines: 3,
                                           overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
-                                            fontSize: 10 * _currentTextScale,
+                                            fontSize: 10,
                                             color: isDark ? Colors.white70 : Colors.black87,
                                           ),
                                         ),
@@ -7794,10 +7897,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                 ),
                                 if (isGeneratingAudio)
-                                  const Padding(
-                                    padding: EdgeInsets.only(top: 4.0),
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 4.0),
                                     child: LinearProgressIndicator(
-                                      color: Colors.white,
+                                      color: isDark ? Colors.white : Colors.black,
                                       backgroundColor: Colors.transparent,
                                     ),
                                   ),
@@ -7881,7 +7984,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   style: TextStyle(
                                     color: isDark ? Colors.white : Colors.black,
                                     fontWeight: FontWeight.bold,
-                                    fontSize: 16 * _currentTextScale,
+                                    fontSize: 16,
                                   ),
                                 ),
                                 subtitle: Column(
@@ -7904,8 +8007,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                       padding: const EdgeInsets.only(top: 4.0),
                                       child: Text(
                                         'Original: ${item.original}',
-                                        style: TextStyle(
-                                          fontSize: 16 * _currentTextScale,
+                                        style: const TextStyle(
+                                          fontSize: 16,
                                         ),
                                       ),
                                     ),
@@ -7955,10 +8058,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                               ),
                               if (isGeneratingAudio)
-                                const Padding(
-                                  padding: EdgeInsets.symmetric(horizontal: 16),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16),
                                   child: LinearProgressIndicator(
-                                    color: Colors.white,
+                                    color: isDark ? Colors.white : Colors.black,
                                     backgroundColor: Colors.transparent,
                                   ),
                                 ),
