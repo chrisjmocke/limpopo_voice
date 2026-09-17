@@ -1522,6 +1522,20 @@ class _HomeScreenState extends State<HomeScreen> {
     return null;
   }
 
+  Future<void> _deferHeavyStartupWork() async {
+    await Future<void>.delayed(Duration.zero);
+
+    await Future.wait([
+      _loadSelectedLanguagesFromDevice(),
+      _loadFontSizeLevelFromDevice(),
+      _loadHistoryFromDevice(),
+      _loadLearnSentences(),
+      _loadUserLearnPhrases(),
+      _checkInstallIdAndFreeTrial(),
+      _showDisclaimerIfFirstInstall(),
+    ]);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1553,19 +1567,16 @@ class _HomeScreenState extends State<HomeScreen> {
     _audioPlayer = AudioPlayer();
     final functionUrl = _translationFunctionUrl();
     _translationService = TranslationService(functionUrl: functionUrl);
-    _translationService.primeSession();
-    _configureAudioPlayback();
-    _initSpeech();
-    // Native Paystack initialization is handled in the plugin's onAttachedToEngine
     _tttController.addListener(_onInputChanged);
-    unawaited(_loadSelectedLanguagesFromDevice());
-    unawaited(_loadFontSizeLevelFromDevice());
-    unawaited(_loadHistoryFromDevice());
-    unawaited(_loadLearnSentences());
-    unawaited(_loadUserLearnPhrases());
-    unawaited(_checkInstallIdAndFreeTrial());
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(_showDisclaimerIfFirstInstall());
+      unawaited(Future<void>(() async {
+        await Future<void>.delayed(Duration.zero);
+        await _translationService.primeSession();
+        await _configureAudioPlayback();
+        await _initSpeech();
+      }));
+      unawaited(_deferHeavyStartupWork());
     });
   }
 
