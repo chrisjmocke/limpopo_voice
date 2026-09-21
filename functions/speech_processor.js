@@ -2,6 +2,7 @@ const { HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
 const { GoogleGenAI } = require("@google/genai");
+const { SpeechClient } = require("@google-cloud/speech");
 const cors = require("cors")({ origin: true });
 
 if (!admin.apps.length) {
@@ -26,7 +27,7 @@ function getGenAIClient() {
 const API_COST_PER_UNIT = 0.0029;
 const VOICE_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_TEXT_LENGTH = Number(process.env.MAX_TEXT_LENGTH || 600);
-const MAX_CONTENT_LENGTH_BYTES = Number(process.env.MAX_CONTENT_LENGTH_BYTES || 32 * 1024);
+const MAX_CONTENT_LENGTH_BYTES = Number(process.env.MAX_CONTENT_LENGTH_BYTES || 5 * 1024 * 1024);
 const AUDIO_MEMORY_CACHE_LIMIT = Number(process.env.AUDIO_MEMORY_CACHE_LIMIT || 400);
 const AUDIO_CACHE_MAX_TEXT_LENGTH = Number(process.env.AUDIO_CACHE_MAX_TEXT_LENGTH || 180);
 const AUDIO_CACHE_SIGNED_URL_TTL_HOURS = Number(process.env.AUDIO_CACHE_SIGNED_URL_TTL_HOURS || 24);
@@ -573,6 +574,86 @@ function enforceRequestGuardrails(req, res) {
     return true;
 }
 
+async function transcribeAudioWithGoogleSpeech(audioBuffer, languageCode = "en-ZA") {
+    const client = new SpeechClient();
+    const fileExt = String(languageCode || "").trim();
+    let encoding = "ENCODING_UNSPECIFIED";
+    let sampleRateHertz = 16000;
+
+    const config = {
+        languageCode,
+        sampleRateHertz,
+        enableAutomaticPunctuation: true,
+        enableWordTimeOffsets: true,
+        encoding,
+    };
+
+    const request = {
+        audio: { content: Buffer.from(audioBuffer).toString("base64") },
+        config,
+    };
+
+    const [response] = await client.recognize(request);
+    const transcription = (response.results || [])
+        .map((result) => result.alternatives?.[0]?.transcript || "")
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+
+    return transcription;
+}
+
+async function handleTranscribeAudioUpload(req, res) {
+    cors(req, res, async () => {
+        try {
+            if (!enforceRequestGuardrails(req, res)) return;
+            const authHeader = String(req.headers.authorization || "");
+            if (!authHeader.startsWith("Bearer ")) {
+                return res.status(401).send({ error: "Missing Authorization bearer token." });
+            }
+            const idToken = authHeader.slice("Bearer ".length).trim();
+            if (!idToken) {
+                return res.status(401).send({ error: "Empty Authorization bearer token." });
+            }
+            let decodedToken;
+            try {
+                decodedToken = await admin.auth().verifyIdToken(idToken);
+            } catch {
+                return res.status(401).send({ error: "Unauthorized" });
+            }
+
+            const { audioBase64, languageCode = "en-ZA", mimeType = "audio/mpeg" } = req.body || {};
+            if (!audioBase64 || typeof audioBase64 !== "string") {
+                return res.status(400).send({ error: "Missing audioBase64 payload." });
+            }
+
+            const audioBuffer = Buffer.from(audioBase64, "base64");
+            if (!audioBuffer.length) {
+                return res.status(400).send({ error: "Audio payload is empty." });
+            }
+
+            const transcript = await transcribeAudioWithGoogleSpeech(audioBuffer, languageCode);
+            if (!transcript) {
+                return res.status(422).send({ error: "No speech detected in uploaded audio." });
+            }
+
+            return res.status(200).send({
+                transcript,
+                languageCode,
+                mimeType,
+                userId: decodedToken.uid,
+                status: "success",
+            });
+        } catch (error) {
+            console.error("Uploaded audio transcription error:", error);
+            return res.status(500).send({
+                error: "Uploaded audio transcription failed.",
+                details: String(error?.message || error),
+            });
+        }
+    });
+}
+
 // Handlers
 function handleProcessSpeech(req, res) {
     cors(req, res, async () => {
@@ -726,5 +807,6 @@ module.exports = {
     getSharedAudioUrlOnly,
     handleProcessSpeech,
     handleLiveHealthCheck,
+    handleTranscribeAudioUpload,
     handleTtsProviderReadiness,
 };

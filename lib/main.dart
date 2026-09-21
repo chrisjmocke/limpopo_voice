@@ -9,6 +9,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:crypto/crypto.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -36,19 +37,23 @@ import 'translation_service.dart';
 // const _paystackChannel = MethodChannel('com.limpopovoice.translate/paystack');
 
 Future<void> _loadEnvFile() async {
-  // First, attempt to load from local filesystem files (common in native desktop/local debug execution)
-  const candidates = ["lib/.env", ".env"];
-  for (final candidate in candidates) {
-    try {
-      final file = File(candidate);
-      if (await file.exists()) {
-        await dotenv.load(fileName: candidate);
-        debugPrint('Loaded environment from filesystem: $candidate');
-        return;
-      }
-    } catch (e) {
-      debugPrint('Filesystem env load error for $candidate: $e');
+  final rootEnv = File('.env');
+  final legacyLibEnv = File('lib/.env');
+
+  try {
+    if (await legacyLibEnv.exists()) {
+      debugPrint(
+        'Legacy env file detected at lib/.env. This file is no longer used. Keep only the root .env to avoid startup confusion.',
+      );
     }
+
+    if (await rootEnv.exists()) {
+      await dotenv.load(fileName: '.env');
+      debugPrint('Loaded environment from root .env');
+      return;
+    }
+  } catch (e) {
+    debugPrint('Filesystem env load error: $e');
   }
 
   // Graceful fallback: load .env from Flutter's bundled asset bundle (production behavior)
@@ -69,8 +74,25 @@ String safeDotEnvString(String key) {
 }
 
 final storage = const FlutterSecureStorage();
+
+double globalTextScale = 1.0;
+final ValueNotifier<double> globalTextScaleNotifier = ValueNotifier<double>(1.0);
 final ValueNotifier<Set<String>> resolvedAudioNotifier =
     ValueNotifier<Set<String>>(<String>{});
+
+String buildAudioDeductionKey({
+  required String text,
+  required String language,
+  String? provider,
+  String? voiceName,
+}) {
+  final normalizedText = text.trim().toLowerCase();
+  final normalizedLanguage = language.trim().toLowerCase();
+  final normalizedProvider = (provider ?? '').trim().toLowerCase();
+  final normalizedVoice = (voiceName ?? '').trim().toLowerCase();
+
+  return '$normalizedText|$normalizedLanguage|$normalizedProvider|$normalizedVoice';
+}
 
 Future<String?> safeRead(String key) async {
   try {
@@ -92,6 +114,42 @@ String getGoogleServerClientId() {
     return configured;
   }
   return '587321848459-20tm9s1lago28llbmvat4a2mgcfeusjl.apps.googleusercontent.com';
+}
+
+const int maxAudioUploadPayloadBytes = 5 * 1024 * 1024;
+
+bool isAudioPayloadTooLarge(int fileSizeBytes) {
+  return fileSizeBytes > maxAudioUploadPayloadBytes;
+}
+
+int calculateVoiceNoteTranslationCredits(Duration duration) {
+  if (duration <= Duration.zero) return 0;
+  final totalSeconds = duration.inSeconds;
+  if (totalSeconds <= 0) return 0;
+  return ((totalSeconds + 4) ~/ 5).clamp(1, 9999);
+}
+
+bool isVoiceNoteWithinTranslationCap(Duration duration) {
+  return duration.inSeconds <= 5;
+}
+
+int enforceFreeTrialCreditPolicy({
+  required int currentCredits,
+  required bool deviceUsedFreeTrial,
+  required bool userFreeTrialConsumed,
+}) {
+  if (!(deviceUsedFreeTrial || userFreeTrialConsumed)) {
+    return currentCredits;
+  }
+
+  // Preserve any real user balance. Trial flags should never wipe purchased or
+  // manually restored credits. Only an exhausted free-trial state with no real
+  // credit balance should be forced to zero.
+  if (currentCredits > 0) {
+    return currentCredits;
+  }
+
+  return 0;
 }
 
 String normalizePendingAuthReturnRoute(String? route) {
@@ -135,39 +193,26 @@ GoogleSignIn buildGoogleSignInClient() {
   );
 }
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  try {
+    await _loadEnvFile();
+  } catch (e) {
+    debugPrint('Startup env load error: $e');
+  }
 
   try {
     if (Firebase.apps.isEmpty) {
       await Firebase.initializeApp(
-          options: DefaultFirebaseOptions.currentPlatform);
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
     }
     debugPrint('Firebase initialized successfully');
-
-    if (kIsWeb) {
-      await FirebaseAppCheck.instance.activate(
-        webProvider: ReCaptchaV3Provider('6LfrV7UaAAAAAL81B2G0zY'),
-      );
-    } else {
-      if (kDebugMode) {
-        debugPrint(
-            'Firebase App Check in debug mode: register this device debug token in Firebase Console for Android debug builds.');
-      }
-      await FirebaseAppCheck.instance.activate(
-        androidProvider: kDebugMode
-            ? AndroidProvider.debug
-            : AndroidProvider.playIntegrity,
-        appleProvider: AppleProvider.deviceCheck,
-      );
-    }
-
-    debugPrint('Firebase App Check initialized successfully');
   } catch (e) {
-    debugPrint("Firebase init error: $e");
+    debugPrint('Firebase init error: $e');
   }
 
-  await _loadEnvFile();
   runApp(const LetsTalkApp());
 }
 
@@ -244,53 +289,58 @@ class _LetsTalkAppState extends State<LetsTalkApp> {
         ),
         builder: (context, child) {
           final media = MediaQuery.of(context);
-          return MediaQuery(
-            data: media.copyWith(textScaler: const TextScaler.linear(1.0)),
-            child: DefaultTextStyle.merge(
-              style: const TextStyle(
-                fontFamily: 'monospace',
-                fontWeight: FontWeight.w900,
-                fontSize: 18,
-                shadows: [
-                  Shadow(
-                    color: Color(0x66000000),
-                    blurRadius: 0,
-                    offset: Offset(1.5, 0),
+          return ValueListenableBuilder<double>(
+            valueListenable: globalTextScaleNotifier,
+            builder: (context, textScale, _) {
+              return MediaQuery(
+                data: media.copyWith(textScaler: TextScaler.linear(textScale)),
+                child: DefaultTextStyle.merge(
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontWeight: FontWeight.w900,
+                    fontSize: 18,
+                    shadows: [
+                      Shadow(
+                        color: Color(0x66000000),
+                        blurRadius: 0,
+                        offset: Offset(1.5, 0),
+                      ),
+                      Shadow(
+                        color: Color(0x66000000),
+                        blurRadius: 0,
+                        offset: Offset(-1.5, 0),
+                      ),
+                      Shadow(
+                        color: Color(0x66000000),
+                        blurRadius: 0,
+                        offset: Offset(0, 1.5),
+                      ),
+                      Shadow(
+                        color: Color(0x4D000000),
+                        blurRadius: 0,
+                        offset: Offset(0, -1),
+                      ),
+                      Shadow(
+                        color: Color(0x55000000),
+                        blurRadius: 0,
+                        offset: Offset(1, 1),
+                      ),
+                      Shadow(
+                        color: Color(0x55000000),
+                        blurRadius: 0,
+                        offset: Offset(-1, 1),
+                      ),
+                      Shadow(
+                        color: Color(0x66000000),
+                        blurRadius: 2,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
                   ),
-                  Shadow(
-                    color: Color(0x66000000),
-                    blurRadius: 0,
-                    offset: Offset(-1.5, 0),
-                  ),
-                  Shadow(
-                    color: Color(0x66000000),
-                    blurRadius: 0,
-                    offset: Offset(0, 1.5),
-                  ),
-                  Shadow(
-                    color: Color(0x4D000000),
-                    blurRadius: 0,
-                    offset: Offset(0, -1),
-                  ),
-                  Shadow(
-                    color: Color(0x55000000),
-                    blurRadius: 0,
-                    offset: Offset(1, 1),
-                  ),
-                  Shadow(
-                    color: Color(0x55000000),
-                    blurRadius: 0,
-                    offset: Offset(-1, 1),
-                  ),
-                  Shadow(
-                    color: Color(0x66000000),
-                    blurRadius: 2,
-                    offset: Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: child ?? const SizedBox.shrink(),
-            ),
+                  child: child ?? const SizedBox.shrink(),
+                ),
+              );
+            },
           );
         },
         home: HomeScreen(onToggleTheme: _toggleTheme),
@@ -446,6 +496,7 @@ const _onceOffTiers = [
 ];
 const int _usageCostCredits =
     1; // 1 credit = 5 seconds per translation (capped)
+const int _ocrTextCharsPerCredit = 80;
 const double apiCostPerUnit = 0.0029;
 const bool _enableClientFirestoreCache = true;
 const bool _enableLocalPersistentAudioCache = true;
@@ -1019,6 +1070,8 @@ class _HomeScreenState extends State<HomeScreen> {
   static const Duration _nextChunkFetchTimeout = Duration(seconds: 55);
   static const String _defaultProcessSpeechUrl =
       'https://africa-south1-limpopo-voice-prod.cloudfunctions.net/processSpeech';
+  static const String _defaultTranscribeAudioUrl =
+      'https://africa-south1-limpopo-voice-prod.cloudfunctions.net/transcribeAudioUpload';
 
   static final RegExp _offensiveWordRegex = RegExp(
     '\\b(${_offensiveWords.map(RegExp.escape).join('|')})\\b',
@@ -1173,6 +1226,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _historyEditMode = false;
   bool _historyGridMode = true;
   bool _audioUsageDeductionInFlight = false;
+  final Set<String> _audioDeductionLedger = <String>{};
   HistoryEditAction _historyEditAction = HistoryEditAction.share;
   final Set<int> _selectedHistoryIndices = {};
   String _selectedLearnLang = 'Sepedi';
@@ -1181,14 +1235,73 @@ class _HomeScreenState extends State<HomeScreen> {
   final Map<String, String> _learnFocusMeaningByLang = {};
   final Map<String, String?> _learnFocusPhoneticByLang = {};
   int _fontSizeLevel = 0; // 0: Normal, 1: Larger, 2: Largest
+  int _voiceNoteDurationLimitSeconds = 5;
   Timer? _autocorrectTimer;
   Timer? _talkHoldTimer;
   double _talkHoldProgress = 0.0;
 
+  int get _voiceNoteDurationCredits =>
+      ((_voiceNoteDurationLimitSeconds + 4) ~/ 5).clamp(1, 3);
+
+  Future<void> _setVoiceNoteDurationLimit(int seconds) async {
+    if (seconds == _voiceNoteDurationLimitSeconds) return;
+
+    if (seconds > 5) {
+      final credits = ((seconds + 4) ~/ 5).clamp(1, 3);
+      final shouldProceed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) {
+          final isDark = Theme.of(ctx).brightness == Brightness.dark;
+          return AlertDialog(
+            backgroundColor: isDark ? Colors.black : Colors.white,
+            title: Text('Switching to ${seconds}s limit'),
+            content: Text(
+              'This tier uses $credits credit${credits == 1 ? '' : 's'} per translation.\n\n'
+              'Do you want to proceed with the $seconds-second voice note cap?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Confirm'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (shouldProceed != true) return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _voiceNoteDurationLimitSeconds = seconds;
+    });
+  }
+
+  String get _fontSizeModeLabel {
+    switch (_fontSizeLevel) {
+      case 0:
+        return 'Normal';
+      case 1:
+        return 'Large';
+      case 2:
+        return 'Largest';
+      default:
+        return 'Normal';
+    }
+  }
+
   void _cycleFontSize() {
+    final levels = [1.0, 1.15, 1.3];
     final nextLevel = (_fontSizeLevel + 1) % 3;
     setState(() {
       _fontSizeLevel = nextLevel;
+      globalTextScale = levels[nextLevel];
+      globalTextScaleNotifier.value = globalTextScale;
     });
     unawaited(_saveFontSizeLevelToDevice());
   }
@@ -1264,6 +1377,146 @@ class _HomeScreenState extends State<HomeScreen> {
     return false;
   }
 
+  int _calculateTextCreditCost(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return 0;
+    return (trimmed.length / _ocrTextCharsPerCredit).ceil();
+  }
+
+  Future<bool> _deductCreditsForTextGeneration(String text, {bool silent = false}) async {
+    final requiredCredits = _calculateTextCreditCost(text);
+    if (requiredCredits <= 0) return true;
+
+    if (FirebaseAuth.instance.currentUser == null && _authUid == null) {
+      if (!silent) {
+        _showSnack('Sign in to generate audio from scanned text.');
+      }
+      return false;
+    }
+
+    if (_credits < requiredCredits) {
+      if (!silent) {
+        _showSnack('You need $requiredCredits credits for this text.');
+        _showCreditTiers();
+      }
+      return false;
+    }
+
+    setState(() => _credits -= requiredCredits);
+
+    final ref = _userDocRef();
+    if (ref == null) {
+      if (!silent) {
+        _showSnack('Could not deduct credits from your account.');
+      }
+      setState(() => _credits += requiredCredits);
+      return false;
+    }
+
+    try {
+      await ref.set({
+        'credits': _credits,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      debugPrint(
+          'Deducted $requiredCredits credits for OCR/audio generation. Remaining: $_credits');
+      return true;
+    } catch (e) {
+      debugPrint('Failed to deduct OCR audio credits from Firestore: $e');
+      if (mounted) {
+        setState(() => _credits += requiredCredits);
+      }
+      if (!silent) {
+        _showSnack('Credit deduction failed. Please try again.');
+      }
+      return false;
+    }
+  }
+
+  Future<bool> _confirmTextGenerationCost(String text, {required String sourceLabel}) async {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return true;
+
+    final requiredCredits = _calculateTextCreditCost(trimmed);
+    final estimatedSeconds = (trimmed.length / 16.0).ceil();
+    final hasEnoughCredits = _credits >= requiredCredits;
+
+    if (!mounted) return false;
+
+    if (!hasEnoughCredits) {
+      _showSnack('You need $requiredCredits credits for this ${sourceLabel.toLowerCase()}.');
+      _showCreditTiers();
+      return false;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Theme.of(ctx).brightness == Brightness.dark
+            ? Colors.black
+            : Colors.white,
+        title: const Text('Audio generation cost'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'This ${sourceLabel.toLowerCase()} contains ${trimmed.length} characters and will generate about $estimatedSeconds seconds of audio.',
+                style: const TextStyle(height: 1.4),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Estimated cost: $requiredCredits credit${requiredCredits == 1 ? '' : 's'}',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 6),
+              Text('Available balance: $_credits credits'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Proceed & Generate'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return false;
+
+    return await _deductCreditsForTextGeneration(trimmed);
+  }
+
+  Future<Duration> _readAudioDuration(String path) async {
+    final player = AudioPlayer();
+    try {
+      final completer = Completer<Duration>();
+      player.onDurationChanged.listen((duration) {
+        if (!completer.isCompleted) {
+          completer.complete(duration);
+        }
+      });
+
+      await player.setSourceDeviceFile(path);
+      final duration = await completer.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => Duration.zero,
+      );
+      return duration;
+    } catch (_) {
+      return Duration.zero;
+    } finally {
+      await player.dispose();
+    }
+  }
+
   Future<void> _scanTextFromImageSource(
       TextEditingController inputController, ImageSource source) async {
     if (!await _ensureImagePermission(source)) return;
@@ -1326,6 +1579,16 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
+      final shouldProceed = await _confirmTextGenerationCost(
+        cleanedText,
+        sourceLabel: source == ImageSource.camera ? 'camera scan' : 'photo upload',
+      );
+      if (!shouldProceed) {
+        return;
+      }
+
+      if (!mounted) return;
+
       inputController.text = cleanedText;
       inputController.selection =
           TextSelection.collapsed(offset: inputController.text.length);
@@ -1352,6 +1615,155 @@ class _HomeScreenState extends State<HomeScreen> {
           _isScanningText = false;
         });
       }
+    }
+  }
+
+  Future<void> _transcribeUploadedAudioFile(String path) async {
+    try {
+      final bytes = await File(path).readAsBytes();
+      if (bytes.isEmpty) {
+        _showSnack('The selected audio file is empty.');
+        return;
+      }
+
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        _showSnack('Please sign in before transcribing uploaded audio.');
+        return;
+      }
+
+      final token = await user.getIdToken(true);
+      final uri = Uri.parse(_defaultTranscribeAudioUrl);
+      final response = await http.post(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'audioBase64': base64Encode(bytes),
+          'languageCode': _selectedInputLang == 'English' ? 'en-ZA' : 'en-ZA',
+          'mimeType': 'audio/mpeg',
+        }),
+      );
+
+      if (response.statusCode != 200) {
+        debugPrint('Uploaded audio transcription request failed: ${response.statusCode} ${response.body}');
+        _showSnack('Transcription failed. Please try again.');
+        return;
+      }
+
+      final payload = jsonDecode(response.body);
+      final transcript = (payload['transcript'] ?? '').toString().trim();
+      if (transcript.isEmpty) {
+        _showSnack('No speech was detected in the uploaded audio.');
+        return;
+      }
+
+      setState(() {
+        _showHintText = false;
+        _tttController.text = transcript;
+        _tttController.selection =
+            TextSelection.collapsed(offset: _tttController.text.length);
+      });
+
+      _showSnack('Uploaded audio transcribed successfully.');
+      unawaited(_doTranslate(transcript));
+    } catch (e) {
+      debugPrint('Uploaded audio transcription error: $e');
+      _showSnack('Transcription failed. Please try again.');
+    }
+  }
+
+  Future<void> _handleAudioUpload() async {
+    try {
+      final result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const ['opus', 'ogg', 'amr', 'm4a', '3gp'],
+        allowMultiple: false,
+      );
+
+      if (result == null || result.files.isEmpty) return;
+
+      final file = result.files.first;
+      final path = file.path;
+      if (path == null || path.isEmpty) {
+        _showSnack('Selected audio file is unavailable.');
+        return;
+      }
+
+      final fileSizeBytes = await File(path).length();
+      if (isAudioPayloadTooLarge(fileSizeBytes)) {
+        _showSnack(
+          'This audio file is too large for transcription. Max size is ${maxAudioUploadPayloadBytes ~/ 1024} KB.',
+        );
+        return;
+      }
+
+      final exactDuration = await _readAudioDuration(path);
+      final cappedDuration = exactDuration.inSeconds > _voiceNoteDurationLimitSeconds
+          ? Duration(seconds: _voiceNoteDurationLimitSeconds)
+          : exactDuration;
+      final withinStandardCap = cappedDuration.inSeconds <= 5;
+      final creditsRequired = calculateVoiceNoteTranslationCredits(cappedDuration);
+
+      if (!mounted) return;
+
+      final confirmed = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Voice note cost'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('File: ${file.name}'),
+              const SizedBox(height: 8),
+              Text('Duration: ${exactDuration.inSeconds}s'),
+              Text('Selected cap: $_voiceNoteDurationLimitSeconds s = $_voiceNoteDurationCredits credit${_voiceNoteDurationCredits == 1 ? '' : 's'} tier'),
+              const SizedBox(height: 8),
+              if (withinStandardCap)
+                Text(
+                  'This voice note is within the selected 5-second baseline and will cost $creditsRequired credit${creditsRequired == 1 ? '' : 's'}.',
+                )
+              else
+                Text(
+                  'This voice note exceeds the 5-second baseline and with the current tier cap it will cost $creditsRequired credit${creditsRequired == 1 ? '' : 's'} total.',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+              const SizedBox(height: 8),
+              Text('Available balance: $_credits credits'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Proceed & Translate'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirmed != true) return;
+
+      final enoughCredits = _credits >= creditsRequired;
+      if (!enoughCredits) {
+        _showSnack('You need $creditsRequired credit${creditsRequired == 1 ? '' : 's'} for this voice note.');
+        _showCreditTiers();
+        return;
+      }
+
+      _showSnack('Audio upload selected. Transcription will begin soon.');
+      debugPrint('Audio upload selected: $path');
+      await _transcribeUploadedAudioFile(path);
+    } catch (e) {
+      debugPrint('Audio upload failed: $e');
+      _showSnack('Audio upload failed.');
     }
   }
 
@@ -1394,20 +1806,54 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     if (source == null) return;
+
+    if (!context.mounted) return;
+
+    final sourceLabel = source == ImageSource.camera ? 'camera' : 'gallery';
+    final dialogContext = context;
+    final confirmedInputLanguage = await showDialog<bool>(
+      context: dialogContext,
+      barrierDismissible: false,
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        return AlertDialog(
+          backgroundColor: isDark ? Colors.black : Colors.white,
+          title: const Text('Heads up'),
+          content: Text(
+            'The language in the $sourceLabel image should match the language selected in the input box.\n\n'
+            'If the text is a different language, switch the input language first before translating.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Continue'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmedInputLanguage != true) return;
+
     await _scanTextFromImageSource(_tttController, source);
   }
 
-  double get _currentTextScale {
-    switch (_fontSizeLevel) {
-      case 1:
-        return 1.15;
-      case 2:
-        return 1.30;
-      case 0:
-      default:
-        return 1.0;
-    }
+  double get _currentTextScale => globalTextScale;
+
+  double _textSizeForCurrentContent(String text, {double base = 16.0}) {
+    final length = text.trim().length;
+    final scale = _currentTextScale;
+    if (length <= 40) return base * scale;
+    if (length <= 90) return (base * scale * 0.9);
+    if (length <= 140) return (base * scale * 0.8);
+    if (length <= 200) return (base * scale * 0.72);
+    return (base * scale * 0.64);
   }
+
   int _localAudioCacheHits = 0;
   int _sharedAudioCacheHits = 0;
   int _remoteAudioCacheMisses = 0;
@@ -1536,6 +1982,44 @@ class _HomeScreenState extends State<HomeScreen> {
     ]);
   }
 
+  Future<void> _handleDeferredAuthBootstrap(User? user) async {
+    if (!mounted) return;
+
+    await Future<void>.delayed(Duration.zero);
+    if (!mounted) return;
+
+    if (user != null) {
+      await _syncAuthState(user);
+    }
+    _syncUserProfileImage();
+  }
+
+  Future<void> _initializeRuntimeConfig() async {
+    await _loadEnvFile();
+    if (!mounted) return;
+
+    _audioPlayer = AudioPlayer();
+    final functionUrl = _translationFunctionUrl();
+    _translationService = TranslationService(functionUrl: functionUrl);
+    _tttController.addListener(_onInputChanged);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_initializeDeferredAppServices());
+      unawaited(Future<void>(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        if (!mounted) return;
+        await _translationService.primeSession();
+        await _configureAudioPlayback();
+        await _initSpeech();
+      }));
+      unawaited(Future<void>(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        if (!mounted) return;
+        await _deferHeavyStartupWork();
+      }));
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1560,24 +2044,38 @@ class _HomeScreenState extends State<HomeScreen> {
     _syncUserProfileImage();
     _authSubscription = FirebaseAuth.instance.authStateChanges().listen((user) {
       if (!mounted) return;
-      setState(() {
-        _syncUserProfileImage();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_handleDeferredAuthBootstrap(user));
       });
     });
-    _audioPlayer = AudioPlayer();
-    final functionUrl = _translationFunctionUrl();
-    _translationService = TranslationService(functionUrl: functionUrl);
-    _tttController.addListener(_onInputChanged);
+    unawaited(_initializeRuntimeConfig());
+  }
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(Future<void>(() async {
-        await Future<void>.delayed(Duration.zero);
-        await _translationService.primeSession();
-        await _configureAudioPlayback();
-        await _initSpeech();
-      }));
-      unawaited(_deferHeavyStartupWork());
-    });
+  Future<void> _initializeDeferredAppServices() async {
+    try {
+      await _loadEnvFile();
+
+      if (kIsWeb) {
+        await FirebaseAppCheck.instance.activate(
+          webProvider: ReCaptchaV3Provider('6LfrV7UaAAAAAL81B2G0zY'),
+        );
+      } else {
+        if (kDebugMode) {
+          debugPrint(
+              'Firebase App Check debug mode enabled. Register the generated device token shown in logs in Firebase Console.');
+        }
+        await FirebaseAppCheck.instance.activate(
+          androidProvider: kDebugMode
+              ? AndroidProvider.debug
+              : AndroidProvider.playIntegrity,
+          appleProvider: kDebugMode ? AppleProvider.debug : AppleProvider.deviceCheck,
+        );
+      }
+
+      debugPrint('Firebase App Check initialized successfully');
+    } catch (e) {
+      debugPrint('Deferred startup initialization error: $e');
+    }
   }
 
   Future<void> _saveSelectedLanguagesToDevice() async {
@@ -1609,6 +2107,10 @@ class _HomeScreenState extends State<HomeScreen> {
       if (savedLevel == null) return;
 
       final normalizedLevel = savedLevel.clamp(0, 2);
+      final levels = [1.0, 1.15, 1.3];
+      globalTextScale = levels[normalizedLevel];
+      globalTextScaleNotifier.value = globalTextScale;
+
       if (!mounted) {
         _fontSizeLevel = normalizedLevel;
         return;
@@ -2370,9 +2872,6 @@ class _HomeScreenState extends State<HomeScreen> {
       await _syncAuthState(user);
     } catch (e) {
       debugPrint('Firebase Auth sign-in failed: $e');
-      if (mounted) {
-        _showSnack('Sign-in failed. Please check your connection.');
-      }
     }
   }
 
@@ -2599,15 +3098,30 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   DocumentReference<Map<String, dynamic>>? _userDocRef() {
-    final id = FirebaseAuth.instance.currentUser?.uid ?? _authUid;
+    final currentUser = FirebaseAuth.instance.currentUser;
+    final id = currentUser?.uid ?? _authUid;
     if (id == null || id.isEmpty) return null;
+
+    if (currentUser != null && currentUser.uid != id) {
+      debugPrint(
+        'Skipping Firestore user doc access: auth UID mismatch. current=${currentUser.uid}, cached=$id',
+      );
+      return null;
+    }
+
     return FirebaseFirestore.instance.collection('users').doc(id);
   }
 
   Future<void> _ensureUserProfileDocument() async {
+    final currentUid = FirebaseAuth.instance.currentUser?.uid ?? _authUid;
+    if (currentUid == null || currentUid.isEmpty) {
+      debugPrint('Skipping user profile document sync: missing auth UID');
+      return;
+    }
+
     final ref = _userDocRef();
     if (ref == null) return;
-    final currentUid = FirebaseAuth.instance.currentUser?.uid ?? _authUid;
+
     await ref.set({
       'userId': currentUid,
       'authUid': currentUid,
@@ -2854,7 +3368,6 @@ class _HomeScreenState extends State<HomeScreen> {
       // Get device ID (persists across uninstalls)
       await _getAndStoreDeviceId();
 
-      await _ensureSignedIn();
       final uid = _authUid;
       if (uid == null || uid.isEmpty) {
         debugPrint('Install ID check skipped: missing auth uid.');
@@ -2901,30 +3414,30 @@ class _HomeScreenState extends State<HomeScreen> {
         debugPrint('Install ID $installId registered for first free trial use');
       }
 
-      // If a device or user has already consumed the free trial, the free 10 must
-      // stay depleted even if the user switches between guest and signed-in state.
+      // Trial metadata is not allowed to wipe a valid user balance. Preserve the
+      // actual Firestore credit count and never zero it out just because a device
+      // or user has consumed the free trial.
       final deviceUsedTrial = await _hasDeviceUsedFreeTrial();
       final ref = _userDocRef();
       final userDoc = ref == null ? null : await ref.get();
+      final remoteCredits =
+          userDoc != null && userDoc.exists
+              ? (userDoc.data()?['credits'] as num?)?.toInt() ?? 0
+              : _credits;
       final userFreeTrialConsumed = userDoc != null &&
           userDoc.exists &&
           userDoc.data()?['free_trial_consumed'] == true;
-      if ((deviceUsedTrial || userFreeTrialConsumed) && _credits <= 10) {
-        final nextCredits = _credits > 10 ? _credits : 0;
-        debugPrint(
-            'User/device already used free trial. Enforcing credits to $nextCredits.');
-        if (mounted) {
-          setState(() => _credits = nextCredits);
-        } else {
-          _credits = nextCredits;
-        }
 
-        if (ref != null) {
-          await ref.set({
-            'credits': nextCredits,
-            'free_trial_consumed': true,
-            'updatedAt': FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
+      if ((deviceUsedTrial || userFreeTrialConsumed) && remoteCredits <= 0) {
+        debugPrint(
+            'Trial metadata detected, but no real credits are present. Keeping zero balance.');
+      }
+
+      if (remoteCredits > 0 && remoteCredits != _credits) {
+        if (mounted) {
+          setState(() => _credits = remoteCredits);
+        } else {
+          _credits = remoteCredits;
         }
       }
 
@@ -3204,6 +3717,90 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _syncDeferredAudioWithFirestore(String text, String language) async {
+    final normalizedText = text.trim();
+    if (normalizedText.isEmpty) return;
+
+    final normalizedLanguage = _normalizeLanguageLabel(language);
+
+    for (final item in _history) {
+      if (item.outputLang == normalizedLanguage && item.translated.trim() == normalizedText) {
+        await _saveDeferredAudioToFirestore(
+          original: item.original,
+          translated: item.translated,
+          inputLang: item.inputLang,
+          outputLang: item.outputLang,
+          audioGenerated: true,
+        );
+      }
+    }
+
+    final phrases = (_userLearnPhrasesByLang[normalizedLanguage] ?? const <Map<String, String>>[])
+        .toList();
+    for (final phrase in phrases) {
+      if ((phrase['text'] ?? '').trim() == normalizedText) {
+        await _saveDeferredAudioToFirestore(
+          original: phrase['en'] ?? '',
+          translated: phrase['text'] ?? '',
+          inputLang: 'English',
+          outputLang: normalizedLanguage,
+          audioGenerated: true,
+        );
+      }
+    }
+  }
+
+  void _syncResolvedDeferredAudioState(String text, String language) {
+    final normalizedText = text.trim();
+    if (normalizedText.isEmpty) return;
+
+    final normalizedLanguage = _normalizeLanguageLabel(language);
+
+    for (var i = 0; i < _history.length; i++) {
+      final item = _history[i];
+      if (item.outputLang == normalizedLanguage &&
+          item.translated.trim() == normalizedText) {
+        _history[i] = HistoryItem(
+          item.inputLang,
+          item.outputLang,
+          item.original,
+          item.translated,
+          item.time,
+          phonetic: item.phonetic,
+          audioGenerated: true,
+          hasAudio: true,
+          audioStatus: 'rendered',
+        );
+      }
+    }
+
+    final phrases = (_userLearnPhrasesByLang[normalizedLanguage] ?? const <Map<String, String>>[])
+        .toList();
+    final updatedPhrases = <Map<String, String>>[];
+    var changed = false;
+    for (final phrase in phrases) {
+      final candidate = phrase['text'] ?? '';
+      if (candidate.trim() == normalizedText) {
+        changed = true;
+        updatedPhrases.add({
+          ...phrase,
+          'audioGenerated': 'true',
+          'isDeferred': 'false',
+          'hasAudio': 'true',
+          'audioStatus': 'rendered',
+        });
+      } else {
+        updatedPhrases.add(phrase);
+      }
+    }
+
+    if (changed) {
+      _userLearnPhrasesByLang[normalizedLanguage] = updatedPhrases;
+    }
+
+    unawaited(_syncDeferredAudioWithFirestore(normalizedText, normalizedLanguage));
+  }
+
   void _markAudioResolved(String cacheLookupKey) {
     if (cacheLookupKey.trim().isEmpty) {
       return;
@@ -3259,20 +3856,27 @@ class _HomeScreenState extends State<HomeScreen> {
       );
 
       if (audioData != null && audioData.isNotEmpty) {
+        final cacheVoiceKey = '$provider|${voiceName ?? ''}';
+        final cacheLookupKey = _getCacheKey(item.translated, item.outputLang, cacheVoiceKey);
+        if (_isAudioResolvedForKey(item.translated, item.outputLang, voiceName ?? '', provider: provider)) {
+          _syncResolvedDeferredAudioState(item.translated, item.outputLang);
+          return;
+        }
+
         final deducted = await _deductAudioUsageOnce(
           inputText: sanitizedText,
           outputText: item.translated,
+          language: item.outputLang,
+          provider: provider,
+          voiceName: voiceName,
         );
         if (!deducted) {
           debugPrint('[_generateAudioOnDemandForHistory] Deferred render denied by credit allowance check.');
           return;
         }
 
-        final provider = _ttsProviderForLanguage(item.outputLang);
-        final voiceName = _voiceNameForLanguage(item.outputLang);
-        final cacheVoiceKey = '$provider|${voiceName ?? ''}';
-        final cacheLookupKey = _getCacheKey(item.translated, item.outputLang, cacheVoiceKey);
         _markAudioResolved(cacheLookupKey);
+        _syncResolvedDeferredAudioState(item.translated, item.outputLang);
 
         _history[index] = HistoryItem(
           item.inputLang,
@@ -3346,20 +3950,27 @@ class _HomeScreenState extends State<HomeScreen> {
       );
 
       if (audioData != null && audioData.isNotEmpty) {
+        final cacheVoiceKey = '$provider|${voiceName ?? ''}';
+        final cacheLookupKey = _getCacheKey(text, _selectedLearnLang, cacheVoiceKey);
+        if (_isAudioResolvedForKey(text, _selectedLearnLang, voiceName ?? '', provider: provider)) {
+          _syncResolvedDeferredAudioState(text, _selectedLearnLang);
+          return;
+        }
+
         final deducted = await _deductAudioUsageOnce(
           inputText: sanitizedText,
           outputText: text,
+          language: _selectedLearnLang,
+          provider: provider,
+          voiceName: voiceName,
         );
         if (!deducted) {
           debugPrint('[_generateAudioOnDemandForLearn] Deferred render denied by credit allowance check.');
           return;
         }
 
-        final provider = _ttsProviderForLanguage(_selectedLearnLang);
-        final voiceName = _voiceNameForLanguage(_selectedLearnLang);
-        final cacheVoiceKey = '$provider|${voiceName ?? ''}';
-        final cacheLookupKey = _getCacheKey(text, _selectedLearnLang, cacheVoiceKey);
         _markAudioResolved(cacheLookupKey);
+        _syncResolvedDeferredAudioState(text, _selectedLearnLang);
 
         final list = (_userLearnPhrasesByLang[_selectedLearnLang] ?? []).toList();
         list[index] = {
@@ -3528,7 +4139,13 @@ class _HomeScreenState extends State<HomeScreen> {
         .split(RegExp(r'\s+'))
         .where((word) => word.isNotEmpty)
         .toList();
-    if (words.length <= 1) return null;
+
+    // Word-level caching is still useful for device/Firebase reuse, but long
+    // sentence reconstruction is unsafe: stale or partially wrong word entries
+    // can combine into nonsense output. Only trust short phrase fragments.
+    if (words.length <= 1 || words.length > 4) {
+      return null;
+    }
 
     final translatedParts = <String>[];
     for (final word in words) {
@@ -3540,7 +4157,11 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     if (translatedParts.length == words.length) {
-      return translatedParts.join(' ');
+      final rebuilt = translatedParts.join(' ');
+      if (rebuilt.trim().length < 3) {
+        return null;
+      }
+      return rebuilt;
     }
 
     return null;
@@ -3716,9 +4337,9 @@ class _HomeScreenState extends State<HomeScreen> {
       final deviceUsedTrial = await _hasDeviceUsedFreeTrial();
 
       if (alreadyUsedFreeTrial || deviceUsedTrial) {
-        final enforcedCredits = existingCredits > 10 ? existingCredits : 0;
+        final preservedCredits = existingCredits > 0 ? existingCredits : 0;
         await ref.set({
-          'credits': enforcedCredits,
+          'credits': preservedCredits,
           'free_trial_consumed': true,
           'creditsRollOver': false,
           'monthlyRenewalActive': false,
@@ -3729,9 +4350,9 @@ class _HomeScreenState extends State<HomeScreen> {
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
         if (mounted) {
-          setState(() => _credits = enforcedCredits);
+          setState(() => _credits = preservedCredits);
         } else {
-          _credits = enforcedCredits;
+          _credits = preservedCredits;
         }
         return;
       }
@@ -3954,10 +4575,11 @@ class _HomeScreenState extends State<HomeScreen> {
     _talkHoldProgress = 0.0;
     unawaited(_triggerTalkVibration());
     final start = DateTime.now();
+    final selectedDurationMs = _voiceNoteDurationLimitSeconds * 1000;
     _talkHoldTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
       if (!mounted) return;
       final elapsed = DateTime.now().difference(start).inMilliseconds;
-      final progress = (elapsed / 5000).clamp(0.0, 1.0);
+      final progress = (elapsed / selectedDurationMs).clamp(0.0, 1.0);
       setState(() => _talkHoldProgress = progress);
       if (progress >= 1.0) {
         _talkHoldTimer?.cancel();
@@ -4024,19 +4646,40 @@ class _HomeScreenState extends State<HomeScreen> {
     bool silent = false,
     String? inputText,
     String? outputText,
+    String? language,
+    String? provider,
+    String? voiceName,
   }) async {
     if (_audioUsageDeductionInFlight) {
       debugPrint('[_deductAudioUsageOnce] Skipping duplicate deduction while another audio action is in progress.');
       return false;
     }
 
+    final dedupeKey = (language == null || language.trim().isEmpty)
+        ? null
+        : buildAudioDeductionKey(
+            text: outputText ?? inputText ?? '',
+            language: language,
+            provider: provider,
+            voiceName: voiceName,
+          );
+
+    if (dedupeKey != null && _audioDeductionLedger.contains(dedupeKey)) {
+      debugPrint('[_deductAudioUsageOnce] Skipping duplicate audio deduction for shared deferred render: $dedupeKey');
+      return true;
+    }
+
     _audioUsageDeductionInFlight = true;
     try {
-      return await _consumeUsageAllowance(
+      final deducted = await _consumeUsageAllowance(
         silent: silent,
         inputText: inputText,
         outputText: outputText,
       );
+      if (deducted && dedupeKey != null) {
+        _audioDeductionLedger.add(dedupeKey);
+      }
+      return deducted;
     } finally {
       _audioUsageDeductionInFlight = false;
     }
@@ -4116,6 +4759,27 @@ class _HomeScreenState extends State<HomeScreen> {
       _showCreditTiers();
     }
     return false;
+  }
+
+  Future<void> _playTranslatedAudioImmediately(String result) async {
+    final safeForSpeech = _silenceProfanityForSpeech(result);
+    if (safeForSpeech.isEmpty) {
+      return;
+    }
+
+    if (_credits <= 0 && _freeTttRemaining <= 0) {
+      return;
+    }
+
+    try {
+      await _speakText(result, _selectedOutputLang);
+    } catch (_) {
+      try {
+        await _speakTranslatedText(result);
+      } catch (_) {
+        debugPrint('Main output speech fallback failed for: $result');
+      }
+    }
   }
 
   Future<void> _doTranslate(String input) async {
@@ -4245,23 +4909,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (!mounted) return;
 
-    final safeForSpeech = _silenceProfanityForSpeech(result);
-    if (safeForSpeech.isNotEmpty && !hasNoCredits) {
+    if (!hasNoCredits) {
       // Start output audio immediately when the translated text is available so it
       // plays alongside the TTT result rather than after a later UI refresh.
-      unawaited(
-        () async {
-          try {
-            await _speakText(result, _selectedOutputLang);
-          } catch (_) {
-            try {
-              await _speakTranslatedText(result);
-            } catch (_) {
-              debugPrint('Main output speech fallback failed for: $result');
-            }
-          }
-        }(),
-      );
+      unawaited(_playTranslatedAudioImmediately(result));
     }
 
     setState(() {
@@ -5781,112 +6432,23 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildHeaderWordmark(bool isDark) {
-    final titleColor = isDark ? Colors.white : const Color(0xFF1F2D40);
-    final subtitleColor = isDark ? Colors.white70 : const Color(0xFF2C3A4B);
+    final assetPath = isDark
+        ? 'assets/letstalkmainblack.png'
+        : 'assets/letstalkmainwhite.png';
 
     return SizedBox(
       height: 88,
-      child: AspectRatio(
-        aspectRatio: 616 / 218,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-          decoration: isDark
-              ? BoxDecoration(
-                  borderRadius: BorderRadius.circular(4),
-                  gradient: const LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      Color(0xFF0D1A2A),
-                      Color(0xFF08111B),
-                      Color(0xFF03070D),
-                    ],
-                  ),
-                )
-              : null,
-          child: FittedBox(
-            fit: BoxFit.contain,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'let\'s talk',
-                  style: TextStyle(
-                    color: titleColor,
-                    fontFamily: 'monospace',
-                    fontWeight: FontWeight.w900,
-                    fontSize: 120,
-                    height: 1.02,
-                    letterSpacing: 0.6,
-                    shadows: [
-                      Shadow(
-                        color: Colors.black
-                            .withValues(alpha: isDark ? 0.65 : 0.28),
-                        blurRadius: 0,
-                        offset: const Offset(1, 0),
-                      ),
-                      Shadow(
-                        color: Colors.black
-                            .withValues(alpha: isDark ? 0.65 : 0.28),
-                        blurRadius: 0,
-                        offset: const Offset(-1, 0),
-                      ),
-                      Shadow(
-                        color: Colors.black
-                            .withValues(alpha: isDark ? 0.65 : 0.28),
-                        blurRadius: 0,
-                        offset: const Offset(0, 1),
-                      ),
-                      Shadow(
-                        color: Colors.black
-                            .withValues(alpha: isDark ? 0.65 : 0.28),
-                        blurRadius: 0,
-                        offset: const Offset(0, -1),
-                      ),
-                      Shadow(
-                        color:
-                            Colors.black.withValues(alpha: isDark ? 0.7 : 0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  'SOUTH AFRICA',
-                  style: TextStyle(
-                    color: subtitleColor,
-                    fontFamily: 'monospace',
-                    fontWeight: FontWeight.w800,
-                    fontSize: 48,
-                    letterSpacing: 3.0,
-                    height: 1,
-                    shadows: [
-                      Shadow(
-                        color:
-                            Colors.black.withValues(alpha: isDark ? 0.55 : 0.2),
-                        blurRadius: 0,
-                        offset: const Offset(1, 0),
-                      ),
-                      Shadow(
-                        color:
-                            Colors.black.withValues(alpha: isDark ? 0.55 : 0.2),
-                        blurRadius: 0,
-                        offset: const Offset(-1, 0),
-                      ),
-                      Shadow(
-                        color:
-                            Colors.black.withValues(alpha: isDark ? 0.65 : 0.2),
-                        blurRadius: 5,
-                        offset: const Offset(0, 1),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
+      width: 220,
+      child: Center(
+        child: Image.asset(
+          assetPath,
+          fit: BoxFit.contain,
+          filterQuality: FilterQuality.high,
+          width: 220,
+          height: 88,
+          errorBuilder: (context, error, stackTrace) {
+            return const SizedBox.shrink();
+          },
         ),
       ),
     );
@@ -5937,14 +6499,19 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             child: KeyedSubtree(
               key: ValueKey(_activeTab),
-              child: Column(children: [
-                // Top bar
-                Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  child: SizedBox(
-                    height: 44,
-                    child: Stack(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  return ClipRect(
+                    child: SizedBox(
+                      height: constraints.maxHeight,
+                      child: Column(children: [
+                        // Top bar
+                        Padding(
+                          padding:
+                              const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          child: SizedBox(
+                            height: 44,
+                            child: Stack(
                       alignment: Alignment.center,
                       children: [
                         Align(
@@ -5981,44 +6548,19 @@ class _HomeScreenState extends State<HomeScreen> {
                                       )
                                     : const SizedBox.shrink(),
                                 const SizedBox(width: 6),
-                                SizedBox(
-                                  width: 28,
-                                  height: 28,
-                                  child: _isScanningText
-                                      ? const Center(
-                                          child: SizedBox(
-                                            width: 16,
-                                            height: 16,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                              color: Colors.white,
-                                            ),
-                                          ),
-                                        )
-                                      : Container(
-                                          decoration: BoxDecoration(
-                                            color: isDark
-                                                ? Colors.transparent
-                                                : const Color(0xFFF7F5F0),
-                                            shape: BoxShape.circle,
-                                          ),
-                                          child: IconButton(
-                                            tooltip: 'Scan text from image',
-                                            onPressed: _showImageSourcePicker,
-                                            icon: Icon(
-                                              Icons.camera_alt_outlined,
-                                              size: 20,
-                                              color: isDark
-                                                  ? Colors.white
-                                                  : Colors.black,
-                                            ),
-                                            padding: EdgeInsets.zero,
-                                            constraints: const BoxConstraints(
-                                              minWidth: 28,
-                                              minHeight: 28,
-                                            ),
-                                          ),
-                                        ),
+                                IconButton(
+                                  onPressed: _cycleFontSize,
+                                  tooltip: 'Text size: $_fontSizeModeLabel',
+                                  icon: Icon(
+                                    Icons.text_fields,
+                                    size: 18,
+                                    color: isDark ? Colors.white : Colors.black,
+                                  ),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(
+                                    minWidth: 28,
+                                    minHeight: 28,
+                                  ),
                                 ),
                               ],
                             ),
@@ -6374,15 +6916,19 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
                 ),
-                // Content
-                Expanded(
-                  child: _activeTab == 'translate'
-                      ? _buildTranslateTab(isDark)
-                      : (_activeTab == 'history'
-                          ? _buildHistoryTab(isDark)
-                          : _buildLearnTab(isDark)),
-                ),
-              ]),
+                        // Content
+                        Expanded(
+                          child: _activeTab == 'translate'
+                              ? _buildTranslateTab(isDark)
+                              : (_activeTab == 'history'
+                                  ? _buildHistoryTab(isDark)
+                                  : _buildLearnTab(isDark)),
+                        ),
+                      ]),
+                    ),
+                  );
+                },
+              ),
             ),
           ),
         ),
@@ -6556,14 +7102,17 @@ class _HomeScreenState extends State<HomeScreen> {
                                       Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                         decoration: BoxDecoration(
-                                          color: Colors.amber.withOpacity(0.12),
-                                          border: Border.all(color: Colors.amber.shade700, width: 0.5),
+                                          color: isDark ? Colors.amber.withOpacity(0.12) : const Color(0xFFE5E7EB),
+                                          border: Border.all(
+                                            color: isDark ? Colors.amber.shade700 : const Color(0xFF9CA3AF),
+                                            width: 0.5,
+                                          ),
                                           borderRadius: BorderRadius.circular(4),
                                         ),
                                         child: Text(
                                           'Audio Deferred (Tap speaker to generate)',
                                           style: TextStyle(
-                                            color: Colors.amber.shade800,
+                                            color: isDark ? Colors.amber.shade800 : const Color(0xFF374151),
                                             fontSize: 9,
                                             fontWeight: FontWeight.bold,
                                           ),
@@ -6583,7 +7132,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   color: isUserPhrase &&
                                           (_learnIsDeferred(phrase) || !_learnAudioGenerated(phrase)) &&
                                           !resolved
-                                      ? Colors.amber.shade700
+                                      ? (isDark ? Colors.amber.shade700 : const Color(0xFF4B5563))
                                       : (isDark ? Colors.white : Colors.black),
                                 ),
                                 tooltip: isUserPhrase &&
@@ -6648,19 +7197,23 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
         ),
-        // Bottom left home icon
         Positioned(
-          bottom: 18,
-          right: 18,
-          child: FloatingActionButton(
-            heroTag: 'learn_home',
-            mini: true,
-            backgroundColor: isDark ? Colors.white12 : Colors.white,
-            foregroundColor: isDark ? Colors.white : Colors.black,
-            elevation: 2,
-            onPressed: () => setState(() => _activeTab = 'translate'),
-            tooltip: 'Home',
-            child: const Icon(Icons.home),
+          right: 12,
+          bottom: 12,
+          child: Material(
+            color: isDark ? Colors.black : const Color(0xFFF7F5F0),
+            shape: const CircleBorder(),
+            elevation: 0,
+            child: IconButton(
+              onPressed: () => setState(() => _activeTab = 'translate'),
+              icon: Icon(
+                Icons.home,
+                size: 20,
+                color: isDark ? Colors.white : Colors.black,
+              ),
+              tooltip: 'Return to Home',
+              padding: const EdgeInsets.all(12),
+            ),
           ),
         ),
       ],
@@ -6693,16 +7246,17 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildTranslateTab(bool isDark) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final boxHeight = (constraints.maxHeight - 260) * 0.42;
-        return SingleChildScrollView(
+        final boxHeight = (constraints.maxHeight * 0.24).clamp(150.0, 170.0);
+
+        return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(minHeight: constraints.maxHeight - 8),
-            child: IntrinsicHeight(
+          child: ClipRect(
+            child: SizedBox(
+              height: constraints.maxHeight - 8,
               child: Column(
+                mainAxisSize: MainAxisSize.max,
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  // Input box
                   GestureDetector(
                     onTap: () {
                       FocusScope.of(context).requestFocus(_inputFocusNode);
@@ -6723,8 +7277,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                 children: [
                                   Expanded(
                                     child: _langDrop(
@@ -6749,10 +7302,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               const SizedBox(height: 6),
                               Expanded(
                                 child: Row(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
                                   children: [
-                                    // Text area (with padding to avoid wall)
                                     Expanded(
                                       child: Stack(
                                         children: [
@@ -6764,30 +7315,29 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 _spokenText,
                                                 style: TextStyle(
                                                   fontFamily: 'monospace',
-                                                  fontSize: 16 * _currentTextScale,
+                                                  fontSize: _textSizeForCurrentContent(
+                                                      _spokenText),
                                                   color: isDark
                                                       ? Colors.white
                                                       : Colors.black,
                                                 ),
+                                                maxLines: 3,
+                                                overflow: TextOverflow.ellipsis,
                                               ),
                                             ),
                                           Align(
                                             alignment: Alignment.topLeft,
                                             child: GestureDetector(
-                                              behavior:
-                                                  HitTestBehavior.translucent,
+                                              behavior: HitTestBehavior.translucent,
                                               onTapUp: (details) {
                                                 final text = _tttController.text;
                                                 final renderBox = _translateInputKey
                                                         .currentContext
                                                         ?.findRenderObject()
                                                     as RenderBox?;
-                                                if (renderBox == null) {
-                                                  return;
-                                                }
-                                                final local = renderBox
-                                                    .globalToLocal(
-                                                        details.globalPosition);
+                                                if (renderBox == null) return;
+                                                final local = renderBox.globalToLocal(
+                                                    details.globalPosition);
                                                 final textDirection =
                                                     Directionality.of(context);
                                                 final painter = TextPainter(
@@ -6795,8 +7345,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                                     text: text,
                                                     style: TextStyle(
                                                       fontFamily: 'monospace',
-                                                      fontSize:
-                                                          16 * _currentTextScale,
+                                                      fontSize: 16 * _currentTextScale,
                                                       color: isDark
                                                           ? Colors.white
                                                           : Colors.black,
@@ -6844,8 +7393,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                                     : Colors.black,
                                                 style: TextStyle(
                                                   fontFamily: 'monospace',
-                                                  fontSize:
-                                                      16 * _currentTextScale,
+                                                  fontSize: _textSizeForCurrentContent(
+                                                      _tttController.text),
                                                   color: isDark
                                                       ? Colors.white
                                                       : Colors.black,
@@ -6878,38 +7427,50 @@ class _HomeScreenState extends State<HomeScreen> {
                                         ],
                                       ),
                                     ),
-                                    // Wall to the right
-                                    Container(
-                                      width: 32,
-                                      color: Colors.transparent,
-                                    ),
+                                    const SizedBox(width: 32),
                                   ],
                                 ),
                               ),
                             ],
                           ),
-                          // Replay icon (bottom right)
                           Positioned(
                             bottom: 0,
                             right: 0,
-                            child: IconButton(
-                              icon: const Icon(Icons.replay, size: 26),
-                              tooltip: 'Replay Input',
-                              color: _credits > 0 && _spokenText.isNotEmpty
-                                  ? (isDark ? Colors.white : const Color(0xFF3A2F2A))
-                                  : Colors.transparent,
-                              onPressed: _credits > 0 && _spokenText.isNotEmpty
-                                  ? () => _playLearnReplay(
-                                      _selectedInputLang, _spokenText, 'header_input')
-                                  : null,
+                            child: Builder(
+                              builder: (context) {
+                                final replayText = (_tttController.text.trim().isNotEmpty
+                                        ? _tttController.text
+                                        : _spokenText)
+                                    .trim();
+                                final canReplayInput = replayText.isNotEmpty;
+                                return IconButton(
+                                  icon: const Icon(Icons.replay, size: 26),
+                                  tooltip: 'Replay Input',
+                                  color: canReplayInput
+                                      ? (isDark ? Colors.white : const Color(0xFF3A2F2A))
+                                      : (isDark ? Colors.white54 : Colors.black54),
+                                  onPressed: canReplayInput
+                                      ? () async {
+                                          final hasPaidAccess = await _hasActivePaidAudioAccess();
+                                          final hasAudioBalance = _credits > 0;
+                                          if (!hasPaidAccess && !hasAudioBalance) {
+                                            _showCreditTiers();
+                                            _showSnack(
+                                              'Please top up your account to replay the original input.',
+                                            );
+                                            return;
+                                          }
+                                          await _speakText(replayText, _selectedInputLang);
+                                        }
+                                      : null,
+                                );
+                              },
                             ),
                           ),
                         ],
                       ),
                     ),
                   ),
-
-                  // SWAP BUTTON (moved up by 4px)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 2),
                     child: Center(
@@ -6946,8 +7507,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                   ),
-
-                  // Output box
                   Container(
                     width: double.infinity,
                     height: boxHeight,
@@ -6983,9 +7542,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                         _phoneticText = '';
 
                                         if (currentInputText.isNotEmpty) {
-                                          _spokenText =
-                                              _maskProfanityForDisplay(
-                                                  currentInputText);
+                                          _spokenText = _maskProfanityForDisplay(
+                                              currentInputText);
                                           _spokenRawText = currentInputText;
                                           _tttController.text = currentInputText;
                                           _tttController.selection =
@@ -7015,7 +7573,6 @@ class _HomeScreenState extends State<HomeScreen> {
                               child: Row(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  // Text area (with padding to avoid wall)
                                   Expanded(
                                     child: Align(
                                       alignment: Alignment.topLeft,
@@ -7025,7 +7582,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                             : '',
                                         style: TextStyle(
                                           fontFamily: 'monospace',
-                                          fontSize: 16 * _currentTextScale,
+                                          fontSize: _textSizeForCurrentContent(
+                                              _translatedText),
                                           color: isDark
                                               ? Colors.white
                                               : Colors.black,
@@ -7035,17 +7593,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                       ),
                                     ),
                                   ),
-                                  // Wall to the right
-                                  Container(
-                                    width: 32,
-                                    color: Colors.transparent,
-                                  ),
+                                  const SizedBox(width: 32),
                                 ],
                               ),
                             ),
                           ],
                         ),
-                        // Replay icon (bottom right)
                         Positioned(
                           bottom: 0,
                           right: 0,
@@ -7064,19 +7617,16 @@ class _HomeScreenState extends State<HomeScreen> {
                       ],
                     ),
                   ),
-
-                  // Send to Learn button
                   if (_translatedText.isNotEmpty && !_isTranslating)
                     Padding(
-                      padding: const EdgeInsets.only(bottom: 8.0),
+                      padding: const EdgeInsets.only(bottom: 2.0),
                       child: Center(
                         child: ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
                             backgroundColor: isDark
                                 ? Colors.transparent
                                 : const Color(0xFFF7F5F0),
-                            foregroundColor:
-                                isDark ? Colors.white : Colors.black,
+                            foregroundColor: isDark ? Colors.white : Colors.black,
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 9, vertical: 5),
                             minimumSize: const Size(0, 24),
@@ -7110,138 +7660,166 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   if (_isTranslating)
                     Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
+                      padding: EdgeInsets.zero,
                       child: LinearProgressIndicator(
-                        color: isDark ? Colors.white : Colors.black,
+                        minHeight: 4,
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          isDark ? Colors.white : Colors.black,
+                        ),
                         backgroundColor: Colors.transparent,
+                        color: isDark ? Colors.white : Colors.black,
                       ),
                     ),
                   const Spacer(),
                   Padding(
-                    padding: const EdgeInsets.only(bottom: 16.0),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: isDark
-                                ? IconButton(
-                                    onPressed: _cycleFontSize,
-                                    icon: Icon(
-                                      Icons.text_fields,
-                                      size: 24,
-                                      color: Colors.white,
-                                    ),
-                                    tooltip: 'Change Font Size',
-                                    padding: const EdgeInsets.all(8),
-                                  )
-                                : Container(
-                                    decoration: const BoxDecoration(
-                                      color: Color(0xFFF7F5F0),
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: IconButton(
-                                      onPressed: _cycleFontSize,
-                                      icon: const Icon(
-                                        Icons.text_fields,
-                                        size: 24,
-                                        color: Colors.black,
-                                      ),
-                                      tooltip: 'Change Font Size',
-                                      padding: const EdgeInsets.all(8),
-                                    ),
-                                  ),
-                          ),
-                        ),
-                        Expanded(
-                          child: Center(
-                            child: GestureDetector(
-                              onTapDown: (_) => _startListening(),
-                              onTapUp: (_) => _stopListening(),
-                              onTapCancel: () => _stopListening(),
-                              child: Stack(
-                                alignment: Alignment.center,
+                    padding: EdgeInsets.only(bottom: 0.0),
+                    child: SizedBox(
+                      height: 96,
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
                                 children: [
                                   SizedBox(
-                                    width: _isTalking ? 110 : 100,
-                                    height: _isTalking ? 110 : 100,
-                                    child: CircularProgressIndicator(
-                                      value: _isTalking ? _talkHoldProgress : 0.0,
-                                      strokeWidth: 4,
-                                      backgroundColor: isDark
-                                          ? Colors.white.withValues(alpha: 0.22)
-                                          : Colors.black.withValues(alpha: 0.12),
-                                      valueColor:
-                                          AlwaysStoppedAnimation<Color>(
-                                            isDark ? Colors.white : Colors.black,
-                                          ),
-                                    ),
-                                  ),
-                                  AnimatedContainer(
-                                    duration: const Duration(milliseconds: 150),
-                                    width: _isTalking ? 110 : 100,
-                                    height: _isTalking ? 110 : 100,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: _isTalking ? Colors.red : Colors.green,
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: (_isTalking
-                                                  ? Colors.red
-                                                  : Colors.green)
-                                              .withValues(alpha: 0.4),
-                                          blurRadius: _isTalking ? 20 : 10,
-                                          spreadRadius: _isTalking ? 4 : 2,
-                                        )
-                                      ],
-                                    ),
-                                    child: Column(
-                                        mainAxisAlignment: MainAxisAlignment.center,
-                                        children: [
-                                          Icon(
-                                              _isTalking
-                                                  ? Icons.mic
-                                                  : Icons.mic_none,
-                                              color: Colors.white,
-                                              size: 40),
-                                          const SizedBox(height: 4),
-                                          if (_showTalkHintText)
-                                            Text(
-                                              _isTalking
-                                                  ? 'LISTENING'
-                                                  : localizedUiText(
-                                                      'hold_to_talk', _uiLanguage),
-                                              style: const TextStyle(
-                                                  color: Colors.white,
-                                                  fontSize: 10,
-                                                  fontWeight: FontWeight.bold,
-                                                  letterSpacing: 0.5),
+                                    width: 28,
+                                    height: 28,
+                                    child: _isScanningText
+                                        ? const Center(
+                                            child: SizedBox(
+                                              width: 16,
+                                              height: 16,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                color: Colors.white,
+                                              ),
                                             ),
-                                        ]),
+                                          )
+                                        : Container(
+                                            decoration: BoxDecoration(
+                                              color: isDark
+                                                  ? Colors.transparent
+                                                  : const Color(0xFFF7F5F0),
+                                              shape: BoxShape.circle,
+                                            ),
+                                            child: IconButton(
+                                              tooltip: 'Scan text from image',
+                                              onPressed: _showImageSourcePicker,
+                                              icon: Icon(
+                                                Icons.camera_alt_outlined,
+                                                size: 20,
+                                                color: isDark
+                                                    ? Colors.white
+                                                    : Colors.black,
+                                              ),
+                                              padding: EdgeInsets.zero,
+                                              constraints: const BoxConstraints(
+                                                minWidth: 28,
+                                                minHeight: 28,
+                                              ),
+                                            ),
+                                          ),
                                   ),
+                                  const SizedBox(width: 8),
+                                  _buildVoiceNoteDurationSelector(isDark),
                                 ],
                               ),
                             ),
                           ),
-                        ),
-                        Expanded(
-                          child: Align(
-                            alignment: Alignment.centerRight,
-                            child: IconButton(
-                              onPressed: () {
-                                _showSnack('Upload audio file');
-                              },
-                              icon: Icon(
-                                Icons.upload_file,
-                                size: 28,
-                                color: isDark ? Colors.white : Colors.black,
+                          Expanded(
+                            child: Transform.translate(
+                              offset: const Offset(0, -8),
+                              child: Center(
+                                child: GestureDetector(
+                                  onTapDown: (_) => _startListening(),
+                                  onTapUp: (_) => _stopListening(),
+                                  onTapCancel: () => _stopListening(),
+                                  child: Stack(
+                                    alignment: Alignment.center,
+                                    children: [
+                                      SizedBox(
+                                        width: 116,
+                                        height: 116,
+                                        child: CircularProgressIndicator(
+                                          value: _isTalking ? _talkHoldProgress : 0.0,
+                                          strokeWidth: 5,
+                                          backgroundColor: isDark
+                                              ? Colors.white.withValues(alpha: 0.22)
+                                              : Colors.black.withValues(alpha: 0.12),
+                                          valueColor: AlwaysStoppedAnimation<Color>(
+                                            isDark ? Colors.white : Colors.black,
+                                          ),
+                                          semanticsLabel: 'Voice timer',
+                                        ),
+                                      ),
+                                      AnimatedContainer(
+                                        duration: const Duration(milliseconds: 150),
+                                        width: 94,
+                                        height: 94,
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          color: _isTalking ? Colors.red : Colors.green,
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: (_isTalking
+                                                      ? Colors.red
+                                                      : Colors.green)
+                                                  .withValues(alpha: 0.42),
+                                              blurRadius: 18,
+                                              spreadRadius: 2,
+                                            ),
+                                          ],
+                                        ),
+                                        child: Column(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            Icon(
+                                              _isTalking ? Icons.mic : Icons.mic_none,
+                                              color: Colors.white,
+                                              size: 52,
+                                            ),
+                                            const SizedBox(height: 2),
+                                            if (_showTalkHintText)
+                                              Text(
+                                                _isTalking
+                                                    ? 'LISTENING'
+                                                    : localizedUiText(
+                                                        'hold_to_talk', _uiLanguage),
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 9,
+                                                  fontWeight: FontWeight.bold,
+                                                  letterSpacing: 0.5,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                               ),
-                              tooltip: 'Upload audio file',
-                              padding: const EdgeInsets.all(12),
                             ),
                           ),
-                        ),
-                      ],
+                          Expanded(
+                            child: Align(
+                              alignment: Alignment.centerRight,
+                              child: IconButton(
+                                onPressed: _handleAudioUpload,
+                                icon: Icon(
+                                  Icons.upload_file,
+                                  size: 28,
+                                  color: isDark ? Colors.white : Colors.black,
+                                ),
+                                tooltip: 'Upload audio file',
+                                padding: const EdgeInsets.all(12),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ],
@@ -7250,6 +7828,116 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         );
       },
+    );
+  }
+
+  Widget _buildVoiceNoteDurationSelector(bool isDark) {
+    return IconButton(
+      onPressed: () async {
+        final selected = await showDialog<int>(
+          context: context,
+          barrierDismissible: true,
+          builder: (ctx) {
+            final dialogIsDark = Theme.of(ctx).brightness == Brightness.dark;
+            return AlertDialog(
+              backgroundColor: dialogIsDark ? Colors.black : Colors.white,
+              title: const Text('Voice note duration'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildDurationChoiceRow(
+                    context: ctx,
+                    seconds: 5,
+                    credits: 1,
+                    isDark: dialogIsDark,
+                  ),
+                  const SizedBox(height: 8),
+                  _buildDurationChoiceRow(
+                    context: ctx,
+                    seconds: 10,
+                    credits: 2,
+                    isDark: dialogIsDark,
+                  ),
+                  const SizedBox(height: 8),
+                  _buildDurationChoiceRow(
+                    context: ctx,
+                    seconds: 15,
+                    credits: 3,
+                    isDark: dialogIsDark,
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+
+        if (selected != null) {
+          unawaited(_setVoiceNoteDurationLimit(selected));
+        }
+      },
+      tooltip: 'Select voice note duration',
+      icon: Icon(
+        Icons.timer_outlined,
+        size: 24,
+        color: isDark ? Colors.white : Colors.black,
+      ),
+      padding: const EdgeInsets.all(8),
+      constraints: const BoxConstraints(),
+    );
+  }
+
+  Widget _buildDurationChoiceRow({
+    required BuildContext context,
+    required int seconds,
+    required int credits,
+    required bool isDark,
+  }) {
+    final isSelected = _voiceNoteDurationLimitSeconds == seconds;
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: () => Navigator.of(context).pop(seconds),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? (isDark ? Colors.white.withValues(alpha: 0.12) : Colors.black12)
+              : (isDark ? Colors.white.withValues(alpha: 0.04) : const Color(0xFFF7F5F0)),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSelected
+                ? (isDark ? Colors.white : Colors.black)
+                : (isDark ? Colors.white24 : Colors.black12),
+            width: isSelected ? 1.2 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Text(
+              '${seconds}s',
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                color: isDark ? Colors.white : Colors.black,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              '($credits credit${credits == 1 ? '' : 's'})',
+              style: TextStyle(
+                color: isDark ? Colors.white70 : Colors.black54,
+              ),
+            ),
+            const Spacer(),
+            if (isSelected)
+              Icon(
+                Icons.check,
+                size: 18,
+                color: isDark ? Colors.white : Colors.black,
+              ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -7464,20 +8152,6 @@ class _HomeScreenState extends State<HomeScreen> {
                           fontWeight: FontWeight.w600)),
                 ],
               ),
-            ),
-          ),
-          Positioned(
-            bottom: 18,
-            right: 18,
-            child: FloatingActionButton(
-              heroTag: 'history_home_empty',
-              mini: true,
-              backgroundColor: isDark ? Colors.white12 : Colors.white,
-              foregroundColor: isDark ? Colors.white : Colors.black,
-              elevation: 2,
-              onPressed: () => setState(() => _activeTab = 'translate'),
-              tooltip: 'Home',
-              child: const Icon(Icons.home),
             ),
           ),
         ],
@@ -7800,6 +8474,17 @@ class _HomeScreenState extends State<HomeScreen> {
                               children: [
                                 Row(
                                   children: [
+                                    Padding(
+                                      padding: const EdgeInsets.only(left: 2, right: 6),
+                                      child: Text(
+                                        '${_history.length - i}',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
+                                          color: isDark ? Colors.white70 : Colors.black87,
+                                        ),
+                                      ),
+                                    ),
                                     if (_historyEditMode)
                                       Checkbox(
                                         activeColor: Colors.black,
@@ -7889,14 +8574,17 @@ class _HomeScreenState extends State<HomeScreen> {
                                           Container(
                                             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                             decoration: BoxDecoration(
-                                              color: Colors.amber.withOpacity(0.12),
-                                              border: Border.all(color: Colors.amber.shade700, width: 0.5),
+                                              color: isDark ? Colors.amber.withOpacity(0.12) : const Color(0xFFF3F4F6),
+                                              border: Border.all(
+                                                color: isDark ? Colors.amber.shade700 : const Color(0xFF9CA3AF),
+                                                width: 0.5,
+                                              ),
                                               borderRadius: BorderRadius.circular(4),
                                             ),
                                             child: Text(
                                               'Audio Deferred',
                                               style: TextStyle(
-                                                color: Colors.amber.shade800,
+                                                color: isDark ? Colors.amber.shade800 : const Color(0xFF374151),
                                                 fontSize: 8,
                                                 fontWeight: FontWeight.bold,
                                               ),
@@ -7995,14 +8683,33 @@ class _HomeScreenState extends State<HomeScreen> {
                                   style: TextStyle(
                                     color: isDark ? Colors.white : Colors.black,
                                     fontWeight: FontWeight.bold,
-                                    fontSize: 16,
+                                    fontSize: _textSizeForCurrentContent(
+                                      item.translated,
+                                      base: 16,
+                                    ),
                                   ),
                                 ),
                                 subtitle: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text('From: ${item.inputLang}'),
-                                    Text('To: ${item.outputLang}'),
+                                    Text(
+                                      'From: ${item.inputLang}',
+                                      style: TextStyle(
+                                        fontSize: _textSizeForCurrentContent(
+                                          item.inputLang,
+                                          base: 12,
+                                        ),
+                                      ),
+                                    ),
+                                    Text(
+                                      'To: ${item.outputLang}',
+                                      style: TextStyle(
+                                        fontSize: _textSizeForCurrentContent(
+                                          item.outputLang,
+                                          base: 12,
+                                        ),
+                                      ),
+                                    ),
                                     if ((item.phonetic ?? '').isNotEmpty)
                                       Padding(
                                         padding: const EdgeInsets.only(top: 4.0),
@@ -8011,6 +8718,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                           style: TextStyle(
                                             fontStyle: FontStyle.italic,
                                             color: isDark ? Colors.white70 : Colors.black87,
+                                            fontSize: _textSizeForCurrentContent(
+                                              item.phonetic ?? '',
+                                              base: 12,
+                                            ),
                                           ),
                                         ),
                                       ),
@@ -8018,8 +8729,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                       padding: const EdgeInsets.only(top: 4.0),
                                       child: Text(
                                         'Original: ${item.original}',
-                                        style: const TextStyle(
-                                          fontSize: 16,
+                                        style: TextStyle(
+                                          fontSize: _textSizeForCurrentContent(
+                                            item.original,
+                                            base: 16,
+                                          ),
                                         ),
                                       ),
                                     ),
@@ -8031,14 +8745,17 @@ class _HomeScreenState extends State<HomeScreen> {
                                           child: Container(
                                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                             decoration: BoxDecoration(
-                                              color: Colors.amber.withOpacity(0.12),
-                                              border: Border.all(color: Colors.amber.shade700, width: 0.5),
+                                              color: isDark ? Colors.amber.withOpacity(0.12) : const Color(0xFFF3F4F6),
+                                              border: Border.all(
+                                                color: isDark ? Colors.amber.shade700 : const Color(0xFF9CA3AF),
+                                                width: 0.5,
+                                              ),
                                               borderRadius: BorderRadius.circular(4),
                                             ),
                                             child: Text(
                                               'Audio Deferred (Tap speaker to generate)',
                                               style: TextStyle(
-                                                color: Colors.amber.shade800,
+                                                color: isDark ? Colors.amber.shade800 : const Color(0xFF374151),
                                                 fontSize: 9,
                                                 fontWeight: FontWeight.bold,
                                               ),
@@ -8054,7 +8771,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     IconButton(
                                       icon: Icon(
                                         audioReady ? Icons.volume_up : Icons.volume_down_outlined,
-                                        color: audioReady ? null : Colors.amber.shade700,
+                                        color: audioReady ? null : (isDark ? Colors.amber.shade700 : const Color(0xFF4B5563)),
                                       ),
                                       tooltip: audioReady ? 'Repeat' : 'Generate Audio (1 credit)',
                                       onPressed: () {
@@ -8112,17 +8829,22 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
         Positioned(
-          bottom: 18,
-          right: 18,
-          child: FloatingActionButton(
-            heroTag: 'history_home',
-            mini: true,
-            backgroundColor: isDark ? Colors.white12 : Colors.white,
-            foregroundColor: isDark ? Colors.white : Colors.black,
-            elevation: 2,
-            onPressed: () => setState(() => _activeTab = 'translate'),
-            tooltip: 'Home',
-            child: const Icon(Icons.home),
+          right: 12,
+          bottom: 12,
+          child: Material(
+            color: isDark ? Colors.black : const Color(0xFFF7F5F0),
+            shape: const CircleBorder(),
+            elevation: 0,
+            child: IconButton(
+              onPressed: () => setState(() => _activeTab = 'translate'),
+              icon: Icon(
+                Icons.home,
+                size: 20,
+                color: isDark ? Colors.white : Colors.black,
+              ),
+              tooltip: 'Return to Home',
+              padding: const EdgeInsets.all(12),
+            ),
           ),
         ),
       ],

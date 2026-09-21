@@ -77,7 +77,10 @@ class TranslationService {
 
   Future<void> primeSession() async {
     try {
-      await _buildHeaders();
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser != null) {
+        await _buildHeaders();
+      }
     } catch (_) {
       // Best-effort warmup only.
     }

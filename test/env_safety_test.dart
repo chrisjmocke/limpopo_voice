@@ -71,6 +71,21 @@ void main() {
     expect(localizedUiText('continue_with_google', AppUiLanguage.afrikaans), 'Gaan voort met Google');
   });
 
+  test('voice-note uploads warn when they exceed 5 seconds and require more than one credit', () {
+    expect(isVoiceNoteWithinTranslationCap(const Duration(seconds: 5)), isTrue);
+    expect(isVoiceNoteWithinTranslationCap(const Duration(seconds: 6)), isFalse);
+    expect(calculateVoiceNoteTranslationCredits(const Duration(seconds: 4)), 1);
+    expect(calculateVoiceNoteTranslationCredits(const Duration(seconds: 5)), 1);
+    expect(calculateVoiceNoteTranslationCredits(const Duration(seconds: 6)), 2);
+    expect(calculateVoiceNoteTranslationCredits(const Duration(seconds: 9)), 2);
+  });
+
+  test('audio upload payload checks reject oversized files before the backend sees them', () {
+    expect(isAudioPayloadTooLarge(4 * 1024 * 1024), isFalse);
+    expect(isAudioPayloadTooLarge(6 * 1024 * 1024), isTrue);
+    expect(maxAudioUploadPayloadBytes, greaterThan(0));
+  });
+
   test('learn playback speed selector supports 1.0x, 0.75x, and 0.5x', () {
     expect(learnPlaybackRateForSelection(LearnPlaybackSpeed.normal), 1.0);
     expect(learnPlaybackRateForSelection(LearnPlaybackSpeed.slow), 0.75);

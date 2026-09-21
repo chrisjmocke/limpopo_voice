@@ -37,6 +37,7 @@ dependencies:
   device_info_plus: ^12.3.0
   google_mlkit_text_recognition: ^0.15.1
   image_picker: ^1.1.2
+  file_picker: ^11.0.3
   # Note: audioplayers removed to save space as we use generic TTS now.
 
 dev_dependencies:

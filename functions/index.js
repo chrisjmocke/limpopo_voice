@@ -68,6 +68,12 @@ exports.liveHealthCheck = onRequest({
   return require("./speech_processor").handleLiveHealthCheck(req, res);
 });
 
+exports.transcribeAudioUpload = onRequest({
+  region: "africa-south1",
+}, (req, res) => {
+  return require("./speech_processor").handleTranscribeAudioUpload(req, res);
+});
+
 exports.ttsProviderReadiness = onRequest({
   region: "africa-south1",
 }, (req, res) => {
