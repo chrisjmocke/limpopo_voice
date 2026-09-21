@@ -213,6 +213,24 @@ Future<void> main() async {
     debugPrint('Firebase init error: $e');
   }
 
+  try {
+    if (kIsWeb) {
+      await FirebaseAppCheck.instance.activate(
+        webProvider: ReCaptchaV3Provider('6LfrV7UaAAAAAL81B2G0zY'),
+      );
+    } else {
+      await FirebaseAppCheck.instance.activate(
+        androidProvider: kDebugMode
+            ? AndroidProvider.debug
+            : AndroidProvider.playIntegrity,
+        appleProvider: kDebugMode ? AppleProvider.debug : AppleProvider.deviceCheck,
+      );
+    }
+    debugPrint('Firebase App Check initialized successfully');
+  } catch (e) {
+    debugPrint('Firebase App Check init error: $e');
+  }
+
   runApp(const LetsTalkApp());
 }
 
@@ -2054,25 +2072,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _initializeDeferredAppServices() async {
     try {
       await _loadEnvFile();
-
-      if (kIsWeb) {
-        await FirebaseAppCheck.instance.activate(
-          webProvider: ReCaptchaV3Provider('6LfrV7UaAAAAAL81B2G0zY'),
-        );
-      } else {
-        if (kDebugMode) {
-          debugPrint(
-              'Firebase App Check debug mode enabled. Register the generated device token shown in logs in Firebase Console.');
-        }
-        await FirebaseAppCheck.instance.activate(
-          androidProvider: kDebugMode
-              ? AndroidProvider.debug
-              : AndroidProvider.playIntegrity,
-          appleProvider: kDebugMode ? AppleProvider.debug : AppleProvider.deviceCheck,
-        );
-      }
-
-      debugPrint('Firebase App Check initialized successfully');
+      debugPrint('Deferred startup services running after app bootstrap.');
     } catch (e) {
       debugPrint('Deferred startup initialization error: $e');
     }
